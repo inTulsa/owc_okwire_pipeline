@@ -1,0 +1,210 @@
+# ---------------------------------------------------------------------------
+# The reusable pipeline module.
+#
+# A pipeline declares its schedules, resource sizing, secrets, state volume,
+# and alert thresholds. Adding a third pipeline is one module block plus a
+# tfvars entry — not new infrastructure code. This module is instantiated
+# twice today (lightcast and enrollment) and those two are about as different
+# as two pipelines get: one is a credentialed warehouse extract fanned across
+# 41 parallel tasks, the other a single-task stateful scraper with a mounted
+# filesystem.
+# ---------------------------------------------------------------------------
+
+variable "name" {
+  type        = string
+  description = "Pipeline name. Must match the `owcdata run <name>` argument and the `pipeline` column in owc_ops.pipeline_runs."
+}
+
+variable "project_id" { type = string }
+variable "env" { type = string }
+
+variable "region" {
+  type        = string
+  description = "Cloud Run and Cloud Scheduler region."
+  default     = "us-central1"
+}
+
+variable "image" {
+  type        = string
+  description = <<-EOT
+    Container image, referenced BY DIGEST (…@sha256:…), not by tag.
+
+    A digest makes a rollback a git revert. A tag makes it a race against
+    whatever is currently pushed under that tag.
+  EOT
+  validation {
+    condition     = can(regex("@sha256:[0-9a-f]{64}$", var.image))
+    error_message = "image must be pinned by digest (repo@sha256:...), not by tag, so rollback is a revert."
+  }
+}
+
+variable "service_account_email" {
+  type        = string
+  description = "Runtime identity for this pipeline's job. One per pipeline."
+}
+
+variable "scheduler_service_account_email" {
+  type        = string
+  description = "Identity Cloud Scheduler uses. Gets run.invoker on THIS job only."
+}
+
+# -- schedules ---------------------------------------------------------------
+variable "schedules" {
+  type = list(object({
+    name       = string
+    cron       = string
+    args       = list(string)
+    task_count = optional(number, 1)
+  }))
+  description = <<-EOT
+    One Cloud Scheduler job per entry. `args` and `task_count` are sent as a
+    run-time override, so all of a pipeline's groups share one Cloud Run Job
+    definition and differ only in what the scheduler asks for.
+  EOT
+}
+
+variable "timezone" {
+  type    = string
+  default = "America/Chicago"
+}
+
+# -- Cloud Run sizing --------------------------------------------------------
+variable "task_timeout" {
+  type        = string
+  description = <<-EOT
+    Per-task timeout.
+
+    **The default is 10 minutes** and would silently kill the large Lightcast
+    queries. This must be set explicitly for every pipeline.
+  EOT
+}
+
+variable "max_retries" {
+  type        = number
+  description = "Task retries. Covers transient network and Snowflake faults."
+  default     = 3
+}
+
+variable "parallelism" {
+  type        = number
+  description = <<-EOT
+    Concurrent tasks.
+
+    For lightcast the ceiling is Snowflake, not Cloud Run:
+    MAX_CONCURRENCY_LEVEL defaults to 8 statements per warehouse cluster, so
+    fanning past ~8 just queues while Cloud Run bills for blocked tasks. More
+    importantly, **reader-account warehouse credits bill to Lightcast**, and
+    jumping from one query at a time to 8 is an 8x concurrency increase on
+    someone else's bill that could trip a provider-side resource monitor.
+
+    Talk to Lightcast before raising this above 4.
+  EOT
+  default     = 1
+}
+
+variable "cpu" {
+  type        = string
+  description = "vCPU per task. Coupled to memory: 1 vCPU allows 512 MiB–4 GiB."
+  default     = "1"
+}
+
+variable "memory" {
+  type        = string
+  description = <<-EOT
+    Memory per task.
+
+    Memory and CPU are COUPLED — asking for 32 GiB would force 8 vCPU nobody
+    needs. 2 GiB is right here because the Parquet writer streams: measured
+    peak is ~290 MB regardless of result-set size.
+
+    Note Cloud Run's filesystem is in-memory in BOTH execution generations
+    with no size limit, so anything written to local disk counts against this.
+  EOT
+  default     = "2Gi"
+}
+
+variable "task_count_default" {
+  type        = number
+  description = "Task count on the job definition. Schedulers override it per group."
+  default     = 1
+}
+
+# -- environment and secrets -------------------------------------------------
+variable "env_vars" {
+  type        = map(string)
+  description = "Plain environment variables for the container."
+  default     = {}
+}
+
+variable "secret_env_vars" {
+  type = map(object({
+    secret_id = string
+    version   = optional(string, "latest")
+  }))
+  description = <<-EOT
+    Secret Manager values exposed as env vars. Empty for a pipeline with no
+    secrets — the enrollment scraper reads a public webpage and is granted no
+    secret access at all.
+  EOT
+  default     = {}
+}
+
+# -- state volume ------------------------------------------------------------
+variable "state_volume" {
+  type = object({
+    bucket     = string
+    mount_path = string
+    read_only  = optional(bool, false)
+  })
+  description = <<-EOT
+    Optional GCS bucket mounted with FUSE, for a pipeline that keeps state.
+
+    This is what preserves the enrollment scraper's download cache across
+    ephemeral containers: mounting the bucket at its `data/` path makes
+    os.path.exists() work unchanged, so the short-circuit-when-nothing-is-new
+    logic survives with essentially no code change. Without it the scraper
+    would re-download Oklahoma's entire back catalogue every month.
+
+    Requires execution environment gen2 (set below). The mount must complete
+    within 30 seconds or the job fails.
+  EOT
+  default     = null
+}
+
+# -- alerts ------------------------------------------------------------------
+variable "notification_channels" {
+  type        = list(string)
+  description = "Shared channel set from the platform module."
+  default     = []
+}
+
+variable "event_alerts" {
+  type = list(object({
+    key          = string
+    event        = string
+    title        = string
+    description  = string
+    extra_filter = optional(string, "")
+  }))
+  description = <<-EOT
+    Log-based alerts on this pipeline's structured-log events.
+
+    `event` must match a `jsonPayload.event` string emitted by the code —
+    they come from the classes in src/owcdata/errors.py and from
+    core/quality.py. A typo'd event applies cleanly and then never fires,
+    which is worse than no alert, so tests/unit/test_exit_codes.py pins the
+    exact strings.
+  EOT
+  default     = []
+}
+
+variable "memory_utilization_threshold" {
+  type        = number
+  description = "Alert above this fraction of the memory limit. Early warning before an OOM kill."
+  default     = 0.85
+}
+
+variable "labels" {
+  type    = map(string)
+  default = {}
+}

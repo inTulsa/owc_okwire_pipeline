@@ -1,0 +1,56 @@
+-------------------------------------------------------------------------------------------------
+OWC Primary Enrollment Data: Business Process Report & Step-by-Step Procedure
+-------------------------------------------------------------------------------------------------
+Link source of OWC primary enrollment data:
+https://oklahoma.gov/education/services/student-information/state-public-enrollment-totals.html
+
+-------------------------------------------------------------------------------------------------
+HTTP status codes
+https://en.wikipedia.org/wiki/List_of_HTTP_status_codes
+
+-------------------------------------------------------------------------------------------------
+
+1a. Under this script. From the website, make sure it grabs these files and downloads it:
+https://oklahoma.gov/education/services/student-information/state-public-enrollment-totals.html
+
+1b. Before searching and parsing the excel files from the html web page. If the original source files downloaded from the website already exists in the data directory then keep those existing files and only update the newly one comprehensive .csv file with the latest data files or latest data files not added prior. If no new sources are added inform the user. Ensure correct HTTP status codes are implemented from 1xx, 2xx, 3xx, 4xx, to 5xx. 
+
+1c If data directory contains no original source files from the website. Download and place that original data source into the data directory by creating a new folder called "data_sources". If the data_sources folder already exists then place into that existing folder. Ensure correct HTTP status codes are implemented from 1xx, 2xx, 3xx, 4xx, to 5xx. 
+
+-------------------------------------------------------------------------------------------------
+
+2a. Next, in the website's page find <div class="aem-Grid aem-Grid--12 aem-Grid--default--12">. Search for all html div tags containing "<div class="text aem-GridColumn aem-GridColumn--default--12">". Ensure correct HTTP status codes are implemented from 1xx, 2xx, 3xx, 4xx, to 5xx.
+
+2b. If the link contains html tags of "<u><a>Click here</a></u>" in the url link as the .xlsx files has multiple sheets. Make sure "School Totals by Race" is grabbed only from the url link. Ensure correct HTTP status codes are implemented from 1xx, 2xx, 3xx, 4xx, to 5xx.
+
+2c. If the link contains html tags of <ul><li><a>School Site Totals w/Ethnicity and Gender</a></li></ul>. Then make sure the sheet that contains data with columns of "His M, His F, AmInd M, AmInd F, Asian M, Asian F, Black M, Black F, Pac Is M, Pac Is F, White M, White F, Multi M, Multi F, Total" or "Hispanic Male, Hispanic Female, American Indian Male (Non Hispanic), American Indian Female (Non Hispanic), Asian Male (Non Hispanic), Asian Female (Non Hispanic), Black Male (Non Hispanic), Black Female (Non Hispanic), Hawaiian or Pacific Islander Male (Non Hispanic), Hawaiian or Pacific Islander Female (Non Hispanic), White Male (Non Hispanic), White Female, (Non Hispanic), Two or More Races Male (Non Hispanic), Two or More Races Female (Non Hispanic), Total" is grabbed only. Ensure correct HTTP status codes are implemented from 1xx, 2xx, 3xx, 4xx, to 5xx.
+
+2d. If the html tags of <ul><li><a>School Site Totals w/Ethnicity and Gender</a></li></ul> is not found. Skip 2d else find its supporting file with html tag of <ul><li><a>School Site Totals</a></li></ul>. With that, find columns County, District, and "School Name" or "School Site">. Merge it towards its primary <ul><li><a>School Site Totals w/Ethnicity and Gender</a></li></ul> excel file. If the excel from <ul><li><a>School Site Totals</a></li></ul> has multipe sheets or shared duplicated columns of County, District, and "School Name" or "School Site". Use excel file's first sheet title named "GG_BySITE", "ALL sites", "School Totals" or any other of first sheet's title as the primary source. Ensure correct HTTP status codes are implemented from 1xx, 2xx, 3xx, 4xx, to 5xx.
+
+2e. Next, rearrange the columns by SchoolYear, County, District, School Name, His M, His F, AmInd, AmInd F, Asian M, Asian F, Black M, Black F, Pac Is M, Pac Is F, White M, White F, Multi M, Multi F, Grade. Keep these columns. Then delete all columns that is not listed above. 
+
+-------------------------------------------------------------------------------------------------
+
+3. Next, under the same script. Unpivoted the 14 columns (His M, His F, AmInd M, AmInd F, Asian M, Asian F, Black M, Black F, Pac Is M, Pac Is F, White M, White F, Multi M, Multi F) into two new columns called "Race" and "Gender".
+
+-------------------------------------------------------------------------------------------------
+
+4a. First, for column Race. Unpivot the 14 columns for each race abbreviation (His = Hispanic or Latino, AmInd = Amerian Indian or Alaska Native, Asian = Asian, Black = Black or African American, Pac = Native Hawaiian or Other Pacific Islander, White = White, Multi = Two or more races) and renamed its abbreviation to its full term such as "His to Hispanic or Latino", AmInd = Amerian Indian or Alaska Native and so on. Then place those rows into a new column called "Race".
+
+4b. Second, for column Gender, do the same but search each gender being (M = Male, F = Female) from those 14 columns. Then place those rows into a new column called "Gender".
+
+-------------------------------------------------------------------------------------------------
+
+5a. First, for column Year. Replace all "20XX" to "20XX-20XX" Such as if year column is 2026 then "2025-2026". If year "2025" then "2024-2025" on so to the other previous years. If inside the excel page, it doesn't have a Year column. Create one by finding its html <h2> tag's text with start with "FY..." under its parent class <div class="title aem-GridColumn aem-GridColumn--default--12">. Then populate column Year with data using "20XX-20XX" format.
+
+5b. Second, for column Grade. Find P3F, P3H, PKF, PKH, PR, or any value starting with "P" and "Replace with" type Pre-Kindergarten. Repeat the same process and rename all values such as KGF, KGH, or any values starting with "K" to Kindergarten, 1 to 1st Grade, 2 to 2nd Grade, and so on to 12 to 12th Grade. Then lastly do the same process and replace "13", "OHP", "AE" or any letters/numbers not listed in 5b here to "Other".
+
+5c. Third, convert the new file format from either .xlsx, xls, or any legacy excel files to .csv files.
+
+5d. Then merge and consolidate all the .csv files into one comprehensive .csv file.
+
+5e. With the one comprehensive .csv file now, remove all additional .xlsx, xls, .csv, or any legacy excel files that was created during the intermediate step in the data or data_sources directory. If already removed, inform the user. Keep only that one comprehensive file in the data directory and its original data sourced files downloaded from the website in the data_sources directory.
+
+-------------------------------------------------------------------------------------------------
+
+6. Once completed, placed the comprehensive file into the downloads directory. 

@@ -1,0 +1,65 @@
+# ---------------------------------------------------------------------------
+# Pipeline registry. Both the Python CLI and Terraform read this file:
+# Terraform generates one Cloud Scheduler job per lightcast group plus one
+# for enrollment, so a schedule change is a one-line edit here.
+#
+# Adding a .sql file to sql/owc/ needs NO edit — unlisted files fall into
+# `defaults.group`, preserving the original pipeline's glob-the-directory
+# behavior.
+# ---------------------------------------------------------------------------
+
+lightcast:
+  source_dir: sql/owc
+
+  defaults:
+    group: monthly
+
+  groups:
+    monthly:
+      schedule: "0 6 1 * *" # 06:00 on the 1st
+      # everything not named under quarterly/yearly lands here
+      freshness_grace_hours: 48
+
+    quarterly:
+      schedule: "0 6 1 1,4,7,10 *" # 06:00 on the 1st of Jan/Apr/Jul/Oct
+      freshness_grace_hours: 96
+      # TODO(open item 1): needs Lightcast's actual refresh cycles. Until a
+      # dataset is named here it runs monthly, which is never wrong — only
+      # more often than necessary.
+      datasets: []
+
+    yearly:
+      schedule: "0 6 15 1 *" # 06:00 on Jan 15
+      freshness_grace_hours: 168
+      # TODO(open item 1): same as above.
+      datasets: []
+
+  # Quality gate. Checked against staging before publish; a failure blocks
+  # the publish and leaves staging in place to diff against.
+  quality:
+    # Row count / max(YEAR) drift vs the previous successful run. This is the
+    # smoke detector for the accepted hardcoded-year-literal risk — see
+    # docs/01-architecture.md, ADR-005.
+    row_count_drift_pct: 20.0
+    # Literal counts already known to be true. A dimension that changes size
+    # is either real news or a broken query; either way someone should look.
+    known_row_counts:
+      dim_area: 79
+    # Columns that must never be null in the published table.
+    not_null:
+      dim_area: [AREAID]
+
+enrollment:
+  # Monthly "anything new?" check. Cheap — it short-circuits on the cache
+  # when Oklahoma hasn't published a new fiscal year, which is most months.
+  schedule: "0 7 5 * *" # 07:00 on the 5th
+  freshness_grace_hours: 72
+  page_url: "https://oklahoma.gov/education/services/student-information/state-public-enrollment-totals.html"
+  table: enrollment_primary
+  # Seconds to wait between workbook downloads. The original script had no
+  # delay; oklahoma.gov is a small state web property and we fetch a dozen
+  # files in a burst.
+  download_delay_seconds: 1.0
+  quality:
+    not_null:
+      enrollment_primary: [Year, Race, Gender]

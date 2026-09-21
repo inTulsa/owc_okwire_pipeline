@@ -1,0 +1,107 @@
+/*
+---------------------------------------------------------------------------------------------------
+--
+-- Description: 
+--
+-- Author:          Nile Dixon
+-- Date:            2025-11-19
+--
+-- Notes:
+-- 
+--
+--
+---------------------------------------------------------------------------------------------------
+*/
+WITH OK_STATE_TOTALS AS (
+    SELECT 
+        YEAR,
+        SUM(EMP) AS NUM_EMPS
+    FROM
+        LIGHTCAST.TULSA_FOR_YOU.DAT_STAFFING
+    WHERE
+        YEAR <= YEAR(CURRENT_DATE())
+        AND AREAID = '40'
+        AND AREAID_TYPE = 'STATE'
+        AND AREAID_NAME = 'Oklahoma'
+    GROUP BY
+        YEAR
+),
+OK_STATE_OCCS AS (
+    SELECT 
+        DS.YEAR,
+        DS.OCCID,
+        SUM(DS.EMP) AS STATE_OCC_EMPS,
+        OK_STATE_TOTALS.NUM_EMPS AS STATE_TOTAL_EMPS,
+        STATE_OCC_EMPS / STATE_TOTAL_EMPS AS STATE_OCC_CONC
+    FROM
+        LIGHTCAST.TULSA_FOR_YOU.DAT_STAFFING AS DS
+    LEFT JOIN 
+        OK_STATE_TOTALS
+    ON
+        DS.YEAR = OK_STATE_TOTALS.YEAR
+    WHERE
+        DS.YEAR <= YEAR(CURRENT_DATE())
+        AND DS.AREAID = '40'
+        AND DS.AREAID_TYPE = 'STATE'
+        AND DS.AREAID_NAME = 'Oklahoma'
+    GROUP BY
+        DS.YEAR,
+        DS.OCCID,
+        OK_STATE_TOTALS.NUM_EMPS
+),
+OK_COUNTY_TOTALS AS (
+    SELECT 
+        YEAR,
+        AREAID,
+        SUM(EMP) AS NUM_EMPS
+    FROM
+        LIGHTCAST.TULSA_FOR_YOU.DAT_STAFFING
+    WHERE
+        YEAR <= YEAR(CURRENT_DATE())
+        AND AREAID_TYPE = 'COUNTY'
+    GROUP BY
+        YEAR,
+        AREAID
+),
+OK_COUNTY_OCCS AS (
+    SELECT
+        DS.YEAR,
+        DS.AREAID,
+        DS.OCCID,
+        SUM(DS.EMP) AS COUNTY_OCC_EMPS,
+        OK_COUNTY_TOTALS.NUM_EMPS AS COUNTY_TOTAL_EMPS,
+        COUNTY_OCC_EMPS / COUNTY_TOTAL_EMPS AS COUNTY_OCC_CONC
+    FROM
+        LIGHTCAST.TULSA_FOR_YOU.DAT_STAFFING AS DS
+    LEFT JOIN
+        OK_COUNTY_TOTALS
+    ON
+        DS.YEAR = OK_COUNTY_TOTALS.YEAR
+        AND DS.AREAID = OK_COUNTY_TOTALS.AREAID
+    WHERE
+        DS.YEAR <= YEAR(CURRENT_DATE())
+        AND DS.AREAID_TYPE = 'COUNTY'
+    GROUP BY
+        DS.YEAR,
+        DS.AREAID,
+        DS.OCCID,
+        OK_COUNTY_TOTALS.NUM_EMPS
+)
+SELECT
+    OCO.YEAR,
+    OCO.AREAID,
+    OCO.OCCID,
+    ROUND(OCO.COUNTY_OCC_EMPS,0) AS COUNTY_OCC_EMPS,
+    ROUND(OCO.COUNTY_TOTAL_EMPS,0) AS COUNTY_TOTAL_EMPS,
+    OCO.COUNTY_OCC_CONC,
+    ROUND(OSO.STATE_OCC_EMPS,0) AS STATE_OCC_EMPS,
+    ROUND(OSO.STATE_TOTAL_EMPS,0) AS STATE_TOTAL_EMPS,
+    OSO.STATE_OCC_CONC,
+    OCO.COUNTY_OCC_CONC / OSO.STATE_OCC_CONC AS LQ
+FROM 
+    OK_COUNTY_OCCS AS OCO
+LEFT JOIN 
+    OK_STATE_OCCS AS OSO
+ON
+    OCO.YEAR = OSO.YEAR
+    AND OCO.OCCID = OSO.OCCID

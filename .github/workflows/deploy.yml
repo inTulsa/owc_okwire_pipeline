@@ -1,0 +1,180 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_digest:
+        description: "Existing digest to promote (skips the build). Use this to roll back."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Build once, deploy that exact digest everywhere. Terraform pins by digest,
+  # so a rollback is `workflow_dispatch` with an older digest — or a revert.
+  # ---------------------------------------------------------------------------
+  build:
+    name: build image
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.out.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER_DEV }}
+          service_account: ${{ vars.DEPLOYER_SA_DEV }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: reuse an existing digest
+        id: existing
+        if: inputs.image_digest != ''
+        run: echo "digest=${{ inputs.image_digest }}" >> "$GITHUB_OUTPUT"
+
+      - name: Cloud Build
+        id: built
+        if: inputs.image_digest == ''
+        run: |
+          set -euo pipefail
+          SHA=$(git rev-parse --short HEAD)
+          gcloud builds submit \
+            --config docker/cloudbuild.yaml \
+            --substitutions="SHORT_SHA=${SHA},_ENV=dev,_REGION=${{ vars.REGION }}" \
+            --project "${{ vars.PROJECT_ID_DEV }}" \
+            .
+          IMAGE="${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID_DEV }}/okw-images/owcdata"
+          DIGEST=$(gcloud artifacts docker images describe "${IMAGE}:${SHA}" \
+            --format='value(image_summary.digest)' --project "${{ vars.PROJECT_ID_DEV }}")
+          echo "digest=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - id: out
+        run: |
+          D="${{ steps.existing.outputs.digest || steps.built.outputs.digest }}"
+          test -n "$D" || { echo "::error::no image digest resolved"; exit 1; }
+          echo "digest=$D" >> "$GITHUB_OUTPUT"
+          echo "Deploying $D"
+
+  # ---------------------------------------------------------------------------
+  # dev: apply, then actually run both pipelines row-limited. An apply that
+  # succeeds proves Terraform is happy; only a run proves the image works.
+  # ---------------------------------------------------------------------------
+  deploy-dev:
+    name: apply + smoke dev
+    needs: build
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER_DEV }}
+          service_account: ${{ vars.DEPLOYER_SA_DEV }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.4
+
+      - name: apply
+        working-directory: infra/terraform/envs/dev
+        run: |
+          terraform init
+          terraform apply -auto-approve \
+            -var="image_digest=${{ needs.build.outputs.digest }}"
+
+      # The image digest is in lifecycle.ignore_changes on the job, so it is
+      # set here explicitly rather than by the apply above. That keeps a
+      # manual `gcloud run jobs execute` during an incident from being
+      # reverted by the next unrelated apply.
+      - name: point both jobs at the new digest
+        run: |
+          set -euo pipefail
+          for job in okw-lightcast-dev okw-enrollment-dev; do
+            gcloud run jobs update "$job" \
+              --image "${{ needs.build.outputs.digest }}" \
+              --region "${{ vars.REGION }}" \
+              --project "${{ vars.PROJECT_ID_DEV }}"
+          done
+
+      - name: smoke — lightcast, one small dataset, row limited
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute okw-lightcast-dev \
+            --region "${{ vars.REGION }}" --project "${{ vars.PROJECT_ID_DEV }}" \
+            --tasks 1 --task-timeout 600s --wait \
+            --args="run,lightcast,--dataset,dim_area,--limit,1000"
+
+      - name: smoke — enrollment
+        run: |
+          set -euo pipefail
+          # Expected to short-circuit on the cache in most months, which is a
+          # success. A non-zero exit here means something real broke.
+          gcloud run jobs execute okw-enrollment-dev \
+            --region "${{ vars.REGION }}" --project "${{ vars.PROJECT_ID_DEV }}" \
+            --wait
+
+  # ---------------------------------------------------------------------------
+  # prod: gated on a GitHub environment with required reviewers.
+  # ---------------------------------------------------------------------------
+  deploy-prod:
+    name: apply prod
+    needs: [build, deploy-dev]
+    runs-on: ubuntu-latest
+    # Configure required reviewers on this environment in repo settings.
+    # That approval gate is the manual step, not a workflow input.
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER_PROD }}
+          service_account: ${{ vars.DEPLOYER_SA_PROD }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.4
+
+      - name: plan
+        working-directory: infra/terraform/envs/prod
+        run: |
+          terraform init
+          terraform plan -out=tfplan \
+            -var="image_digest=${{ needs.build.outputs.digest }}"
+
+      - name: apply
+        working-directory: infra/terraform/envs/prod
+        run: terraform apply -auto-approve tfplan
+
+      - name: point both jobs at the new digest
+        run: |
+          set -euo pipefail
+          for job in okw-lightcast-prod okw-enrollment-prod; do
+            gcloud run jobs update "$job" \
+              --image "${{ needs.build.outputs.digest }}" \
+              --region "${{ vars.REGION }}" \
+              --project "${{ vars.PROJECT_ID_PROD }}"
+          done
+
+      - name: record what was deployed
+        run: |
+          echo "### Deployed to prod" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- image: \`${{ needs.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- commit: \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "To roll back: re-run this workflow via workflow_dispatch with the previous digest." >> "$GITHUB_STEP_SUMMARY"

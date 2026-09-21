@@ -1,0 +1,71 @@
+/*
+---------------------------------------------------------------------------------------------------
+--
+-- Description: 
+--
+-- Author:          Nile Dixon
+-- Date:            2025-11-14
+--
+-- Notes:
+-- 
+--
+--
+---------------------------------------------------------------------------------------------------
+*/
+
+WITH PROFILE_EDUCATION_PAIRS AS (
+    SELECT DISTINCT
+        ID,
+        SCHOOL_NAME
+    FROM 
+        LIGHTCAST.TULSA_FOR_YOU.PROFILES_EDUCATIONS
+),
+PROFILE_COUNTY_PAIRS AS (
+    SELECT DISTINCT
+        ID,
+        COUNTY
+    FROM
+        LIGHTCAST.TULSA_FOR_YOU.PROFILES
+),
+PROFILE_IND_PAIRS AS (
+    SELECT DISTINCT
+        ID,
+        NAICS6
+    FROM
+        LIGHTCAST.TULSA_FOR_YOU.PROFILES
+),
+PROFILE_OCC_PAIRS AS (
+    SELECT DISTINCT
+        ID,
+        SOC_5
+    FROM
+        LIGHTCAST.TULSA_FOR_YOU.PROFILES
+)
+SELECT
+    PROFILE_COUNTY_PAIRS.COUNTY AS AREAID,
+    PROFILE_IND_PAIRS.NAICS6 AS INDID,
+    PROFILE_OCC_PAIRS.SOC_5 AS OCCID,
+    PROFILE_EDUCATION_PAIRS.SCHOOL_NAME AS SCHOOL,
+    COUNT(*)
+FROM
+    PROFILE_EDUCATION_PAIRS
+LEFT JOIN
+    PROFILE_COUNTY_PAIRS
+ON
+    PROFILE_EDUCATION_PAIRS.ID = PROFILE_COUNTY_PAIRS.ID
+
+LEFT JOIN
+    PROFILE_IND_PAIRS
+ON
+    PROFILE_EDUCATION_PAIRS.ID = PROFILE_IND_PAIRS.ID
+LEFT JOIN
+    PROFILE_OCC_PAIRS
+ON
+    PROFILE_EDUCATION_PAIRS.ID = PROFILE_OCC_PAIRS.ID
+GROUP BY
+    AREAID,
+    INDID,
+    OCCID,
+    SCHOOL
+ORDER BY 
+    COUNT(*) DESC

@@ -1,0 +1,31 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# local pipeline output — `--target local` writes here
+/data/
+/exports/
+/.owcdata-local/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+.terraform.lock.hcl
+
+# os / editor
+.DS_Store
+*.swp

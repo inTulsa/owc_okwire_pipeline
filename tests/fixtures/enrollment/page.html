@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<!-- Shaped like oklahoma.gov's AEM output: an aem-Grid wrapper, alternating
+     title/text GridColumn divs, and the three anchor patterns the scraper
+     classifies. The decoy divs outside the wrapper and the nav anchors inside
+     it are deliberate: they prove the container scoping actually scopes. -->
+<html lang="en"><head><title>State Public Enrollment Totals</title></head>
+<body>
+  <div class="text aem-GridColumn--default--12">
+    <p>Decoy container OUTSIDE the aem-Grid wrapper.</p>
+    <ul><li><a href="/decoy/should-not-be-found.xlsx">School Site Totals w/Ethnicity and Gender</a></li></ul>
+  </div>
+
+  <div class="aem-Grid aem-Grid--12 aem-Grid--default--12">
+
+    <div class="title aem-GridColumn aem-GridColumn--default--12"><h2>FY 2023/2024</h2></div>
+    <div class="text aem-GridColumn aem-GridColumn--default--12">
+      <p>Enrollment by race and gender. <a href="fy2024_school_totals.xlsx">Click here</a></p>
+      <ul>
+        <!-- inconsistent spacing after "w/" is normalized away -->
+        <li><a href="fy2024_school_site_ethgen.xlsx">School Site Totals w/ Ethnicity and Gender</a></li>
+        <li><a href="fy2024_school_site_totals_missing.xlsx">School Site Totals</a></li>
+      </ul>
+      <a href="/some/unrelated/page.html">Read more about enrollment</a>
+    </div>
+
+    <div class="title aem-GridColumn aem-GridColumn--default--12"><h2>FY 2022/2023</h2></div>
+    <div class="text aem-GridColumn aem-GridColumn--default--12">
+      <ul>
+        <li><a href="fy2023_school_site_ethgen_wave.xlsx">School Site Totals w/Ethnicity and Gender</a></li>
+        <li><a href="fy2023_school_site_totals.xlsx">School Site Totals</a></li>
+      </ul>
+    </div>
+
+    <div class="title aem-GridColumn aem-GridColumn--default--12"><h2>FY 2018/2019</h2></div>
+    <div class="text aem-GridColumn aem-GridColumn--default--12">
+      <ul><li><a href="fy2019_unrecognized.xlsx">School Site Totals w/Ethnicity and Gender</a></li></ul>
+    </div>
+
+    <div class="title aem-GridColumn aem-GridColumn--default--12"><h2>Other Resources</h2></div>
+    <div class="text aem-GridColumn aem-GridColumn--default--12">
+      <!-- A lone companion with no primary in its section: must be ignored. -->
+      <ul><li><a href="fy2020_orphan_companion.xlsx">School Site Totals</a></li></ul>
+    </div>
+
+  </div>
+</body></html>

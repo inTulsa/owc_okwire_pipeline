@@ -1,0 +1,144 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: lint, types, tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv pip install --system -e ".[dev]"
+
+      - name: ruff
+        run: ruff check src tests
+
+      - name: ruff format
+        run: ruff format --check src tests
+
+      - name: mypy
+        run: mypy
+
+      # No network, no credentials: parses pipelines.yml and all 41 .sql files.
+      - name: validate config and SQL
+        run: owcdata validate
+
+      - name: unit tests
+        run: pytest tests/unit -q --cov=owcdata --cov-report=term-missing
+
+      # The carried-over enrollment script must differ from its original only
+      # in the documented ways. The derivation is executable, so this is an
+      # exact check rather than a heuristic: scrape.py must be byte-identical
+      # to what scripts/derive_scrape.py produces from the pristine original.
+      - name: enrollment script is a faithful derivation
+        run: python scripts/derive_scrape.py --check
+
+      - name: show the enrollment change set
+        if: always()
+        run: |
+          echo '::group::diff vs original'
+          diff -u tests/fixtures/primary_enrollment_data_script.original.py \
+                  src/owcdata/pipelines/enrollment/scrape.py || true
+          echo '::endgroup::'
+          removed=$(diff -u tests/fixtures/primary_enrollment_data_script.original.py \
+                            src/owcdata/pipelines/enrollment/scrape.py \
+                    | grep -cE '^-[^-]' || true)
+          echo "lines removed from the original: $removed (expected 9)"
+
+  terraform:
+    name: terraform ${{ matrix.env }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [dev, prod]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.4
+
+      - name: fmt
+        run: terraform fmt -check -recursive infra/terraform
+
+      # -backend=false: validate needs no state and no credentials, so this
+      # runs on a fork PR where GCP auth is unavailable.
+      - name: validate
+        working-directory: infra/terraform/envs/${{ matrix.env }}
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: tflint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+      - run: tflint --recursive --chdir=infra/terraform || true
+
+  plan:
+    name: plan dev
+    runs-on: ubuntu-latest
+    # A plan needs real credentials, which a fork PR cannot have.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: [python, terraform]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER_DEV }}
+          service_account: ${{ vars.DEPLOYER_SA_DEV }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.4
+
+      - name: plan
+        id: plan
+        working-directory: infra/terraform/envs/dev
+        run: |
+          terraform init
+          terraform plan -no-color -lock=false \
+            -var="image_digest=${{ vars.CURRENT_IMAGE_DIGEST_DEV }}" \
+            > plan.txt 2>&1 || true
+          {
+            echo 'summary<<PLANEOF'
+            tail -c 60000 plan.txt
+            echo PLANEOF
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: tf-plan-dev
+          message: |
+            ### Terraform plan — dev
+
+            <details><summary>Show plan</summary>
+
+            ```terraform
+            ${{ steps.plan.outputs.summary }}
+            ```
+
+            </details>
+
+            > Check `wif_attribute_condition` in this diff. It is the line
+            > that keeps other GitHub repositories out of the project.

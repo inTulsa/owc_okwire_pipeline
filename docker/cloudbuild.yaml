@@ -1,0 +1,48 @@
+# Cloud Build, because docker is not installed on the maintainers' laptops.
+#   make build ENV=dev
+# Terraform references the image by DIGEST, not by tag, so a rollback is a
+# git revert rather than a race against a moving tag.
+substitutions:
+  _ENV: dev
+  _REGION: us-central1
+  _REPOSITORY: okw-images
+  _IMAGE: owcdata
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+images:
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:${SHORT_SHA}"
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:latest"
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --file=docker/Dockerfile
+      - --build-arg=GIT_SHA=${SHORT_SHA}
+      - --tag=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:${SHORT_SHA}
+      - --tag=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:latest
+      - --cache-from=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:latest
+      - .
+
+  # Print the digest so the deploy workflow can pin Terraform to it.
+  - id: digest
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:${SHORT_SHA}
+        DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' \
+          ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:${SHORT_SHA})
+        echo "IMAGE_DIGEST=$${DIGEST}"
+        echo -n "$${DIGEST}" > /workspace/image_digest.txt
+
+artifacts:
+  objects:
+    location: gs://${PROJECT_ID}-build-artifacts/${SHORT_SHA}/
+    paths: ["/workspace/image_digest.txt"]
