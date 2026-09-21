@@ -1,48 +1,59 @@
 # Cloud Build, because docker is not installed on the maintainers' laptops.
 #   make build ENV=dev
+#
+# Two rules Cloud Build enforces that are easy to trip over:
+#
+#   1. Every substitution passed with --substitutions must be REFERENCED
+#      somewhere below. A key that is merely declared here and never used
+#      fails the build with "key ... in the substitution data is not matched
+#      in the template". So there is no _ENV: the image is deliberately
+#      environment-agnostic (one image for both pipelines and both
+#      environments — see ADR-007), and the environment arrives as a runtime
+#      env var on the Cloud Run job, not as a build arg.
+#
+#   2. Built-in substitutions such as SHORT_SHA and COMMIT_SHA are only
+#      populated for builds started by a trigger, not by `gcloud builds
+#      submit`. User-defined keys must start with an underscore, so the tag
+#      is _TAG rather than SHORT_SHA.
+#
 # Terraform references the image by DIGEST, not by tag, so a rollback is a
-# git revert rather than a race against a moving tag.
+# revert rather than a race against a moving tag. `make build` prints the
+# digest; it is not written to a GCS artifact, which would need a bucket
+# nothing here creates.
+
 substitutions:
-  _ENV: dev
   _REGION: us-central1
   _REPOSITORY: okw-images
   _IMAGE: owcdata
+  _TAG: latest
 
 options:
   logging: CLOUD_LOGGING_ONLY
   machineType: E2_HIGHCPU_8
 
+# Cloud Build pushes these after the steps succeed, and prints each digest.
 images:
-  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:${SHORT_SHA}"
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:${_TAG}"
   - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:latest"
 
 steps:
-  - id: build
-    name: gcr.io/cloud-builders/docker
-    args:
-      - build
-      - --file=docker/Dockerfile
-      - --build-arg=GIT_SHA=${SHORT_SHA}
-      - --tag=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:${SHORT_SHA}
-      - --tag=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:latest
-      - --cache-from=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:latest
-      - .
-
-  # Print the digest so the deploy workflow can pin Terraform to it.
-  - id: digest
+  # Warm the layer cache. `|| exit 0` because on the very first build there is
+  # no :latest to pull, and a missing --cache-from image should not be fatal.
+  - id: pull-cache
     name: gcr.io/cloud-builders/docker
     entrypoint: bash
     args:
       - -c
       - |
-        set -euo pipefail
-        docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:${SHORT_SHA}
-        DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' \
-          ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:${SHORT_SHA})
-        echo "IMAGE_DIGEST=$${DIGEST}"
-        echo -n "$${DIGEST}" > /workspace/image_digest.txt
+        docker pull "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:latest" || exit 0
 
-artifacts:
-  objects:
-    location: gs://${PROJECT_ID}-build-artifacts/${SHORT_SHA}/
-    paths: ["/workspace/image_digest.txt"]
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --file=docker/Dockerfile
+      - --build-arg=GIT_SHA=${_TAG}
+      - --tag=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:${_TAG}
+      - --tag=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:latest
+      - --cache-from=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:latest
+      - .

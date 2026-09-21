@@ -65,6 +65,9 @@ class RunRecord:
     pipeline: str
     dataset: str
     group_name: str = ""
+    # running | success | success_no_change | success_limited | failed
+    # success_limited is a --limit smoke run: deliberately excluded from
+    # previous_successful() so it cannot become a quality baseline.
     status: str = "running"
     row_count: int | None = None
     bytes: int | None = None

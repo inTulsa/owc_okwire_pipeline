@@ -27,25 +27,29 @@ tag makes it a race against whatever is currently pushed under that tag.
 ## Deploying by hand
 
 ```bash
-make build ENV=dev
+make build ENV=dev              # builds, pushes, and prints the apply command
 
-DIGEST=$(gcloud artifacts docker images describe \
-  us-central1-docker.pkg.dev/owc-data-dev/okw-images/owcdata:$(git rev-parse --short HEAD) \
-  --format='value(image_summary.digest)' --project owc-data-dev)
-IMAGE="us-central1-docker.pkg.dev/owc-data-dev/okw-images/owcdata@${DIGEST}"
-
-cd infra/terraform/envs/dev
-terraform init
-terraform plan  -var="image_digest=$IMAGE"
-terraform apply -var="image_digest=$IMAGE"
+IMAGE=$(make -s image-digest ENV=dev)
+make tf-init  ENV=dev
+make tf-plan  ENV=dev TF_ARGS="-var=image_digest=$IMAGE"
+make tf-apply ENV=dev TF_ARGS="-var=image_digest=$IMAGE"
 ```
+
+`make build` prints the exact `-var=` line to copy. It also reads `project_id`
+and `region` from the environment's `terraform.tfvars`, so the build lands in
+the right project rather than gcloud's default.
 
 The job's image is in `lifecycle.ignore_changes`, so it is set separately:
 
 ```bash
-for job in okw-lightcast-dev okw-enrollment-dev; do
-  gcloud run jobs update "$job" --image "$IMAGE" --region us-central1 --project owc-data-dev
-done
+make set-image ENV=dev
+make which-image ENV=dev     # confirm both jobs match the newest build
+```
+
+Or do the whole loop in one command:
+
+```bash
+make deploy ENV=dev          # build + push + point both jobs at it
 ```
 
 **Why `ignore_changes` on the image:** during an incident someone will run

@@ -2,7 +2,7 @@
 project_id        = "owc-data-prod"
 region            = "us-central1"
 location          = "US"
-github_repository = "tulsateam/owc_okwire_pipeline"
+github_repository = "inTulsa/owc_okwire_pipeline"
 
 # Prod pins the ref: only main can deploy. Combined with the repository
 # condition in the WIF provider, this is what stops any other repo — or any

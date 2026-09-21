@@ -34,7 +34,26 @@ class FakeResult:
         self.closed = True
 
 
-def batch(start: int, rows: int, pad: int = 8) -> pa.RecordBatch:
+def batch(start: int, rows: int, pad: int = 8) -> pa.Table:
+    """One result chunk, shaped the way Snowflake actually returns them.
+
+    `fetch_arrow_batches()` is typed `Iterator[Table]` and its docstring says
+    "Fetch Arrow Tables in batches" — despite the name, each item is a
+    **Table**. An earlier version of this helper returned a RecordBatch, so
+    every test here passed against a mock that did not match reality and
+    `pa.Table.from_batches()` blew up on the first real Snowflake run with
+    "Cannot convert pyarrow.lib.Table to pyarrow.lib.RecordBatch".
+
+    If you change this helper, change it to match the connector's real return
+    type — that is the only thing that makes these tests worth running.
+    """
+    return pa.Table.from_arrays(
+        [pa.array(range(start, start + rows)), pa.array(["x" * pad] * rows)], schema=SCHEMA
+    )
+
+
+def record_batch(start: int, rows: int, pad: int = 8) -> pa.RecordBatch:
+    """A RecordBatch chunk. The writer accepts these too, defensively."""
     return pa.RecordBatch.from_arrays(
         [pa.array(range(start, start + rows)), pa.array(["x" * pad] * rows)], schema=SCHEMA
     )
@@ -133,3 +152,47 @@ def test_peak_memory_does_not_grow_with_result_size(tmp_path, monkeypatch):
     # Generous bound: the point is that it does not scale with the result,
     # not that it is byte-identical run to run.
     assert large < small * 2, f"peak grew from {small} to {large} for 4x the data"
+
+
+def test_chunks_are_tables_as_snowflake_returns_them():
+    """Guards the mock against drifting away from the connector's real type.
+
+    This reads the installed connector's own annotation rather than trusting a
+    comment, so an upgrade that changes the contract fails here.
+    """
+    import inspect
+
+    from snowflake.connector.cursor import SnowflakeCursor
+
+    # The raw annotation string, not get_type_hints: the connector uses
+    # `from __future__ import annotations` and imports Table only under
+    # TYPE_CHECKING, so resolving the hint raises NameError here.
+    returned = str(
+        inspect.signature(SnowflakeCursor.fetch_arrow_batches).return_annotation
+    )
+    assert "Table" in returned, (
+        f"fetch_arrow_batches now returns {returned!r}. The `batch()` helper in "
+        "this file must produce whatever it actually yields, or these tests "
+        "pass against a mock that does not match reality."
+    )
+    assert isinstance(batch(1, 1), pa.Table)
+
+
+@pytest.mark.parametrize(
+    "chunks,expected_rows",
+    [
+        ([batch(0, 100)], 100),
+        ([batch(0, 100), batch(100, 100)], 200),
+        ([record_batch(0, 100)], 100),
+        ([batch(0, 50), record_batch(50, 50)], 100),
+    ],
+    ids=["one-table", "many-tables", "record-batch", "mixed"],
+)
+def test_accepts_tables_and_record_batches(tmp_path, chunks, expected_rows):
+    sink = LocalSink(tmp_path)
+    with sink.open_write("c.parquet") as fh:
+        rows, schema = lcrun._write_parquet_stream(FakeResult(chunks), fh)
+    assert rows == expected_rows
+    assert schema.equals(SCHEMA)
+    f = pq.ParquetFile(tmp_path / "c.parquet")
+    assert f.metadata.num_rows == expected_rows

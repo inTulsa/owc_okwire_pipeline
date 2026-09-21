@@ -49,9 +49,12 @@ jobs:
         run: |
           set -euo pipefail
           SHA=$(git rev-parse --short HEAD)
+          # _TAG, not the built-in SHORT_SHA: built-ins are only populated for
+          # trigger-started builds. And no _ENV — every substitution passed
+          # here must be referenced in cloudbuild.yaml or the build fails.
           gcloud builds submit \
             --config docker/cloudbuild.yaml \
-            --substitutions="SHORT_SHA=${SHA},_ENV=dev,_REGION=${{ vars.REGION }}" \
+            --substitutions="_TAG=${SHA},_REGION=${{ vars.REGION }}" \
             --project "${{ vars.PROJECT_ID_DEV }}" \
             .
           IMAGE="${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID_DEV }}/okw-images/owcdata"

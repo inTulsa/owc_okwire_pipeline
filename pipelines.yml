@@ -44,7 +44,12 @@ lightcast:
     # Literal counts already known to be true. A dimension that changes size
     # is either real news or a broken query; either way someone should look.
     known_row_counts:
-      dim_area: 79
+      # Verified against the live share on 2026-09-21: 77 Oklahoma counties
+      # (odd FIPS 40001-40153, all present) plus Lightcast's one sentinel row
+      # 40999 "[Unknown county], OK". The design doc said 79; the data says
+      # 78, and 78 is complete. This literal exists to force exactly that
+      # check before anyone changes it.
+      dim_area: 78
     # Columns that must never be null in the published table.
     not_null:
       dim_area: [AREAID]

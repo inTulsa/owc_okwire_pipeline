@@ -46,6 +46,17 @@ grace, and calls `ERROR()` when one has not. The failure lands in Cloud
 Logging, where a log metric and alert policy route it to the distribution
 list.
 
+This depends on `IF(cond, 'ok', ERROR(...))` evaluating **lazily** — if
+BigQuery evaluated `ERROR()` eagerly the query would fail on every run and the
+alert would be permanently firing. Verified both directions against BigQuery:
+
+```sql
+-- healthy: returns 'ok', does not raise
+SELECT IF(COUNT(*) = 0, 'ok', ERROR('x')) FROM (SELECT 1 FROM UNNEST([]));
+-- stale: fails the job, message carries the diagnosis
+SELECT IF(COUNT(*) = 0, 'ok', ERROR('STALE: 2 overdue')) FROM (SELECT 1 UNION ALL SELECT 2);
+```
+
 | Group | Max interval | Grace | Threshold |
 |---|---|---|---|
 | lightcast monthly | 744h (31d) | 48h | 792h |
@@ -106,9 +117,37 @@ becomes a diff.
 typo'd metric type applies cleanly and then never fires — worse than no alert,
 because the dashboard shows a policy that will never trigger.
 
-Alert 1 uses `job/completed_task_attempt_count` with `result="failed"`, which
-is a confirmed metric and label. `job/completed_execution_count` was not
-verified and is deliberately not used.
+Every metric and monitored-resource pairing below was read back from a live
+project's `metricDescriptors`, not assumed:
+
+| Metric | Monitored resource | Labels |
+|---|---|---|
+| `run.googleapis.com/job/completed_task_attempt_count` | `cloud_run_job` | `result`, `attempt` |
+| `run.googleapis.com/job/completed_execution_count` | `cloud_run_job` | `result` |
+| `run.googleapis.com/container/memory/utilizations` | `cloud_run_job` | — (DELTA, DISTRIBUTION) |
+| `bigquery.googleapis.com/query/scanned_bytes_billed` | **`global`** | — |
+| `bigquery.googleapis.com/query/statement_scanned_bytes_billed` | `bigquery_project` | — |
+
+**The BigQuery one is the trap.** `query/scanned_bytes_billed` is reported
+against `global`, *not* `bigquery_project`. Pairing it with `bigquery_project`
+is rejected at create time with "does not specify a valid combination of metric
+and monitored resource descriptors" — which is at least a loud failure. The
+per-statement variant is the one that uses `bigquery_project`.
+
+Alert 1 uses `job/completed_task_attempt_count` because it carries the
+`attempt` label, so a task that fails and then succeeds on retry is
+distinguishable from one that exhausts its retries.
+`memory/utilizations` is a DISTRIBUTION, which is why alert 8 can use
+`ALIGN_PERCENTILE_99`.
+
+To list them yourself:
+
+```bash
+TOK=$(gcloud auth application-default print-access-token)
+curl -s -H "Authorization: Bearer $TOK" \
+  "https://monitoring.googleapis.com/v3/projects/$PROJECT/metricDescriptors?filter=metric.type%3Dstarts_with(%22bigquery.googleapis.com%2Fquery%22)" \
+  | python3 -c "import json,sys;[print(m['type'], m.get('monitoredResourceTypes')) for m in json.load(sys.stdin)['metricDescriptors']]"
+```
 
 To check a policy is actually wired to data:
 
@@ -131,6 +170,15 @@ disables an alert; that test is what turns it into a test failure instead.
 
 The metrics carry a `dataset` label extracted from `jsonPayload.dataset`, so
 the alert email names which dataset was involved.
+
+**Creating them is a two-phase operation.** A new log-based metric is visible
+to the Logging API immediately but takes up to a few minutes to become a
+queryable Monitoring metric descriptor, and an alert policy referencing one
+before then fails with a 404. `depends_on` cannot fix that — the metric exists,
+it just is not queryable. Both modules therefore insert a `time_sleep`
+(`metric_propagation_wait`, default `90s`) between the two, keyed on the metric
+ids so adding an alert later waits again rather than racing. Details in
+[the runbook](02-runbook.md#first-deploy-failures).
 
 ## The notification channel
 

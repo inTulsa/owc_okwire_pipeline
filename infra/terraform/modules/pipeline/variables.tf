@@ -208,3 +208,26 @@ variable "labels" {
   type    = map(string)
   default = {}
 }
+
+variable "metric_propagation_wait" {
+  type        = string
+  description = <<-EOT
+    How long to wait after creating log-based metrics before creating the
+    alert policies that reference them.
+
+    A log-based metric is visible to the Logging API immediately but takes
+    time to appear as a Monitoring metric descriptor. Until it does, creating
+    an alert policy against it fails with
+    "Cannot find metric(s) that match type = ... If a metric was created
+    recently, it could take up to 10 minutes to become available."
+
+    depends_on does not help: the metric genuinely exists, it is just not
+    queryable yet. Only elapsed time fixes it.
+
+    This waits on create only, so it costs nothing on subsequent applies. The
+    API's stated worst case is 10 minutes; in practice descriptors appear
+    within about a minute. If an apply still races, re-running it is safe and
+    completes — Terraform is idempotent here.
+  EOT
+  default     = "90s"
+}

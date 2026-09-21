@@ -113,3 +113,9 @@ variable "bigquery_scanned_bytes_threshold_gib" {
   description = "Alert when BigQuery scanned bytes exceed this in a day. Guards against a DirectQuery PowerBI report billing a scan per slicer click."
   default     = 500
 }
+
+variable "metric_propagation_wait" {
+  type        = string
+  description = "Wait after creating a log-based metric before an alert policy references it. See the pipeline module's variable of the same name."
+  default     = "90s"
+}

@@ -95,6 +95,23 @@ resource "google_logging_metric" "event" {
   }
 }
 
+# Wait for the metrics above to become queryable from Monitoring.
+#
+# `triggers` keyed on the metric ids means this is recreated — and therefore
+# waits again — whenever the set of metrics changes. Without that, adding an
+# event alert later would race exactly as the first apply did.
+resource "time_sleep" "metric_propagation" {
+  count = length(var.event_alerts) > 0 ? 1 : 0
+
+  create_duration = var.metric_propagation_wait
+
+  triggers = {
+    metrics = join(",", sort([for m in google_logging_metric.event : m.id]))
+  }
+
+  depends_on = [google_logging_metric.event]
+}
+
 resource "google_monitoring_alert_policy" "event" {
   for_each = local.alerts_enabled ? { for a in var.event_alerts : a.key => a } : {}
 
@@ -138,7 +155,7 @@ resource "google_monitoring_alert_policy" "event" {
     auto_close = "86400s"
   }
 
-  depends_on = [google_logging_metric.event]
+  depends_on = [time_sleep.metric_propagation]
 }
 
 # ---------------------------------------------------------------------------

@@ -405,6 +405,397 @@ Import mode on a Pro workspace caps a semantic model at 1 GB compressed.
 
 ---
 
+## First-deploy failures
+
+These are ordering problems on a brand-new project, not broken config. Full
+sequence: [`03-gcp-setup.md`](03-gcp-setup.md).
+
+### `name unknown: Repository "okw-images" not found`
+
+The Docker build succeeded and the **push** failed. Terraform creates the
+Artifact Registry repository, so it has to exist before the first build:
+
+```bash
+make tf-bootstrap ENV=$ENV     # creates the platform, incl. the registry
+make build ENV=$ENV
+```
+
+`tf-bootstrap` applies only `module.platform` and creates no Cloud Run job. It
+passes a placeholder digest itself, purely to satisfy the pipeline module's
+digest validation — Terraform evaluates variable validation even for resources
+`-target` excludes.
+
+### `PERMISSION_DENIED: The caller does not have permission` on `gcloud builds submit`, as project owner
+
+Not an IAM problem. Enabling `cloudbuild.googleapis.com` provisions the Cloud
+Build service agent asynchronously, and submits are rejected until it lands.
+
+```bash
+# Confirm the agent exists
+gcloud projects get-iam-policy $PROJECT \
+  --flatten="bindings[].members" \
+  --filter="bindings.members:cloudbuild" --format="value(bindings.members)"
+```
+
+Wait ~30 seconds and re-run. Doing `make tf-bootstrap` first avoids this,
+because Terraform enables the API well before you build.
+
+### `Failed to get existing workspaces: ... storage: bucket doesn't exist` on `terraform init`
+
+**The bucket almost certainly does exist.** This message is a 404 from GCS
+surfacing with the wrong explanation.
+
+gcloud and Terraform authenticate **differently**: the CLI uses the account
+from `gcloud auth login`, Terraform uses Application Default Credentials. If
+ADC carries a `quota_project_id` that is deleted or inactive, every GCS call
+is billed to a project that cannot be resolved and returns
+`404 The requested project was not found` — which the GCS backend reports as
+the bucket not existing.
+
+Diagnose:
+
+```bash
+# What quota project is ADC billing to?
+python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.config/gcloud/application_default_credentials.json'))).get('quota_project_id','(none)'))"
+
+# Is it actually usable? `describe` exits 0 even for DELETE_REQUESTED,
+# so check the state, not the exit code.
+gcloud projects describe THAT_PROJECT --format='value(lifecycleState)'
+```
+
+Anything other than `ACTIVE` is the cause. Fix:
+
+```bash
+gcloud auth application-default set-quota-project $PROJECT
+```
+
+Confirm — note this must send the quota-project header, because that is what
+the client library does and it is the whole failure mode:
+
+```bash
+TOK=$(gcloud auth application-default print-access-token)
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOK" \
+  "https://storage.googleapis.com/storage/v1/b/okw-tfstate/o?prefix=env&maxResults=1"
+# 200
+```
+
+`./infra/bootstrap/bootstrap.sh` now runs exactly this check and fails with the
+specific fix, so a fresh machine hits a one-line error instead of this.
+
+**Also check `core.project`.** If `gcloud config list` shows an unrelated
+project, any command where you forget `--project` goes somewhere unexpected:
+
+```bash
+gcloud config set project $PROJECT
+```
+
+### `key "_X" in the substitution data is not matched in the template`
+
+Cloud Build requires every key passed with `--substitutions` to be
+**referenced** in `docker/cloudbuild.yaml`. Declaring it in the
+`substitutions:` block is not enough.
+
+Note also that built-in substitutions (`SHORT_SHA`, `COMMIT_SHA`,
+`BRANCH_NAME`) are only populated for trigger-started builds, never for
+`gcloud builds submit` — which is why the tag here is the user-defined `_TAG`.
+
+```bash
+# Every key used anywhere must resolve
+grep -o '\${_[A-Z_]*}' docker/cloudbuild.yaml | sort -u
+```
+
+### `Error: Invalid value for variable` on `image_digest`
+
+The pipeline module rejects a tag and requires `...@sha256:<64 hex>`, so a
+rollback is a revert rather than a race against a moving tag.
+
+```bash
+make image-digest ENV=$ENV      # prints the correct, digest-pinned reference
+```
+
+### `Secret projects/.../secrets/okw-snowflake-password-<env>/versions/latest was not found`
+
+The secret **container** exists but has no **version**. Terraform creates the
+container and never the value — deliberately, so the password stays out of
+Terraform state — but `versions/latest` cannot resolve to nothing, so the
+lightcast job fails to create.
+
+Note the enrollment job creates fine in this situation. That is the
+per-pipeline secret separation working: the scraper reads a public webpage and
+is granted no secret access at all.
+
+```bash
+# Container present but empty?
+gcloud secrets versions list okw-snowflake-password-$ENV --project=$PROJECT
+```
+
+Fix, then re-apply:
+
+```bash
+printf '%s' 'THE_PASSWORD' | \
+  gcloud secrets versions add okw-snowflake-password-$ENV --data-file=- --project $PROJECT
+
+IMAGE=$(make -s image-digest ENV=$ENV)
+make tf-apply ENV=$ENV TF_ARGS="-var=image_digest=$IMAGE"
+```
+
+The half-created job is left **tainted** in state, so the next apply replaces
+it. Nothing needs to be destroyed or imported:
+
+```bash
+terraform state show module.lightcast.google_cloud_run_v2_job.this   # tainted
+```
+
+`make tf-apply` now runs `make preflight` first and refuses to start when the
+version is missing, so this costs a second instead of failing minutes into an
+apply. `SKIP_PREFLIGHT=1 make tf-apply ...` bypasses it.
+
+**After rotating the password**, no apply is needed — the job reads
+`versions/latest` at each execution. See
+[Rotate the Snowflake password](#rotate-the-snowflake-password).
+
+### `Service account service-<num>@gcp-sa-<service>.iam.gserviceaccount.com does not exist`
+
+**Enabling an API does not create its service agent.** The agent is
+provisioned the first time the service is actually used, so granting a role to
+a hand-constructed agent address right after `google_project_service` fails.
+
+Terraform handles this with `google_project_service_identity`, which forces the
+agent into existence and returns its real email. That resource has **no GA
+equivalent**, which is the only reason the `google-beta` provider is declared
+in this repo:
+
+```hcl
+resource "google_project_service_identity" "bigquerydatatransfer" {
+  provider   = google-beta
+  project    = var.project_id
+  service    = "bigquerydatatransfer.googleapis.com"
+  depends_on = [google_project_service.enabled]
+}
+```
+
+If you add a resource that grants a role to another Google service agent, use
+the same pattern and reference `.member` rather than building the address from
+the project number.
+
+```bash
+# Which service agents currently exist in the project?
+gcloud projects get-iam-policy $PROJECT --flatten='bindings[].members' \
+  --filter='bindings.members:gcp-sa-' --format='value(bindings.members)' | sort -u
+```
+
+### `Cannot find metric(s) that match type = "logging.googleapis.com/user/..."` — 404 on an alert policy
+
+A log-based metric is visible to the **Logging** API the moment Terraform
+creates it, but takes time to appear as a **Monitoring** metric descriptor.
+Until it does, creating an alert policy that references it 404s. The API says
+so in the error: *"If a metric was created recently, it could take up to 10
+minutes to become available."*
+
+`depends_on` does not help — the metric genuinely exists, it is just not
+queryable yet. Only elapsed time fixes it.
+
+**Just re-run the apply.** Terraform is idempotent here, and the metrics will
+have propagated by then:
+
+```bash
+IMAGE=$(make -s image-digest ENV=$ENV)
+make tf-apply ENV=$ENV TF_ARGS="-var=image_digest=$IMAGE"
+```
+
+Both modules now insert a `time_sleep` (`metric_propagation_wait`, default
+`90s`) between metric creation and alert-policy creation, so a fresh project
+should not hit this. It waits on **create only**, so it costs nothing on later
+applies, and its `triggers` are keyed on the metric ids — so adding a new
+event alert later waits again instead of racing.
+
+If an apply still races, raise it:
+
+```bash
+make tf-apply ENV=$ENV TF_ARGS="-var=image_digest=$IMAGE -var=metric_propagation_wait=180s"
+```
+
+Confirm what Monitoring can actually see:
+
+```bash
+TOK=$(gcloud auth application-default print-access-token)
+curl -s -H "Authorization: Bearer $TOK" \
+  "https://monitoring.googleapis.com/v3/projects/$PROJECT/metricDescriptors?filter=metric.type%3Dstarts_with(%22logging.googleapis.com%2Fuser%2Fowc%22)" \
+  | python3 -c "import json,sys;[print(m['type']) for m in json.load(sys.stdin).get('metricDescriptors',[])]"
+```
+
+Compare against `gcloud logging metrics list --project=$PROJECT`. Metrics in
+the second list but not the first are still propagating.
+
+### `google_cloud_scheduler_job` shows a pending `retry_config { retry_count = 0 }`
+
+Not a problem, and not perpetual. GCP omits `retryCount` from the API response
+when it is zero, so Terraform sees the block as missing and plans to add it.
+One apply reconciles it.
+
+**Retries are off either way** — an absent `retryCount` *is* zero, which is
+what this design requires because `jobs:run` is not idempotent: a transient
+503 with retries enabled can start two executions for one `run_date`, and for
+lightcast that means re-querying and re-billing Lightcast's warehouse twice.
+
+```bash
+# Verify no retries, on either scheduler
+gcloud scheduler jobs describe okw-lightcast-monthly-$ENV --location=$REGION \
+  --project=$PROJECT --format='yaml(retryConfig)'
+# no retryCount field, or retryCount: 0 -> correct
+```
+
+### `The supplied filter does not specify a valid combination of metric and monitored resource descriptors`
+
+An alert policy names a metric with the wrong monitored resource. The pairing
+is not guessable — confirm it against a live project:
+
+```bash
+TOK=$(gcloud auth application-default print-access-token)
+curl -s -H "Authorization: Bearer $TOK" \
+  "https://monitoring.googleapis.com/v3/projects/$PROJECT/metricDescriptors?filter=metric.type%3Dstarts_with(%22bigquery.googleapis.com%2Fquery%22)" \
+  | python3 -c "import json,sys;[print(m['type'], m.get('monitoredResourceTypes')) for m in json.load(sys.stdin)['metricDescriptors']]"
+```
+
+The pairing that bit this repo: `query/scanned_bytes_billed` is reported
+against **`global`**, not `bigquery_project`. The verified table is in
+[`07-monitoring.md`](07-monitoring.md#metric-type-strings).
+
+Note this error is the *good* case — it fails at apply. A metric type that is
+merely misspelled applies cleanly and then never fires.
+
+### The first apply wants to create nothing, or errors on a missing API
+
+`google_project_service` needs Service Usage and Cloud Resource Manager to
+already be on — Terraform cannot enable the APIs that let it enable APIs. Run
+`./infra/bootstrap/bootstrap.sh <project>` first.
+
+## A fix was deployed but the old behavior persists
+
+**The jobs are probably still running the previous image.** A Cloud Run job
+pins an image **digest**, and `image` is in `lifecycle.ignore_changes` on the
+job resource — so neither `make build` nor `terraform apply` will move a job
+onto a newly built image. `make build` pushes to the registry and stops there.
+
+This is silent in a specific way: rebuilding at the same git SHA reuses the
+tag, so `:<sha>` moves to the new digest while the job keeps pinning the old
+one. The registry looks updated; the job is not.
+
+```bash
+make which-image ENV=$ENV
+```
+
+```text
+  newest build      : ...owcdata@sha256:f79b1fb2...
+  okw-lightcast-dev : ...owcdata@sha256:a217ebdb...   <- stale
+  okw-enrollment-dev: ...owcdata@sha256:a217ebdb...   <- stale
+```
+
+Fix:
+
+```bash
+make set-image ENV=$ENV
+```
+
+Use `make deploy ENV=$ENV` to build and set the image in one step, which is
+the loop to prefer while iterating.
+
+**Why `ignore_changes` is there at all:** during an incident someone will run
+`gcloud run jobs update --image` to pin an older build. Without it, the next
+unrelated `terraform apply` would silently revert that. The cost is that
+deploying an image is an explicit step — hence `set-image`.
+
+## WIF and outputs
+
+### `terraform output` says "No outputs found"
+
+You are almost certainly in the repo root. Terraform outputs live in the env
+directory, and every `make tf-*` target cds there for you:
+
+```bash
+make tf-output ENV=$ENV
+```
+
+Add `NAME=<output>` for a single raw value:
+
+```bash
+make tf-output ENV=$ENV NAME=wif_attribute_condition
+```
+
+### A pasted `#` line errors in zsh
+
+If you copy a command *and* the expected-output line beneath it, zsh may try
+to run the comment:
+
+```text
+zsh: = not found
+```
+
+zsh does not treat `#` as a comment on an interactive command line unless
+`interactive_comments` is set, and a word beginning with `=` then triggers
+EQUALS expansion — zsh looks for a command literally named `=`. Nothing ran
+and nothing is broken; the command on the line above it succeeded.
+
+Paste one line at a time, or turn comments on permanently:
+
+```bash
+echo 'setopt interactive_comments' >> ~/.zshrc
+```
+
+The docs here keep expected output in separate `text` blocks rather than `#`
+comments for this reason.
+
+
+
+### A YAML snippet pasted into the shell errors
+
+```text
+zsh: command not found: name:
+zsh: command not found: run:
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+```
+
+You pasted GitHub Actions YAML into a terminal. It is not shell, and the
+`ACTIONS_ID_TOKEN_REQUEST_*` variables exist only inside a runner with
+`id-token: write` — so `curl` returned nothing and Python got empty input.
+Nothing ran and nothing is broken.
+
+Blocks tagged `yaml` in these docs belong in a workflow file. Only `bash`
+blocks are meant to be run.
+
+### GitHub Actions deploys fail to authenticate via WIF
+
+The usual cause is the `attribute_condition` not matching the repository
+string GitHub actually sends. `assertion.repository` preserves the owner's
+**exact casing** and the comparison is case-sensitive, so `intulsa/repo` never
+matches `inTulsa/repo`.
+
+It fails **closed** — no security hole, just no deploys — which is why it can
+sit unnoticed.
+
+```bash
+make wif-check ENV=$ENV      # compares tfvars against the git remote
+make tf-output ENV=$ENV NAME=wif_attribute_condition
+```
+
+`make tf-apply` runs `wif-check` as part of `preflight`, so a mismatch blocks
+the apply rather than shipping a condition that cannot match.
+
+Other things to check, in order:
+
+1. **`allowed_refs`.** Prod pins `refs/heads/main`, so a branch or a fork's
+   pull request cannot deploy. That is intentional — confirm the workflow is
+   running on `main`.
+2. **The repository variables.** `WIF_PROVIDER_<ENV>` and
+   `DEPLOYER_SA_<ENV>` must match `make tf-output`.
+3. **`id-token: write`** permission on the workflow job. Without it GitHub
+   never mints a token at all.
+
+Changing `github_repository` replaces
+`module.wif.google_service_account_iam_member.github_may_impersonate`, because
+the repository is embedded in its `principalSet` member string. That
+replacement is expected and safe.
+
 ## Common procedures
 
 ### Roll back a published table

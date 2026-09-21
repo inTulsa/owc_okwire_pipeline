@@ -1,0 +1,27 @@
+# What `gcloud builds submit` uploads. Docker's own context filtering is in
+# .dockerignore; this is the separate list gcloud uses, and without it gcloud
+# falls back to .gitignore and uploads a lot that the image does not need.
+.git
+.gitignore
+.github
+.venv
+.owcdata-local
+data
+exports
+docs
+infra
+tests
+scripts
+Makefile
+*.md
+!README.md
+.env
+.env.*
+!.env.example
+__pycache__
+*.py[cod]
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.terraform
+*.tfstate*

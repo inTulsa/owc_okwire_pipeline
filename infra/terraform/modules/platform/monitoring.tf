@@ -54,14 +54,29 @@ resource "google_project_iam_member" "freshness_job_user" {
   member  = "serviceAccount:${google_service_account.freshness.email}"
 }
 
-# The Data Transfer Service creates runs as this SA, so the Terraform identity
-# must be allowed to act as it.
+# Provision the BigQuery Data Transfer Service agent.
+#
+# Enabling an API does not create its service agent — the agent is created the
+# first time the service is actually used. So constructing the address by hand
+# and granting a role to it immediately after enabling the API fails with
+# "service-<num>@gcp-sa-bigquerydatatransfer.iam.gserviceaccount.com does not
+# exist". This forces it into existence and hands back its real email, which
+# is also safer than string-building the address ourselves.
+resource "google_project_service_identity" "bigquerydatatransfer" {
+  provider = google-beta
+
+  project = var.project_id
+  service = "bigquerydatatransfer.googleapis.com"
+
+  depends_on = [google_project_service.enabled]
+}
+
+# The Data Transfer Service mints tokens for the freshness SA when it runs the
+# scheduled query, so its agent needs tokenCreator on that SA.
 resource "google_service_account_iam_member" "freshness_token_creator" {
   service_account_id = google_service_account.freshness.name
   role               = "roles/iam.serviceAccountTokenCreator"
-  member             = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-bigquerydatatransfer.iam.gserviceaccount.com"
-
-  depends_on = [google_project_service.enabled]
+  member             = google_project_service_identity.bigquerydatatransfer.member
 }
 
 data "google_project" "this" {
@@ -163,8 +178,27 @@ resource "google_logging_metric" "freshness_failed" {
   depends_on = [google_project_service.enabled]
 }
 
+# See the pipeline module's time_sleep for why elapsed time is required here.
+resource "time_sleep" "platform_metric_propagation" {
+  create_duration = var.metric_propagation_wait
+
+  triggers = {
+    metrics = join(",", [
+      google_logging_metric.freshness_failed.id,
+      google_logging_metric.scheduler_error.id,
+    ])
+  }
+
+  depends_on = [
+    google_logging_metric.freshness_failed,
+    google_logging_metric.scheduler_error,
+  ]
+}
+
 resource "google_monitoring_alert_policy" "didnt_run" {
   count = length(var.alert_emails) > 0 ? 1 : 0
+
+  depends_on = [time_sleep.platform_metric_propagation]
 
   project      = var.project_id
   display_name = "[${var.env}] ALERT 2: a pipeline did not run (freshness)"
@@ -231,6 +265,8 @@ resource "google_logging_metric" "scheduler_error" {
 
 resource "google_monitoring_alert_policy" "scheduler_failing" {
   count = length(var.alert_emails) > 0 ? 1 : 0
+
+  depends_on = [time_sleep.platform_metric_propagation]
 
   project      = var.project_id
   display_name = "[${var.env}] ALERT 3: Cloud Scheduler is failing to invoke a job"
@@ -299,9 +335,19 @@ resource "google_monitoring_alert_policy" "bigquery_scanned_bytes" {
   }
 
   conditions {
-    display_name = "scanned bytes per day"
+    display_name = "scanned bytes billed per day"
     condition_threshold {
-      filter          = "metric.type=\"bigquery.googleapis.com/query/scanned_bytes\" AND resource.type=\"bigquery_project\""
+      # VERIFIED against this project's metricDescriptors, not assumed:
+      # query/scanned_bytes_billed is reported against the "global" monitored
+      # resource, NOT "bigquery_project". Pairing it with bigquery_project is
+      # rejected at create time with "does not specify a valid combination of
+      # metric and monitored resource descriptors".
+      #   bigquery.googleapis.com/query/scanned_bytes          -> global
+      #   bigquery.googleapis.com/query/scanned_bytes_billed   -> global
+      #   bigquery.googleapis.com/query/statement_scanned_bytes -> bigquery_project
+      # "billed" is the cost-relevant number: it includes the per-table 10 MB
+      # minimum, which is what actually appears on the invoice.
+      filter          = "metric.type=\"bigquery.googleapis.com/query/scanned_bytes_billed\" AND resource.type=\"global\""
       comparison      = "COMPARISON_GT"
       threshold_value = var.bigquery_scanned_bytes_threshold_gib * 1024 * 1024 * 1024
       duration        = "0s"

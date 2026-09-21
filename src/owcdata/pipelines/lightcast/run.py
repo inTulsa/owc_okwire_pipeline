@@ -51,35 +51,52 @@ class ExtractOutcome:
     schema: pa.Schema
 
 
-def _write_parquet_stream(result: Any, fh: Any) -> tuple[int, pa.Schema]:
-    """Stream Arrow batches into ``fh`` as Parquet. Returns (rows, schema).
+def _as_table(chunk: Any) -> pa.Table:
+    """Normalize one result chunk to a ``pa.Table``.
 
-    Batches are grouped up to ``ROW_GROUP_TARGET_BYTES`` before being written,
+    Snowflake's ``fetch_arrow_batches()`` is typed ``Iterator[Table]`` and its
+    docstring says "Fetch Arrow Tables in batches" — despite the name, each
+    item is a **Table**, not a RecordBatch. Accepting either is cheap and
+    means this does not break if that ever changes, or if a caller passes
+    batches.
+    """
+    if isinstance(chunk, pa.Table):
+        return chunk
+    return pa.Table.from_batches([chunk])
+
+
+def _write_parquet_stream(result: Any, fh: Any) -> tuple[int, pa.Schema]:
+    """Stream Arrow result chunks into ``fh`` as Parquet. Returns (rows, schema).
+
+    Chunks are grouped up to ``ROW_GROUP_TARGET_BYTES`` before being written,
     so the file gets a handful of well-sized row groups instead of one tiny
     row group per Snowflake result chunk — while still never holding more than
     one row group in memory.
     """
     writer: pq.ParquetWriter | None = None
     schema: pa.Schema | None = None
-    pending: list[pa.RecordBatch] = []
+    pending: list[pa.Table] = []
     pending_bytes = 0
     rows = 0
 
     def flush() -> None:
         nonlocal pending, pending_bytes
         if pending and writer is not None:
-            writer.write_table(pa.Table.from_batches(pending))
+            # concat_tables rather than Table.from_batches: the chunks are
+            # already Tables.
+            writer.write_table(pending[0] if len(pending) == 1 else pa.concat_tables(pending))
         pending = []
         pending_bytes = 0
 
     try:
-        for batch in result.batches:
+        for chunk in result.batches:
+            table = _as_table(chunk)
             if writer is None:
-                schema = batch.schema
+                schema = table.schema
                 writer = pq.ParquetWriter(fh, schema, compression="snappy")
-            pending.append(batch)
-            pending_bytes += batch.nbytes
-            rows += batch.num_rows
+            pending.append(table)
+            pending_bytes += table.nbytes
+            rows += table.num_rows
             if pending_bytes >= ROW_GROUP_TARGET_BYTES:
                 flush()
         flush()
@@ -197,13 +214,21 @@ def run(
                         run_id=settings.run_id,
                         quality=lc.quality,
                         previous_run=previous,
-                        # A row-limited smoke run would trip every drift check.
+                        # A row-limited smoke run is a deliberate truncation:
+                        # it must not publish over marts, and its counts must
+                        # not be compared against a real run.
                         allow_empty=limit is not None,
+                        row_limited=limit is not None,
                     )
                     record.row_count = landed.row_count
                     record.max_year = landed.max_year
 
-                manifest.write(record.finish("success"))
+                # A limited run records a DIFFERENT status on purpose.
+                # previous_successful() selects status='success' only, so a
+                # smoke run cannot become the baseline that the next real
+                # run's drift check compares against — which would otherwise
+                # fail every first real run after a smoke test.
+                manifest.write(record.finish("success_limited" if limit is not None else "success"))
             except Exception as exc:
                 log.error("dataset_failed", dataset=ds.name, error=str(exc), exc_info=True)
                 manifest.write(record.finish("failed", error=str(exc)))
