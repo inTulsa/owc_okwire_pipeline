@@ -1,14 +1,15 @@
 # ---------------------------------------------------------------------------
-# Four datasets, all co-located with the raw bucket.
+# Three datasets, all co-located with the raw bucket.
 #
-#   staging   load target, short-lived
-#   marts     published tables
-#   reporting authorized views — PowerBI's ONLY entry point
-#   ops       run manifest and pre-publish snapshots
+#   staging  load target, short-lived
+#   marts    published tables — PowerBI reads these directly
+#   ops      run manifest (pipeline_runs) and its read-order views
 #
-# The split exists so PowerBI can read the data without holding any grant on
-# owc_marts. That is what authorized views buy, and wiring them is the step
-# most often forgotten.
+# There is deliberately no owc_reporting. An earlier design published
+# pass-through authorized views there so PowerBI would hold no grant on
+# marts, but since every table got a SELECT * view the effective read surface
+# was identical. See ADR-006 for the reversal and the one condition that
+# would bring the layer back.
 # ---------------------------------------------------------------------------
 
 resource "google_bigquery_dataset" "staging" {
@@ -31,23 +32,14 @@ resource "google_bigquery_dataset" "marts" {
   labels      = var.labels
   description = "Published tables. Unpartitioned by design — see docs/01-architecture.md ADR-002."
 
-  # Access entries are managed outside Terraform: the pipeline adds one
-  # authorized-view entry per published table at publish time, and Terraform
-  # would fight it on every apply.
+  # ignore_changes on access is REQUIRED, not optional: the grants below are
+  # declared with google_bigquery_dataset_iam_member resources, which mutate
+  # this same access list. Without it, every apply would fight those
+  # resources and flap the dataset's ACL.
   lifecycle {
     prevent_destroy = true
     ignore_changes  = [access]
   }
-
-  depends_on = [google_project_service.enabled]
-}
-
-resource "google_bigquery_dataset" "reporting" {
-  dataset_id  = "owc_reporting"
-  project     = var.project_id
-  location    = var.location
-  labels      = var.labels
-  description = "Authorized views only. PowerBI's sole entry point; holds no data of its own."
 
   depends_on = [google_project_service.enabled]
 }
@@ -57,7 +49,7 @@ resource "google_bigquery_dataset" "ops" {
   project     = var.project_id
   location    = var.location
   labels      = var.labels
-  description = "pipeline_runs manifest and pre-publish table snapshots."
+  description = "pipeline_runs manifest and the views used to read it. No table data."
 
   depends_on = [google_project_service.enabled]
 }
@@ -104,6 +96,48 @@ resource "google_bigquery_table" "pipeline_runs" {
   ])
 }
 
+# Newest run first.
+#
+# A BigQuery table has no inherent row order — the console's table preview
+# shows storage order, which cannot be changed. Querying a view runs its
+# query, so this is the thing to open when you want "what happened recently"
+# without typing ORDER BY every time.
+resource "google_bigquery_table" "pipeline_runs_recent" {
+  dataset_id          = google_bigquery_dataset.ops.dataset_id
+  table_id            = "pipeline_runs_recent"
+  project             = var.project_id
+  labels              = var.labels
+  deletion_protection = false
+
+  view {
+    use_legacy_sql = false
+    query          = <<-SQL
+      -- Every run, newest first. Same columns as pipeline_runs.
+      SELECT
+        started_at,
+        finished_at,
+        pipeline,
+        dataset,
+        group_name,
+        status,
+        row_count,
+        max_year,
+        ROUND(duration_seconds, 1) AS duration_seconds,
+        bytes,
+        source_query_id,
+        source_uri,
+        git_sha,
+        env,
+        run_id,
+        error
+      FROM `${var.project_id}.owc_ops.pipeline_runs`
+      ORDER BY started_at DESC
+    SQL
+  }
+
+  depends_on = [google_bigquery_table.pipeline_runs]
+}
+
 # A ready-made "is the data current?" view for stakeholders who should not
 # have to write SQL to find out.
 resource "google_bigquery_table" "dataset_freshness" {
@@ -122,14 +156,17 @@ resource "google_bigquery_table" "dataset_freshness" {
         dataset,
         ANY_VALUE(group_name)                               AS schedule_group,
         MAX(finished_at)                                    AS last_success_at,
-        TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), MAX(finished_at), HOUR) AS hours_since_success,
+        -- Days, not hours: these pipelines run monthly, quarterly and
+        -- yearly, so hours is the wrong unit for the question this view
+        -- answers. 0 means it refreshed today.
+        TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), MAX(finished_at), DAY) AS days_since_success,
         ANY_VALUE(row_count  HAVING MAX finished_at)        AS last_row_count,
         ANY_VALUE(max_year   HAVING MAX finished_at)        AS last_max_year,
         ANY_VALUE(git_sha    HAVING MAX finished_at)        AS last_git_sha
       FROM `${var.project_id}.owc_ops.pipeline_runs`
       WHERE status IN ('success', 'success_no_change')
       GROUP BY pipeline, dataset
-      ORDER BY hours_since_success DESC
+      ORDER BY days_since_success DESC
     SQL
   }
 

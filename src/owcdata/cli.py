@@ -96,7 +96,6 @@ def _build_bq(settings: Settings):
         location=settings.bq_location,
         staging_dataset=settings.bq_staging_dataset,
         marts_dataset=settings.bq_marts_dataset,
-        reporting_dataset=settings.bq_reporting_dataset,
         ops_dataset=settings.bq_ops_dataset,
     )
 
@@ -243,15 +242,54 @@ def datasets(
 @app.command(name="rollback")
 def rollback_cmd(
     table: Annotated[str, typer.Argument(help="Marts table to roll back")],
-    snapshot: Annotated[str, typer.Argument(help="Fully-qualified snapshot from owc_ops")],
+    run_id: Annotated[
+        str | None,
+        typer.Option(
+            help="Restore the Parquet this run produced. Looked up in owc_ops.pipeline_runs."
+        ),
+    ] = None,
+    source_uri: Annotated[
+        str | None, typer.Option(help="Restore this gs:// Parquet object directly.")
+    ] = None,
 ) -> None:
-    """Restore a marts table from a snapshot taken before a publish."""
+    """Roll a marts table back to a previous run's output.
+
+    The rollback artifact is the Parquet that run wrote to GCS, retained under
+    its own run_id prefix. With neither option, the last successful run before
+    the current contents is used.
+    """
     settings = _build_settings("gcs", None, None)
     owclog.configure(level=settings.log_level)
+    log = owclog.get_logger("owcdata.rollback")
     bq = _build_bq(settings)
     assert bq is not None
-    bq.restore_from_snapshot(table=table, snapshot=snapshot)
-    typer.echo(f"Restored {table} from {snapshot}")
+
+    if source_uri is None:
+        sql = f"""
+            SELECT run_id, source_uri, row_count, finished_at
+            FROM `{bq.project}.{bq.ops}.pipeline_runs`
+            WHERE dataset = @table
+              AND status = 'success'
+              AND source_uri LIKE 'gs://%'
+              {"AND run_id = @run_id" if run_id else ""}
+            ORDER BY finished_at DESC
+            LIMIT {1 if run_id else 2}
+        """
+        params = {"table": table}
+        if run_id:
+            params["run_id"] = run_id
+        rows = bq.query_rows(sql, params)
+        if not rows:
+            typer.echo(f"no successful run with a GCS artifact found for {table}", err=True)
+            raise typer.Exit(2)
+        # Without an explicit run_id, "previous" means the one before current.
+        chosen = rows[0] if run_id or len(rows) == 1 else rows[1]
+        source_uri = chosen["source_uri"]
+        typer.echo(f"restoring from run {chosen['run_id']} ({chosen['row_count']} rows)")
+
+    restored = bq.restore_from_uri(table=table, source_uri=source_uri)
+    typer.echo(f"{table} restored to {restored} rows from {source_uri}")
+    log.info("rollback_complete", table=table, source_uri=source_uri, rows=restored)
 
 
 def main() -> None:

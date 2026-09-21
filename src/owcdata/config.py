@@ -91,9 +91,8 @@ class Settings(BaseSettings):
     gcs_enrollment_state_bucket: str = ""
     bq_staging_dataset: str = "owc_staging"
     bq_marts_dataset: str = "owc_marts"
-    bq_reporting_dataset: str = "owc_reporting"
     bq_ops_dataset: str = "owc_ops"
-    # Bucket and all four datasets must share this. Mixed regions make load
+    # Bucket and all three datasets must share this. Mixed regions make load
     # jobs fail outright rather than run slowly.
     bq_location: str = "US"
 

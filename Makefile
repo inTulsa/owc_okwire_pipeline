@@ -148,11 +148,31 @@ which-image: ## Show the digest each job is currently running vs the newest buil
 	  printf '  %-18s: %s\n' "$$job" "$${img:-<not deployed>}"; \
 	done
 
+# Resolves :$(IMAGE_TAG) — the current git short SHA — and falls back to
+# :latest when that tag does not exist.
+#
+# The fallback matters because committing AFTER a build moves HEAD, so the
+# SHA tag no longer matches anything and this returned nothing at all, which
+# then broke `set-image`, `deploy`, and `which-image` with an unhelpful
+# "<none>". The warning goes to stderr so stdout stays clean for
+# `IMAGE=$(make -s image-digest ...)`.
 image-digest: ## Print just the digest-pinned image reference (scriptable)
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
-	@digest=$$(gcloud artifacts docker images describe \
-	    "$(IMAGE_REPO):$(IMAGE_TAG)" \
-	    --project $(PROJECT) --format='value(image_summary.digest)') && \
+	@digest=$$(gcloud artifacts docker images describe "$(IMAGE_REPO):$(IMAGE_TAG)" \
+	    --project $(PROJECT) --format='value(image_summary.digest)' 2>/dev/null); \
+	  if [ -z "$$digest" ]; then \
+	    digest=$$(gcloud artifacts docker images describe "$(IMAGE_REPO):latest" \
+	      --project $(PROJECT) --format='value(image_summary.digest)' 2>/dev/null); \
+	    if [ -n "$$digest" ]; then \
+	      echo "warning: no image tagged $(IMAGE_TAG) (the current git SHA); using :latest." >&2; \
+	      echo "         Run 'make deploy ENV=$(ENV)' to build and deploy at this commit." >&2; \
+	    fi; \
+	  fi; \
+	  if [ -z "$$digest" ]; then \
+	    echo "no image found at $(IMAGE_REPO):$(IMAGE_TAG) or :latest." >&2; \
+	    echo "Build one first:  make build ENV=$(ENV)" >&2; \
+	    exit 1; \
+	  fi; \
 	  echo "$(IMAGE_REPO)@$$digest"
 
 # -- terraform ---------------------------------------------------------------

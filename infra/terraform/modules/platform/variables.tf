@@ -21,7 +21,7 @@ variable "region" {
 variable "location" {
   type        = string
   description = <<-EOT
-    Region or multi-region for GCS and all four BigQuery datasets.
+    Region or multi-region for GCS and all three BigQuery datasets.
 
     Co-location is mandatory, not a preference: a load job from a bucket in
     one location into a dataset in another fails outright. This single

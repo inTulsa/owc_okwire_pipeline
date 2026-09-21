@@ -21,10 +21,9 @@ output "service_account_emails" {
 
 output "datasets" {
   value = {
-    staging   = google_bigquery_dataset.staging.dataset_id
-    marts     = google_bigquery_dataset.marts.dataset_id
-    reporting = google_bigquery_dataset.reporting.dataset_id
-    ops       = google_bigquery_dataset.ops.dataset_id
+    staging = google_bigquery_dataset.staging.dataset_id
+    marts   = google_bigquery_dataset.marts.dataset_id
+    ops     = google_bigquery_dataset.ops.dataset_id
   }
 }
 

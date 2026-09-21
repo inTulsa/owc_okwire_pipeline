@@ -10,8 +10,6 @@ is compared against.
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 
 from owcdata.config import QualityConfig
@@ -24,23 +22,14 @@ class FakeBQ:
 
     def __init__(self) -> None:
         self.project, self.staging, self.marts = "p", "owc_staging", "owc_marts"
-        self.ops, self.reporting = "owc_ops", "owc_reporting"
-        self.snapshots: list[str] = []
+        self.ops = "owc_ops"
         self.copies: list[str] = []
-        self.views: list[str] = []
 
     def ref(self, dataset: str, table: str) -> str:
         return f"{self.project}.{dataset}.{table}"
 
-    def snapshot(self, *, table: str, run_id: str, **_: Any) -> str:
-        self.snapshots.append(table)
-        return f"{self.project}.{self.ops}.{table}__{run_id}"
-
     def copy_to_marts(self, table: str) -> None:
         self.copies.append(table)
-
-    def ensure_authorized_view(self, table: str) -> None:
-        self.views.append(table)
 
 
 CFG = QualityConfig(
@@ -54,7 +43,6 @@ def land(bq: FakeBQ, *, rows: int, row_limited: bool, previous=None, max_year=No
     return _validate_and_publish(
         bq,
         table="dim_area",
-        run_id="r1",
         quality=CFG,
         previous_run=previous,
         allow_empty=row_limited,
@@ -68,7 +56,6 @@ def test_a_full_run_publishes():
     result = land(bq, rows=78, row_limited=False)
     assert result.published
     assert bq.copies == ["dim_area"]
-    assert bq.views == ["dim_area"]
 
 
 def test_a_row_limited_run_never_publishes():
@@ -77,8 +64,6 @@ def test_a_row_limited_run_never_publishes():
     result = land(bq, rows=10, row_limited=True)
     assert not result.published
     assert bq.copies == [], "a --limit run copied truncated rows into marts"
-    assert bq.snapshots == []
-    assert bq.views == []
 
 
 def test_row_limited_skips_the_known_row_count_check():
@@ -115,7 +100,7 @@ def test_failed_checks_leave_staging_alone_for_diffing():
     bq = FakeBQ()
     with pytest.raises(QualityCheckError):
         land(bq, rows=40, row_limited=False, previous={"row_count": 78})
-    assert bq.snapshots == [] and bq.copies == [] and bq.views == []
+    assert bq.copies == []
 
 
 def test_limited_runs_cannot_become_a_quality_baseline(tmp_path):
@@ -142,3 +127,44 @@ def test_limited_runs_cannot_become_a_quality_baseline(tmp_path):
     assert prev is not None
     assert prev["row_count"] == 78, "a --limit run became the baseline"
     assert prev["run_id"] == "r1"
+
+
+def test_publish_is_a_single_copy_job():
+    """Publish is one free, atomic copy and nothing else.
+
+    Two earlier designs each added a step that needed a permission
+    roles/bigquery.dataEditor lacks: a pass-through authorized view (needed
+    bigquery.datasets.update, ADR-009) and a pre-publish table snapshot
+    (needed bigquery.tables.deleteSnapshot, ADR-010). Both are gone, and
+    rollback now reloads the previous run's Parquet from GCS. If a future
+    change reintroduces either, this fails.
+    """
+    from owcdata.core import publish as publish_mod
+
+    bq = FakeBQ()
+    publish_mod.publish(bq, table="dim_area")
+
+    assert bq.copies == ["dim_area"]
+    # FakeBQ implements only copy_to_marts. Anything else publish might try —
+    # a snapshot, a view, a dataset ACL update — would raise AttributeError
+    # rather than pass silently.
+    for gone in ("snapshot", "ensure_authorized_view", "update_dataset"):
+        assert not hasattr(bq, gone)
+
+
+def test_bigquery_client_needs_no_custom_role_permissions():
+    """Everything the client does must fit roles/bigquery.dataEditor + jobUser.
+
+    The two methods named here each required a permission that predefined role
+    omits, and each forced a custom role. Rollback is a load job instead.
+    """
+    import inspect
+
+    from owcdata.core.sinks.bigquery import BigQueryClient
+
+    params = inspect.signature(BigQueryClient.__init__).parameters
+    assert "reporting_dataset" not in params
+    for gone in ("ensure_authorized_view", "snapshot", "restore_from_snapshot"):
+        assert not hasattr(BigQueryClient, gone), f"{gone} is back"
+    # The replacement.
+    assert hasattr(BigQueryClient, "restore_from_uri")

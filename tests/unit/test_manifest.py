@@ -23,8 +23,11 @@ def test_run_id_timestamp_prefix_sorts_chronologically():
 
 
 def test_run_id_is_safe_in_a_table_name():
-    """run_id is interpolated into a snapshot table name, which allows only
-    letters, digits and underscores."""
+    """run_id is interpolated into a GCS object path and read back from it.
+
+    Keeping it to letters, digits and underscores means a run_id can never
+    need escaping in a path, a table name, or a log filter.
+    """
     assert new_run_id().replace("_", "").isalnum()
 
 

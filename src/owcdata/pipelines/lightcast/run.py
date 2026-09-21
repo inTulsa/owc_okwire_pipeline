@@ -15,10 +15,10 @@ from dataclasses import dataclass
 from typing import Any
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 
 from owcdata.config import PipelinesConfig, Settings
 from owcdata.core.manifest import ManifestWriter, RunRecord
+from owcdata.core.parquet import write_parquet_stream
 from owcdata.core.publish import land_parquet
 from owcdata.core.sinks import Sink, build_sink
 from owcdata.errors import ExtractError, PipelineError
@@ -30,17 +30,6 @@ log = get_logger(__name__)
 
 PIPELINE = "lightcast"
 
-# Arrow batches are buffered to about this much before being written as one
-# Parquet row group. This is the number that keeps a multi-GB dataset inside a
-# 2 GiB task: peak memory tracks one row group, not one result set.
-#
-# Measured on this code (see tests/unit/test_parquet_stream.py): peak RSS is
-# flat in result size — a 1.6 GB and a 3.2 GB result set both peak the same —
-# and the level is set by this constant. 128 MiB peaks around 440 MB, 64 MiB
-# around 290 MB, and 32 MiB buys nothing further because the floor is pyarrow
-# and the interpreter. 64 MiB it is: ~7x headroom inside a 2 GiB task.
-ROW_GROUP_TARGET_BYTES = 64 * 1024 * 1024
-
 
 @dataclass
 class ExtractOutcome:
@@ -49,71 +38,6 @@ class ExtractOutcome:
     query_id: str
     uri: str
     schema: pa.Schema
-
-
-def _as_table(chunk: Any) -> pa.Table:
-    """Normalize one result chunk to a ``pa.Table``.
-
-    Snowflake's ``fetch_arrow_batches()`` is typed ``Iterator[Table]`` and its
-    docstring says "Fetch Arrow Tables in batches" — despite the name, each
-    item is a **Table**, not a RecordBatch. Accepting either is cheap and
-    means this does not break if that ever changes, or if a caller passes
-    batches.
-    """
-    if isinstance(chunk, pa.Table):
-        return chunk
-    return pa.Table.from_batches([chunk])
-
-
-def _write_parquet_stream(result: Any, fh: Any) -> tuple[int, pa.Schema]:
-    """Stream Arrow result chunks into ``fh`` as Parquet. Returns (rows, schema).
-
-    Chunks are grouped up to ``ROW_GROUP_TARGET_BYTES`` before being written,
-    so the file gets a handful of well-sized row groups instead of one tiny
-    row group per Snowflake result chunk — while still never holding more than
-    one row group in memory.
-    """
-    writer: pq.ParquetWriter | None = None
-    schema: pa.Schema | None = None
-    pending: list[pa.Table] = []
-    pending_bytes = 0
-    rows = 0
-
-    def flush() -> None:
-        nonlocal pending, pending_bytes
-        if pending and writer is not None:
-            # concat_tables rather than Table.from_batches: the chunks are
-            # already Tables.
-            writer.write_table(pending[0] if len(pending) == 1 else pa.concat_tables(pending))
-        pending = []
-        pending_bytes = 0
-
-    try:
-        for chunk in result.batches:
-            table = _as_table(chunk)
-            if writer is None:
-                schema = table.schema
-                writer = pq.ParquetWriter(fh, schema, compression="snappy")
-            pending.append(table)
-            pending_bytes += table.nbytes
-            rows += table.num_rows
-            if pending_bytes >= ROW_GROUP_TARGET_BYTES:
-                flush()
-        flush()
-
-        if writer is None:
-            # Zero rows: no batch to take a schema from, so fall back to the
-            # cursor description and write a schema-only Parquet file. The
-            # quality gate decides whether zero rows is acceptable.
-            schema = result.schema()
-            writer = pq.ParquetWriter(fh, schema, compression="snappy")
-            writer.write_table(pa.Table.from_batches([], schema=schema))
-    finally:
-        if writer is not None:
-            writer.close()
-
-    assert schema is not None
-    return rows, schema
 
 
 def extract(
@@ -127,7 +51,7 @@ def extract(
     result = arrow_batches(conn, query)
     try:
         with sink.open_write(rel_path) as fh:
-            rows, schema = _write_parquet_stream(result, fh)
+            rows, schema = write_parquet_stream(result.batches, fh, fallback_schema=result.schema())
             bytes_written = int(fh.tell()) if hasattr(fh, "tell") else 0
     finally:
         result.close()
@@ -211,7 +135,6 @@ def run(
                         table=ds.name,
                         source_uris=outcome.uri,
                         schema=_bq_schema(outcome.schema),
-                        run_id=settings.run_id,
                         quality=lc.quality,
                         previous_run=previous,
                         # A row-limited smoke run is a deliberate truncation:

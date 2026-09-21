@@ -295,3 +295,211 @@ def test_cache_short_circuits_on_second_run(serve_fixtures, enrollment_env, monk
     ]
     assert second.merged_path is not None
     assert pathlib.Path(second.merged_path).read_bytes() == first_csv
+
+
+# ---------------------------------------------------------------------------
+# Every failure records a manifest row
+# ---------------------------------------------------------------------------
+def test_a_publish_failure_still_records_a_manifest_row(
+    enrollment_env, settings, monkeypatch, tmp_path
+):
+    """Regression: a failure AFTER the scrape must not vanish from the manifest.
+
+    An earlier version wrapped only scrape.main() in try/except, so a
+    permission error during publish wrote no row at all. Cloud Run then
+    retried, the retry short-circuited on the now-warm cache and recorded
+    success_no_change, and the execution reported success — with the real
+    failure invisible to the freshness alert that reads this table.
+
+    Stubs the scrape so the test is about the error-handling structure and not
+    about parsing (which is covered above).
+    """
+    from owcdata.config import PipelinesConfig
+    from owcdata.core.manifest import ManifestWriter
+    from owcdata.pipelines.enrollment import run as enrollment_run
+
+    merged = tmp_path / "primary_enrollment_data.csv"
+    merged.write_text(
+        "Year,County,District,School,Race,Gender,Grade,Total\n2023-2024,TULSA,D,S,White,Male,1st Grade,5\n"
+    )
+
+    config = PipelinesConfig.load()
+    config.enrollment.page_url = "https://example.test/page.html"
+    config.enrollment.download_delay_seconds = 0.0
+
+    def fake_main():
+        return scrape.RunResult(
+            records=[{"title": "t", "cached": False}],
+            merged_path=str(merged),
+            merged_rows=1,
+            reshaped_files=1,
+            short_circuited=False,
+            skips=[],
+            warnings=[],
+        )
+
+    def boom(*_a, **_k):
+        raise RuntimeError("403 denied while publishing")
+
+    monkeypatch.setattr(enrollment_run, "_check_robots", lambda *_a, **_k: None)
+    monkeypatch.setattr(scrape, "main", fake_main)
+    monkeypatch.setattr(enrollment_run, "land_parquet", boom)
+
+    written: list[dict] = []
+
+    class RecordingManifest(ManifestWriter):
+        def __init__(self) -> None:
+            super().__init__(bq=None, local_path=None)
+
+        def write(self, record) -> None:  # type: ignore[override]
+            written.append(record.to_row())
+
+        def previous_successful(self, pipeline, dataset):  # type: ignore[override]
+            return None
+
+    with pytest.raises(RuntimeError, match="403 denied"):
+        enrollment_run.run(
+            settings,
+            config,
+            bq=object(),  # non-None so the publish path is taken
+            manifest=RecordingManifest(),
+            data_dir=enrollment_env,
+        )
+
+    assert written, "a publish failure wrote no manifest row at all"
+    assert written[-1]["status"] == "failed"
+    assert "403 denied" in written[-1]["error"]
+
+
+def test_a_failure_records_exactly_one_manifest_row(serve_fixtures, enrollment_env, settings):
+    """The skip path and the outer handler must not both write."""
+    from owcdata.config import PipelinesConfig
+    from owcdata.core.manifest import ManifestWriter
+    from owcdata.pipelines.enrollment import run as enrollment_run
+
+    url = serve_fixtures("page.html")
+    config = PipelinesConfig.load()
+    config.enrollment.page_url = url
+    config.enrollment.download_delay_seconds = 0.0
+
+    written: list[dict] = []
+
+    class RecordingManifest(ManifestWriter):
+        def __init__(self) -> None:
+            super().__init__(bq=None, local_path=None)
+
+        def write(self, record) -> None:  # type: ignore[override]
+            written.append(record.to_row())
+
+    with pytest.raises(WorkbookReshapeError):
+        enrollment_run.run(settings, config, manifest=RecordingManifest(), data_dir=enrollment_env)
+
+    failed = [r for r in written if r["status"] == "failed"]
+    assert len(failed) == 1, f"expected exactly one failed row, got {len(failed)}"
+
+
+def test_short_circuit_records_the_published_row_count_not_zero(
+    enrollment_env, settings, monkeypatch
+):
+    """A short-circuit means "nothing new to publish", not "the table is empty".
+
+    Recording 0 made owc_ops.dataset_freshness tell stakeholders the
+    enrollment table held no rows when it held 1.4M. The count comes from
+    table metadata, so it costs nothing.
+    """
+    from owcdata.config import PipelinesConfig
+    from owcdata.core.manifest import ManifestWriter
+    from owcdata.pipelines.enrollment import run as enrollment_run
+
+    config = PipelinesConfig.load()
+    config.enrollment.page_url = "https://example.test/page.html"
+
+    monkeypatch.setattr(enrollment_run, "_check_robots", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        scrape,
+        "main",
+        lambda: scrape.RunResult(
+            records=[{"cached": True}],
+            merged_path=None,
+            short_circuited=True,
+            skips=[],
+            warnings=[],
+        ),
+    )
+
+    class FakeBQ:
+        marts = "owc_marts"
+
+        def table_row_count(self, dataset, table):
+            return 1_435_546
+
+    written: list[dict] = []
+
+    class RecordingManifest(ManifestWriter):
+        def __init__(self) -> None:
+            super().__init__(bq=None, local_path=None)
+
+        def write(self, record) -> None:  # type: ignore[override]
+            written.append(record.to_row())
+
+    outcome = enrollment_run.run(
+        settings,
+        config,
+        bq=FakeBQ(),
+        manifest=RecordingManifest(),
+        data_dir=enrollment_env,
+    )
+
+    assert outcome.short_circuited
+    assert written[-1]["status"] == "success_no_change"
+    assert written[-1]["row_count"] == 1_435_546, "short-circuit recorded the wrong count"
+
+
+def test_short_circuit_leaves_row_count_unset_when_marts_has_no_table_yet(
+    enrollment_env, settings, monkeypatch
+):
+    """First ever run: better to record nothing than to guess."""
+    from owcdata.config import PipelinesConfig
+    from owcdata.core.manifest import ManifestWriter
+    from owcdata.pipelines.enrollment import run as enrollment_run
+
+    config = PipelinesConfig.load()
+    config.enrollment.page_url = "https://example.test/page.html"
+
+    monkeypatch.setattr(enrollment_run, "_check_robots", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        scrape,
+        "main",
+        lambda: scrape.RunResult(
+            records=[{"cached": True}],
+            merged_path=None,
+            short_circuited=True,
+            skips=[],
+            warnings=[],
+        ),
+    )
+
+    class MissingTableBQ:
+        marts = "owc_marts"
+
+        def table_row_count(self, dataset, table):
+            raise RuntimeError("404 Not found: Table owc_marts.enrollment_primary")
+
+    written: list[dict] = []
+
+    class RecordingManifest(ManifestWriter):
+        def __init__(self) -> None:
+            super().__init__(bq=None, local_path=None)
+
+        def write(self, record) -> None:  # type: ignore[override]
+            written.append(record.to_row())
+
+    enrollment_run.run(
+        settings,
+        config,
+        bq=MissingTableBQ(),
+        manifest=RecordingManifest(),
+        data_dir=enrollment_env,
+    )
+    assert written[-1]["status"] == "success_no_change"
+    assert written[-1]["row_count"] is None

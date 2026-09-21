@@ -25,7 +25,8 @@ from typing import Any
 
 from owcdata.config import PipelinesConfig, Settings
 from owcdata.core.manifest import ManifestWriter, RunRecord
-from owcdata.core.publish import land_dataframe
+from owcdata.core.parquet import write_parquet_stream
+from owcdata.core.publish import land_parquet
 from owcdata.core.sinks import Sink, build_sink
 from owcdata.errors import ExtractError, WorkbookReshapeError
 from owcdata.logging import get_logger
@@ -135,18 +136,62 @@ def run(
         env=settings.env,
     )
 
-    try:
-        result = scrape.main()
-    except Exception as exc:
-        # NoSourceFilesFound lands here and carries event="no_source_files_found",
-        # which is alert #6 — the Oklahoma-redesigned-their-page signal.
-        event = getattr(exc, "event", "extract_failed")
+    # Every failure path below must leave a row in owc_ops.pipeline_runs.
+    #
+    # An earlier version wrapped only scrape.main(), so a failure in the
+    # publish stage wrote NO manifest row. That was not academic: a real
+    # permission error during publish left marts written and the run failed,
+    # Cloud Run retried, the retry short-circuited on the now-warm cache and
+    # recorded success_no_change — and the execution reported success with no
+    # trace of the failure anywhere the freshness alert could see it.
+    # Recorded once, here, for anything that goes wrong.
+    recorded = False
+
+    def fail(exc: BaseException) -> None:
+        nonlocal recorded
+        if recorded:
+            return
+        recorded = True
+        event = getattr(exc, "event", "pipeline_failed")
         log.error(event, error=str(exc), page_url=enroll.page_url, exc_info=True)
         manifest.write(record.finish("failed", error=str(exc)))
+
+    try:
+        return _run_inner(
+            settings,
+            config,
+            enroll,
+            sink,
+            hook_state,
+            manifest,
+            record,
+            bq=bq,
+            mark_failed=fail,
+        )
+    except Exception as exc:
+        # NoSourceFilesFound lands here carrying event="no_source_files_found",
+        # which is alert #6 — the Oklahoma-redesigned-their-page signal.
+        fail(exc)
         raise
     finally:
         scrape.ON_PAGE_HTML = None
         scrape.ON_FILE_DOWNLOADED = None
+
+
+def _run_inner(
+    settings: Settings,
+    config: PipelinesConfig,
+    enroll: Any,
+    sink: Sink,
+    hook_state: dict[str, Any],
+    manifest: ManifestWriter,
+    record: RunRecord,
+    *,
+    bq: Any | None,
+    mark_failed: Any,
+) -> EnrollmentOutcome:
+    """The run body. Any exception is recorded by the caller's ``fail``."""
+    result = scrape.main()
 
     for warning in result.warnings:
         log.warning(warning["kind"], detail=warning["detail"])
@@ -157,8 +202,9 @@ def run(
         for skip in result.skips:
             log.error(skip["kind"], detail=skip["detail"])
         message = "; ".join(f"{s['kind']}: {s['detail']}" for s in result.skips)
-        manifest.write(record.finish("failed", error=message))
-        raise WorkbookReshapeError(f"{len(result.skips)} file(s) skipped — {message}")
+        error = WorkbookReshapeError(f"{len(result.skips)} file(s) skipped — {message}")
+        mark_failed(error)
+        raise error
 
     record.source_uri = hook_state["snapshot_uri"] or ""
 
@@ -170,7 +216,23 @@ def run(
             reason="no new source files",
             archived=hook_state["archived"],
         )
-        record.row_count = 0
+        # Record what is actually published, not 0.
+        #
+        # A short-circuit means "nothing new to publish", not "the table is
+        # empty" — and owc_ops.dataset_freshness surfaces this number to
+        # non-technical stakeholders as the answer to "how much data is
+        # there?". Writing 0 told them the enrollment table was empty when it
+        # held 1.4M rows.
+        #
+        # get_table().num_rows is metadata, so this is free and instant — no
+        # scan. On the very first run the marts table may not exist yet, in
+        # which case leave it unset rather than guess.
+        record.row_count = None
+        if bq is not None:
+            try:
+                record.row_count = bq.table_row_count(bq.marts, enroll.table)
+            except Exception as exc:
+                log.warning("marts_row_count_unavailable", table=enroll.table, error=str(exc))
         manifest.write(record.finish("success_no_change"))
         return EnrollmentOutcome(
             rows=0,
@@ -183,20 +245,47 @@ def run(
     record.row_count = result.merged_rows
 
     if bq is not None and result.merged_path:
+        # Write the merged output as Parquet under its own run_id prefix, the
+        # same shape lightcast produces. That is what gives enrollment the
+        # same rollback artifact — reload this object to undo a bad publish —
+        # and it means both pipelines share one publish path. See ADR-010.
+        #
+        # Read in chunks and stream: the merged CSV is ~1.4M rows, and this
+        # keeps peak memory at one Parquet row group rather than the whole
+        # frame.
         import pandas as pd
+        import pyarrow as pa
 
-        df = pd.read_csv(result.merged_path)
+        rel_path = f"{enroll.table}/run_id={settings.run_id}/{enroll.table}.parquet"
+        header = pd.read_csv(result.merged_path, nrows=0)
+        fallback = pa.Schema.from_pandas(header, preserve_index=False)
+
+        with sink.open_write(rel_path) as fh:
+            rows, arrow_schema = write_parquet_stream(
+                pd.read_csv(result.merged_path, chunksize=200_000),
+                fh,
+                fallback_schema=fallback,
+            )
+        parquet_uri = sink.uri(rel_path)
+        log.info("merged_parquet_written", uri=parquet_uri, rows=rows)
+
+        from owcdata.core.sinks.bigquery import arrow_to_bq_schema
+
         previous = manifest.previous_successful(PIPELINE, enroll.table)
-        landed = land_dataframe(
+        landed = land_parquet(
             bq,
             table=enroll.table,
-            df=df,
-            run_id=settings.run_id,
+            source_uris=parquet_uri,
+            schema=arrow_to_bq_schema(arrow_schema),
             quality=enroll.quality,
             previous_run=previous,
         )
         record.row_count = landed.row_count
         record.max_year = landed.max_year
+        record.bytes = (rows and None) or None
+        # source_uri points at the rollback artifact, not the page snapshot:
+        # that is what a restore actually needs.
+        record.source_uri = parquet_uri
 
     manifest.write(record.finish("success"))
     log.info(

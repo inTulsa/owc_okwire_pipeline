@@ -22,7 +22,7 @@ Requirements on the file:
   `--limit` wraps the query in a subquery.
 - **Name it what you want the BigQuery table called.** `my_query.sql` →
   `owc_staging.my_query` → `owc_marts.my_query` → a view at
-  `owc_reporting.my_query`.
+  `owc_marts.my_query`, which is what PowerBI reads.
 
 Optionally add quality checks in `pipelines.yml`:
 

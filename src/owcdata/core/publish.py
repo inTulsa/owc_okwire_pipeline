@@ -3,13 +3,20 @@
     staging load  (atomic, free)
       → measure   (one scan of staging)
       → validate  (blocks publish; staging survives for diffing)
-      → snapshot  (near-free; makes rollback one command)
       → copy      (atomic, free, preserves schema and clustering)
-      → authorize (the view PowerBI reads, so PowerBI needs no marts grant)
 
-``land_parquet`` is the lightcast entry point and ``land_dataframe`` the
-enrollment one. Everything after the load is identical, which is the reason
-this lives in ``core/`` rather than in either pipeline.
+The pipeline stops at ``owc_marts``; PowerBI reads it directly.
+
+**No BigQuery snapshot.** Rollback restores the previous run's Parquet from
+GCS, which is already retained per ``run_id`` and whose exact path is on the
+run manifest. That needs only ``dataEditor`` + ``jobUser`` — a snapshot with
+an expiration additionally requires ``bigquery.tables.deleteSnapshot``, which
+``roles/bigquery.dataEditor`` omits, and which therefore forced a custom role.
+See ADR-010.
+
+``land_parquet`` is the entry point for **both** pipelines: enrollment writes
+its merged output as Parquet to the same per-run GCS path shape lightcast
+uses, so they share one publish path and one rollback story (ADR-010).
 """
 
 from __future__ import annotations
@@ -29,23 +36,18 @@ class LandResult:
     table: str
     row_count: int
     max_year: int | None = None
-    snapshot: str | None = None
     published: bool = False
 
 
-def publish(bq: Any, *, table: str, run_id: str) -> str | None:
-    """Snapshot the current marts table, then replace it from staging."""
-    snapshot = bq.snapshot(table=table, run_id=run_id)
+def publish(bq: Any, *, table: str) -> None:
+    """Replace ``marts.table`` from staging. One free, atomic copy job."""
     bq.copy_to_marts(table)
-    bq.ensure_authorized_view(table)
-    return snapshot
 
 
 def _validate_and_publish(
     bq: Any,
     *,
     table: str,
-    run_id: str,
     quality: QualityConfig,
     previous_run: dict[str, Any] | None,
     allow_empty: bool,
@@ -98,16 +100,14 @@ def _validate_and_publish(
             table=table,
             row_count=measurement["row_count"],
             max_year=measurement.get("max_year"),
-            snapshot=None,
             published=False,
         )
 
-    snapshot = publish(bq, table=table, run_id=run_id)
+    publish(bq, table=table)
     return LandResult(
         table=table,
         row_count=measurement["row_count"],
         max_year=measurement.get("max_year"),
-        snapshot=snapshot,
         published=True,
     )
 
@@ -118,7 +118,6 @@ def land_parquet(
     table: str,
     source_uris: str | list[str],
     schema: list[Any] | None,
-    run_id: str,
     quality: QualityConfig,
     previous_run: dict[str, Any] | None = None,
     allow_empty: bool = False,
@@ -133,34 +132,9 @@ def land_parquet(
     return _validate_and_publish(
         bq,
         table=table,
-        run_id=run_id,
         quality=quality,
         previous_run=previous_run,
         allow_empty=allow_empty,
         measurement=measurement,
         row_limited=row_limited,
-    )
-
-
-def land_dataframe(
-    bq: Any,
-    *,
-    table: str,
-    df: Any,
-    run_id: str,
-    quality: QualityConfig,
-    previous_run: dict[str, Any] | None = None,
-    allow_empty: bool = False,
-) -> LandResult:
-    """Load a DataFrame, validate, publish. The enrollment path."""
-    bq.load_dataframe(table=table, df=df)
-    measurement = measure_staging(bq, table, quality.not_null.get(table, []))
-    return _validate_and_publish(
-        bq,
-        table=table,
-        run_id=run_id,
-        quality=quality,
-        previous_run=previous_run,
-        allow_empty=allow_empty,
-        measurement=measurement,
     )

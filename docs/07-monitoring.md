@@ -13,6 +13,7 @@ quietly.
 | 4 | Quality check failed | Log metric on `jsonPayload.event="quality_check_failed"` | both | per-pipeline `event_alerts` |
 | 5 | Row count / max(YEAR) drift | Same metric, narrowed to `jsonPayload.check` | lightcast | per-pipeline `event_alerts` |
 | 6 | **Scrape found nothing** | Log metric on `jsonPayload.event="no_source_files_found"` | enrollment | per-pipeline `event_alerts` |
+| 6b | **Page structure drifted** | Log metric on `jsonPayload.event="grid_wrapper_not_found"` — fires while the run still *succeeds* | enrollment | per-pipeline `event_alerts` |
 | 7 | Workbook reshape skipped | Log metric on `jsonPayload.event="workbook_reshape_skipped"` | enrollment | per-pipeline `event_alerts` |
 | 8 | Memory pressure | `run.googleapis.com/container/memory/utilizations` > 85% | both | `modules/pipeline/alerts.tf` |
 | 9 | Cost | BigQuery scanned bytes + optional billing budget | platform | `modules/platform/monitoring.tf` |
@@ -110,6 +111,24 @@ Its runbook entry starts from the page snapshot rather than from the code,
 because every run writes one to
 `gs://<raw>/enrollment/page_snapshots/<run_id>.html` before parsing. A break
 becomes a diff.
+
+### The snapshot is a diagnostic, not a detector
+
+Nothing compares consecutive snapshots — it is the artifact you diff *after*
+something fires, not the thing that fires. Detection comes from the scraper
+failing to find what it expects:
+
+| Page change | Caught by |
+|---|---|
+| Discovery finds nothing | alert 6, run fails |
+| A workbook's sheet layout no longer matches | alert 7b, run fails |
+| A link 404s, or a value column disappears | run fails → alert 1 |
+| Structure changed, whole-page fallback coped | **alert 6b, run succeeds** |
+
+**Alert 6b is the only one that fires on a successful run.** That is the
+point: it is advance notice that the selectors in `scrape.py` are drifting
+out of date while everything still works, so the fix happens on your schedule
+rather than on Oklahoma's. Treat it as a ticket, not a page.
 
 ## Metric type strings
 
@@ -217,8 +236,14 @@ has ever seen fire is an alert nobody knows works.
 ## The "is the data current?" table
 
 `owc_ops.dataset_freshness` is a view over `pipeline_runs`: one row per
-dataset, when it last succeeded, how many hours ago, its row count, its
-`max_year`, and the git SHA that produced it.
+dataset, when it last succeeded, **how many days ago**, its row count, its
+`max_year`, and the git SHA that produced it. Days rather than hours because
+these pipelines run monthly, quarterly and yearly — `0` means it refreshed
+today.
+
+The row count shown is what is actually published, including after a run that
+short-circuited because there was nothing new. A short-circuit means "nothing
+to republish", not "the table is empty".
 
 It is the first thing to check for any alert, and it is what non-technical
 stakeholders should be pointed at instead of asking someone to check Cloud

@@ -9,8 +9,8 @@ Two production data pipelines, one schedule, one warehouse, one runbook.
 | State | Stateless; re-queries every run | Stateful; caches downloads, short-circuits when nothing is new |
 | Cadence | Monthly / quarterly / yearly by dataset | Checked monthly; data lands ~annually by fiscal year |
 
-Both land in BigQuery (`owc_marts`), and PowerBI reads authorized views in
-`owc_reporting`. Schedules live in [`pipelines.yml`](pipelines.yml).
+Both land in BigQuery (`owc_marts`), which PowerBI reads directly. Schedules
+live in [`pipelines.yml`](pipelines.yml).
 
 ## Quick start
 

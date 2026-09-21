@@ -23,6 +23,12 @@ You do not need to ask anyone. There is a table that answers it:
 owc_ops.dataset_freshness
 ```
 
+And for "what ran recently, and did anything fail?", newest first:
+
+```
+owc_ops.pipeline_runs_recent
+```
+
 One row per table, showing when it last updated successfully, how many hours
 ago that was, and how many rows it has. If a number on a dashboard looks
 wrong, this is the first place to look — it will tell you whether the table is

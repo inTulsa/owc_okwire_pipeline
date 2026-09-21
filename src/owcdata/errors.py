@@ -77,7 +77,7 @@ class QualityCheckError(PipelineError):
 
 
 class PublishError(PipelineError):
-    """Snapshot, table copy, or authorized-view wiring failed."""
+    """A snapshot or table-copy job failed."""
 
     event = "publish_failed"
     exit_code = 8

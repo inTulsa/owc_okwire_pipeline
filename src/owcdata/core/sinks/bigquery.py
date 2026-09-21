@@ -1,4 +1,4 @@
-"""BigQuery: batch loads, snapshots, table copies, authorized views.
+"""BigQuery: batch loads, snapshots, and table copies.
 
 Three deliberate choices, each overturning a more obvious alternative:
 
@@ -16,6 +16,17 @@ it.
 **Schemas are passed explicitly, derived from the Arrow schema at runtime.**
 Autodetect on a multi-file Parquet load infers from the alphabetically last
 file, which is a real hazard the moment a dataset spans more than one object.
+
+**No snapshots, and the pipeline stops at ``owc_marts``.** Rollback reloads
+a previous run's Parquet from GCS — see ``restore_from_uri`` and ADR-010.
+
+**On the marts boundary.** An earlier design published
+pass-through authorized views into a separate ``owc_reporting`` dataset so
+PowerBI would hold no grant on marts. Since every table got a ``SELECT *``
+view, the effective read surface was identical and the isolation was nominal —
+while the cost was real: the pipeline needed ``bigquery.datasets.update`` on
+marts, and publish gained a third step that could fail *after* the data was
+already live. PowerBI now reads ``owc_marts`` directly. See ADR-006.
 """
 
 from __future__ import annotations
@@ -85,7 +96,6 @@ class BigQueryClient:
         location: str = "US",
         staging_dataset: str = "owc_staging",
         marts_dataset: str = "owc_marts",
-        reporting_dataset: str = "owc_reporting",
         ops_dataset: str = "owc_ops",
         client: Any | None = None,
     ) -> None:
@@ -95,7 +105,6 @@ class BigQueryClient:
         self.location = location
         self.staging = staging_dataset
         self.marts = marts_dataset
-        self.reporting = reporting_dataset
         self.ops = ops_dataset
         self._bq = bigquery
         self.client = client or bigquery.Client(project=project, location=location)
@@ -143,26 +152,6 @@ class BigQueryClient:
         log.info("bq_load_finished", table=target, rows=rows, bytes=job.output_bytes or 0)
         return rows
 
-    def load_dataframe(self, *, table: str, df: Any, schema: list[Any] | None = None) -> int:
-        """Load a pandas DataFrame into ``staging.table`` (the enrollment path).
-
-        The enrollment output is a single small CSV, so there is nothing to
-        gain from staging it through GCS first.
-        """
-        target = self.ref(self.staging, table)
-        job_config = self._bq.LoadJobConfig(
-            write_disposition=self._bq.WriteDisposition.WRITE_TRUNCATE,
-            schema=schema or pandas_to_bq_schema(df),
-        )
-        log.info("bq_load_started", table=target, rows=len(df))
-        job = self.client.load_table_from_dataframe(
-            df, target, job_config=job_config, location=self.location
-        )
-        self._wait(job, f"load into {target}", LoadError)
-        rows = int(self.client.get_table(target).num_rows)
-        log.info("bq_load_finished", table=target, rows=rows)
-        return rows
-
     # -- query ------------------------------------------------------------
     def query_rows(self, sql: str, params: dict[str, Any] | None = None) -> list[dict]:
         job_config = None
@@ -192,35 +181,6 @@ class BigQueryClient:
         return int(self.client.get_table(self.ref(dataset, table)).num_rows)
 
     # -- publish ----------------------------------------------------------
-    def snapshot(self, *, table: str, run_id: str, expiration_days: int = 30) -> str | None:
-        """Snapshot ``marts.table`` before it is replaced.
-
-        Near-free: a snapshot bills only for bytes that later diverge from the
-        base table. Makes a rollback one copy job instead of a re-run.
-        """
-        if not self.table_exists(self.marts, table):
-            log.info("bq_snapshot_skipped", table=table, reason="marts table does not exist yet")
-            return None
-
-        import datetime as _dt
-
-        name = f"{table}__{run_id}"
-        target = self.ref(self.ops, name)
-        job_config = self._bq.CopyJobConfig(
-            operation_type=self._bq.OperationType.SNAPSHOT,
-            write_disposition=self._bq.WriteDisposition.WRITE_EMPTY,
-        )
-        # Serialized as RFC 3339 on the wire, so pass a string.
-        job_config.destination_expiration_time = (
-            _dt.datetime.now(_dt.UTC) + _dt.timedelta(days=expiration_days)
-        ).isoformat()
-        job = self.client.copy_table(
-            self.ref(self.marts, table), target, job_config=job_config, location=self.location
-        )
-        self._wait(job, f"snapshot {table}", PublishError)
-        log.info("bq_snapshot_created", snapshot=target)
-        return target
-
     def copy_to_marts(self, table: str) -> None:
         """Replace ``marts.table`` with ``staging.table`` atomically and free."""
         source, target = self.ref(self.staging, table), self.ref(self.marts, table)
@@ -231,63 +191,31 @@ class BigQueryClient:
         self._wait(job, f"copy {source} -> {target}", PublishError)
         log.info("bq_published", table=target)
 
-    def restore_from_snapshot(self, *, table: str, snapshot: str) -> None:
-        """Roll ``marts.table`` back to a snapshot taken by ``snapshot()``."""
-        job_config = self._bq.CopyJobConfig(
-            write_disposition=self._bq.WriteDisposition.WRITE_TRUNCATE
-        )
-        job = self.client.copy_table(
-            snapshot, self.ref(self.marts, table), job_config=job_config, location=self.location
-        )
-        self._wait(job, f"restore {table} from {snapshot}", PublishError)
-        log.info("bq_restored", table=table, snapshot=snapshot)
+    def restore_from_uri(
+        self, *, table: str, source_uri: str, schema: list[Any] | None = None
+    ) -> int:
+        """Roll ``marts.table`` back by reloading a previous run's Parquet.
 
-    def ensure_authorized_view(self, table: str) -> None:
-        """A pass-through view in ``reporting`` authorized to read ``marts``.
-
-        This is the step most often forgotten, and the entire reason for the
-        three-dataset split: an authorized view reads ``owc_marts`` on its own
-        authority, so the PowerBI service account needs — and gets — no grant
-        on ``owc_marts`` at all.
+        The per-run Parquet in GCS is the rollback artifact: it is retained
+        under its own ``run_id`` prefix, its exact path is on the run
+        manifest, and reloading it needs only dataEditor + jobUser. See
+        ADR-010 for why this replaced BigQuery table snapshots.
         """
-        view_id = self.ref(self.reporting, table)
-        view = self._bq.Table(view_id)
-        view.view_query = f"SELECT * FROM `{self.ref(self.marts, table)}`"
-
-        from google.api_core import exceptions
-
-        try:
-            self.client.create_table(view)
-            log.info("bq_view_created", view=view_id)
-        except exceptions.Conflict:
-            self.client.update_table(view, ["view_query"])
-            log.info("bq_view_updated", view=view_id)
-
-        # Authorize it on the marts dataset. Read-modify-write of the access
-        # list, so an unrelated grant added by hand is not clobbered.
-        marts = self.client.get_dataset(f"{self.project}.{self.marts}")
-        entries = list(marts.access_entries)
-        already = any(
-            getattr(e.entity_id, "get", lambda _k: None)("tableId") == table
-            for e in entries
-            if e.entity_type == "view" and isinstance(e.entity_id, dict)
+        target = self.ref(self.marts, table)
+        job_config = self._bq.LoadJobConfig(
+            source_format=self._bq.SourceFormat.PARQUET,
+            write_disposition=self._bq.WriteDisposition.WRITE_TRUNCATE,
         )
-        if already:
-            return
-        entries.append(
-            self._bq.AccessEntry(
-                role=None,
-                entity_type="view",
-                entity_id={
-                    "projectId": self.project,
-                    "datasetId": self.reporting,
-                    "tableId": table,
-                },
-            )
+        if schema:
+            job_config.schema = schema
+        log.info("bq_restore_started", table=target, source_uri=source_uri)
+        job = self.client.load_table_from_uri(
+            [source_uri], target, job_config=job_config, location=self.location
         )
-        marts.access_entries = entries
-        self.client.update_dataset(marts, ["access_entries"])
-        log.info("bq_view_authorized", view=view_id, dataset=self.marts)
+        self._wait(job, f"restore {target} from {source_uri}", PublishError)
+        rows = int(self.client.get_table(target).num_rows)
+        log.info("bq_restored", table=target, rows=rows, source_uri=source_uri)
+        return rows
 
 
 def _query_param(name: str, value: Any) -> Any:

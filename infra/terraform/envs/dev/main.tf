@@ -56,16 +56,15 @@ locals {
   }
 
   common_env = {
-    OWC_ENV                  = var.env_name
-    OWC_TARGET               = "gcs"
-    OWC_GCP_PROJECT          = var.project_id
-    OWC_GCS_RAW_BUCKET       = module.platform.raw_bucket
-    OWC_BQ_STAGING_DATASET   = module.platform.datasets.staging
-    OWC_BQ_MARTS_DATASET     = module.platform.datasets.marts
-    OWC_BQ_REPORTING_DATASET = module.platform.datasets.reporting
-    OWC_BQ_OPS_DATASET       = module.platform.datasets.ops
-    OWC_BQ_LOCATION          = var.location
-    OWC_LOG_LEVEL            = "INFO"
+    OWC_ENV                = var.env_name
+    OWC_TARGET             = "gcs"
+    OWC_GCP_PROJECT        = var.project_id
+    OWC_GCS_RAW_BUCKET     = module.platform.raw_bucket
+    OWC_BQ_STAGING_DATASET = module.platform.datasets.staging
+    OWC_BQ_MARTS_DATASET   = module.platform.datasets.marts
+    OWC_BQ_OPS_DATASET     = module.platform.datasets.ops
+    OWC_BQ_LOCATION        = var.location
+    OWC_LOG_LEVEL          = "INFO"
   }
 }
 
@@ -280,6 +279,27 @@ module "enrollment" {
         The raw workbook is archived at
         `gs://<raw-bucket>/enrollment/source_files/` — open it and compare its
         sheet and header layout against the conventions in `scrape.py`.
+      EOT
+    },
+    {
+      key         = "alert-6b-page-structure-drifted"
+      event       = "grid_wrapper_not_found"
+      title       = "ALERT 6b: enrollment page structure changed (fallback still worked)"
+      description = <<-EOT
+        The scraper could not find Oklahoma's `aem-Grid` wrapper and fell back
+        to searching the whole page. **This run still succeeded** — the links
+        were found anyway — so nothing is broken yet.
+
+        This is the early warning before [alert 6](#alert-6-no-files). The
+        page has been restructured, the selectors in `scrape.py` are drifting
+        out of date, and the next change is likely to break discovery
+        outright. Fix it on your schedule rather than Oklahoma's.
+
+        Diff this run's page snapshot against the previous one:
+        `gs://<raw-bucket>/enrollment/page_snapshots/<run_id>.html`. Then save
+        the new HTML over `tests/fixtures/enrollment/page.html` and run
+        `make test` — the failing assertions tell you exactly which selector
+        moved.
       EOT
     },
     {

@@ -113,7 +113,7 @@ service accounts, confirm the license permits these derived tables in a
 PowerBI report with the intended audience.
 
 **Current state:** access is limited to the pipeline service accounts plus
-`okw-powerbi-{env}` on `owc_reporting` only. Nothing is public; both buckets
+`okw-powerbi-{env}` read-only on `owc_marts` only. Nothing is public; both buckets
 have `public_access_prevention = "enforced"`.
 
 ---

@@ -36,7 +36,7 @@ resource "google_service_account" "powerbi" {
   account_id   = "okw-powerbi-${var.env}"
   project      = var.project_id
   display_name = "OWC PowerBI reader (${var.env})"
-  description  = "Reads owc_reporting ONLY. See docs/01-architecture.md ADR-006 for the JSON-key exception."
+  description  = "Read-only on owc_marts. See docs/01-architecture.md ADR-006 for the JSON-key exception."
   depends_on   = [google_project_service.enabled]
 }
 
@@ -126,6 +126,18 @@ locals {
   }
 }
 
+# dataEditor + jobUser is the WHOLE permission set either pipeline needs.
+#
+# Two earlier designs each added a step requiring a permission this predefined
+# role omits, and each forced a custom role:
+#
+#   * a pass-through authorized view      needed bigquery.datasets.update
+#   * a pre-publish table snapshot        needed bigquery.tables.deleteSnapshot
+#
+# Both are gone (ADR-009, ADR-010). Rollback reloads the previous run's
+# Parquet from GCS, which is an ordinary load job. There are no custom roles
+# in this project, and a change that needs one should be treated as a prompt
+# to find the design that does not.
 resource "google_bigquery_dataset_iam_member" "pipeline_data_editor" {
   for_each = local.dataset_grants
 
@@ -133,17 +145,6 @@ resource "google_bigquery_dataset_iam_member" "pipeline_data_editor" {
   dataset_id = each.value.dataset
   role       = "roles/bigquery.dataEditor"
   member     = "serviceAccount:${each.value.email}"
-}
-
-# The pipeline creates the authorized views in reporting at publish time, so
-# it needs to be able to create a view there.
-resource "google_bigquery_dataset_iam_member" "pipeline_reporting_editor" {
-  for_each = local.pipeline_sa_emails
-
-  project    = var.project_id
-  dataset_id = google_bigquery_dataset.reporting.dataset_id
-  role       = "roles/bigquery.dataEditor"
-  member     = "serviceAccount:${each.value}"
 }
 
 resource "google_project_iam_member" "pipeline_job_user" {
@@ -155,14 +156,18 @@ resource "google_project_iam_member" "pipeline_job_user" {
 }
 
 # ---------------------------------------------------------------------------
-# PowerBI: dataViewer on owc_reporting ONLY, and jobUser so it can run a
-# query. Deliberately NO grant on owc_marts — the authorized views read marts
-# on their own authority. If this ever grows a marts grant, the three-dataset
-# split has stopped doing its job.
+# PowerBI: read-only on owc_marts, plus jobUser so it can run a query.
+#
+# dataViewer, never dataEditor: PowerBI must not be able to write, and this is
+# the identity behind a service-account JSON key (ADR-006), so its blast
+# radius if that key leaks is exactly "can read the published tables".
+#
+# It gets nothing on owc_staging (unvalidated data) or owc_ops (run manifest
+# which is the run manifest).
 # ---------------------------------------------------------------------------
-resource "google_bigquery_dataset_iam_member" "powerbi_reporting" {
+resource "google_bigquery_dataset_iam_member" "powerbi_marts" {
   project    = var.project_id
-  dataset_id = google_bigquery_dataset.reporting.dataset_id
+  dataset_id = google_bigquery_dataset.marts.dataset_id
   role       = "roles/bigquery.dataViewer"
   member     = "serviceAccount:${google_service_account.powerbi.email}"
 }

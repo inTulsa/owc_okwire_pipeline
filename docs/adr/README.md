@@ -15,5 +15,7 @@ tidiness.
 | 006 | One tightly-scoped JSON key for PowerBI |
 | 007 | One container image for both pipelines |
 | 008 | The enrollment script is a generated derivation |
+| 009 | No reporting layer — the pipeline stops at `owc_marts` (supersedes the three-dataset split) |
+| 010 | Rollback from the GCS Parquet, not a BigQuery snapshot (supersedes ADR-003's snapshot step); no custom IAM roles |
 
 Add a ninth by appending to `01-architecture.md` and adding a row here.

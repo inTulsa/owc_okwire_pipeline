@@ -28,14 +28,25 @@ Every failure exits non-zero, and the code names the cause. From
 
 ## First moves for any alert
 
+Open **`owc_ops.pipeline_runs_recent`** — a view over `pipeline_runs` ordered
+newest-first, so it needs no `ORDER BY`:
+
 ```bash
-# What ran, what it did, and whether it failed
+bq head -n 20 --project_id=$PROJECT owc_ops.pipeline_runs_recent
+```
+
+(A BigQuery table has no inherent row order; the console's preview shows
+storage order, which is why the view exists.)
+
+Or query it directly:
+
+```bash
 bq query --use_legacy_sql=false --project_id=$PROJECT \
-'SELECT run_id, pipeline, dataset, status, row_count, max_year,
-        finished_at, LEFT(error, 200) AS error
- FROM `owc_ops.pipeline_runs`
+'SELECT started_at, pipeline, dataset, status, row_count, duration_seconds,
+        LEFT(error, 200) AS error
+ FROM `owc_ops.pipeline_runs_recent`
  WHERE started_at > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
- ORDER BY started_at DESC LIMIT 40'
+ LIMIT 40'
 ```
 
 ```bash
@@ -101,7 +112,7 @@ regardless of what the job then does.
 ```bash
 # What is overdue
 bq query --use_legacy_sql=false --project_id=$PROJECT \
-'SELECT * FROM `owc_ops.dataset_freshness` ORDER BY hours_since_success DESC LIMIT 20'
+'SELECT * FROM `owc_ops.dataset_freshness` ORDER BY days_since_success DESC LIMIT 20'
 
 # Is the scheduler even enabled?
 gcloud scheduler jobs list --location=$REGION --project=$PROJECT
@@ -299,6 +310,32 @@ and it is your advance notice that the selectors are drifting. Fix it before
 it becomes alert 6.
 
 ---
+
+## ALERT 6b: enrollment page structure drifted {#alert-6b-page-drift}
+
+**Symptom.** `grid_wrapper_not_found`, and **the run succeeded.** The scraper
+could not find Oklahoma's `aem-Grid` wrapper, fell back to searching the whole
+page, and found the links anyway.
+
+Nothing is broken yet. This is the early warning before
+[alert 6](#alert-6-no-files) — the page has been restructured and the
+selectors are drifting. The next change is likely to break discovery outright.
+
+**Diagnose.** Diff this run's snapshot against the previous one:
+
+```bash
+RAW=okw-raw-$ENV
+gcloud storage ls gs://$RAW/enrollment/page_snapshots/ | sort | tail -2
+gcloud storage cp gs://$RAW/enrollment/page_snapshots/OLD.html /tmp/old.html
+gcloud storage cp gs://$RAW/enrollment/page_snapshots/NEW.html /tmp/new.html
+diff <(python3 -c "import sys,re;print(re.sub(r'>\s*<','>\n<',open('/tmp/old.html').read()))") \
+     <(python3 -c "import sys,re;print(re.sub(r'>\s*<','>\n<',open('/tmp/new.html').read()))") | head -40
+```
+
+**Fix.** Same procedure as alert 6, but unhurried: save the new HTML over
+`tests/fixtures/enrollment/page.html`, run `make test`, and update the
+selector constants until the assertions pass. The fixture goes in with the
+PR, so the regression is covered from then on.
 
 ## ALERT 7: enrollment workbook skipped {#alert-7-reshape-skipped}
 
@@ -670,6 +707,48 @@ merely misspelled applies cleanly and then never fires.
 already be on — Terraform cannot enable the APIs that let it enable APIs. Run
 `./infra/bootstrap/bootstrap.sh <project>` first.
 
+## The smoke test "succeeded" but there is no data in owc_marts
+
+That is correct behavior, not a failure. A `--limit N` run is a deliberate
+truncation of the real result, so it **never publishes** — copying a sample
+over a production marts table would be worse than not running at all.
+
+Look for this in the logs:
+
+```text
+publish_skipped_row_limited  rows=78
+pipeline_succeeded
+```
+
+and for `status = 'success_limited'` in `owc_ops.pipeline_runs`. That status
+is deliberately excluded from `previous_successful()`, so a smoke run cannot
+poison the quality baseline that the next real run is compared against.
+
+To actually populate marts, run without `--limit`. Use a small dimension if
+you just want to prove the publish path:
+
+```bash
+gcloud run jobs execute okw-lightcast-$ENV --region $REGION --project $PROJECT \
+  --args="run,lightcast,--dataset,dim_area" --tasks=1 --wait
+```
+
+## `make which-image` shows "newest build: <none>"
+
+There is no image tagged with the current git short SHA. The usual cause is
+committing **after** building: `make build` tags the image with the SHA that
+was checked out at the time, and HEAD has since moved.
+
+`make image-digest` now falls back to `:latest` and warns on stderr, so the
+dev loop keeps working. To get back to a state where the tag identifies the
+commit:
+
+```bash
+make deploy ENV=$ENV      # build at this commit, then point the jobs at it
+```
+
+Keeping tag and commit aligned matters because a digest is how a rollback is
+identified — see [`04-deployment.md`](04-deployment.md#rolling-back).
+
 ## A fix was deployed but the old behavior persists
 
 **The jobs are probably still running the previous image.** A Cloud Run job
@@ -800,16 +879,41 @@ replacement is expected and safe.
 
 ### Roll back a published table
 
-Every publish takes a snapshot first.
+Every run's Parquet is kept in GCS under its own `run_id`, and the run
+manifest records the exact path. Rolling back reloads it — an ordinary load
+job, no special permission.
 
 ```bash
-# Find the snapshots for a table
-bq ls --project_id=$PROJECT owc_ops | grep THE_TABLE
+# What runs are available to roll back to?
+bq query --use_legacy_sql=false --project_id=$PROJECT \
+'SELECT started_at, run_id, status, row_count, source_uri
+ FROM `owc_ops.pipeline_runs_recent`
+ WHERE dataset = "THE_TABLE" AND status = "success"
+ LIMIT 10'
 
-# Restore
-.venv/bin/owcdata rollback THE_TABLE $PROJECT.owc_ops.THE_TABLE__RUN_ID
-# or:  bq cp -f $PROJECT:owc_ops.THE_TABLE__RUN_ID $PROJECT:owc_marts.THE_TABLE
+# Roll back to the run before the current contents
+owcdata rollback THE_TABLE
+
+# Or to a specific run
+owcdata rollback THE_TABLE --run-id okw-lightcast-$ENV-abc12
 ```
+
+Equivalently by hand:
+
+```bash
+bq load --replace --source_format=PARQUET \
+  $PROJECT:owc_marts.THE_TABLE \
+  gs://okw-raw-$ENV/lightcast/THE_TABLE/run_id=RUN_ID/THE_TABLE.parquet
+```
+
+For a mistake made in the last few days, BigQuery **time travel** is even
+simpler and needs nothing:
+
+```bash
+bq cp -f "$PROJECT:owc_marts.THE_TABLE@-3600000" $PROJECT:owc_marts.THE_TABLE
+```
+
+(`@-3600000` is one hour ago, in milliseconds. The window is 7 days.)
 
 ### Re-run one dataset
 
@@ -883,8 +987,16 @@ gcloud secrets get-iam-policy okw-snowflake-password-$ENV --project=$PROJECT \
   && echo "PROBLEM: enrollment can read the Snowflake secret" \
   || echo "OK: enrollment has no access to the Snowflake secret"
 
-# PowerBI must have NO grant on owc_marts.
-bq show --format=prettyjson $PROJECT:owc_marts | grep -q "okw-powerbi-$ENV" \
-  && echo "PROBLEM: PowerBI has a direct grant on owc_marts" \
-  || echo "OK: PowerBI reads only through authorized views"
+# PowerBI must be able to READ owc_marts...
+bq show --format=prettyjson $PROJECT:owc_marts \
+  | python3 -c 'import json,sys; a=json.load(sys.stdin)["access"]; \
+      print("OK: PowerBI can read owc_marts" if any("powerbi" in str(e) and e.get("role")=="READER" for e in a) \
+            else "PROBLEM: PowerBI cannot read owc_marts")'
+
+# ...and must have NOTHING on staging (unvalidated) or ops (manifest, snapshots).
+for ds in owc_staging owc_ops; do
+  bq show --format=prettyjson $PROJECT:$ds | grep -q "okw-powerbi-$ENV" \
+    && echo "PROBLEM: PowerBI has a grant on $ds" \
+    || echo "OK: PowerBI has no grant on $ds"
+done
 ```

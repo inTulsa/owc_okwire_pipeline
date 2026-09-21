@@ -25,9 +25,11 @@ Cloud Run Jobs (one per pipeline, one shared image)
   ▼  both converge on the same path (src/owcdata/core/publish.py)
 LOAD      BigQuery batch load (free, atomic) → owc_staging.*
 VALIDATE  row counts vs prior run, max(YEAR), not-null, known dim counts
-PUBLISH   snapshot marts table → table-copy WRITE_TRUNCATE staging → owc_marts
-          → authorized view in owc_reporting
+PUBLISH   table-copy WRITE_TRUNCATE staging → owc_marts
+          (one free atomic job; PowerBI reads owc_marts directly)
+          rollback = reload a previous run's Parquet from GCS (ADR-010)
 RECORD    one row per dataset per run → owc_ops.pipeline_runs
+          (read it via owc_ops.pipeline_runs_recent, ordered newest first)
   │
   ▼  structured JSON logs, non-zero exit on any failure
 Cloud Logging → log-based metrics → alert policies → email distribution list
@@ -138,9 +140,9 @@ clustering if the DDL omits it.
 BigQuery load jobs are already atomic: creation, truncation, and append occur
 as one atomic update on job completion. So the staging load needs no wrapper.
 
-A **table snapshot is taken before each swap**. Near-free — it bills only for
-bytes that later diverge — and it makes a rollback one copy job:
-`owcdata rollback <table> <snapshot>`.
+**Superseded by ADR-010:** the snapshot step was removed. Rollback reloads the
+previous run's Parquet from GCS, which needs no permission beyond
+`dataEditor`.
 
 ## ADR-004: Snowflake password auth is kept
 
@@ -188,10 +190,93 @@ The alternative, per-user OAuth, breaks scheduled refresh the day that person
 leaves.
 
 **Decision:** one key for `okw-powerbi-{env}`, scoped to `bigquery.dataViewer`
-on `owc_reporting` **only** plus `bigquery.jobUser`. No grant on `owc_marts` —
-the authorized views read marts on their own authority. Rotate annually.
+on `owc_marts` **only** plus `bigquery.jobUser` — read-only, and nothing on
+`owc_staging` (unvalidated data) or `owc_ops` (the run manifest).
+Rotate annually.
 
 Decided and written down here rather than discovered at go-live.
+
+## ADR-009: No reporting layer — the pipeline stops at owc_marts
+
+**Status:** accepted. **Supersedes** the original three-dataset design.
+
+The first design published a pass-through authorized view into a separate
+`owc_reporting` dataset for every marts table, so PowerBI would hold no grant
+on `owc_marts`.
+
+**Why that was reversed.** Every view was `SELECT * FROM owc_marts.<table>`,
+created automatically for every table. The effective read surface was
+therefore identical to granting PowerBI `dataViewer` on `owc_marts` — the
+isolation was nominal. The costs were not:
+
+* The pipeline needed `bigquery.datasets.update` on `owc_marts` to add each
+  view to the dataset's access list. That meant a custom IAM role held by an
+  unattended monthly job, purely to mutate an ACL.
+* Publish gained a **third step that could fail after the data was already
+  live**. That happened: a 403 on the authorization left the table published
+  and its view unauthorized, so PowerBI could read nothing, and a Cloud Run
+  retry then short-circuited and reported success.
+* 42 extra objects to keep in step with 42 tables.
+
+**Decision:** the pipeline stops at `owc_marts`. PowerBI reads it directly
+with `bigquery.dataViewer`, and the custom role is gone. (ADR-010 later removed
+the snapshot step too, leaving publish as a single copy job.)
+
+Note the privilege moved in the right direction: **less** for the unattended
+pipeline, slightly more read scope for a read-only BI identity.
+
+**What would bring the layer back.** Authorized views exist to *withhold*
+columns or rows. If [open item 6](OPEN-ITEMS.md) — whether the Lightcast
+license permits these derived tables for the intended PowerBI audience — turns
+out to restrict specific fields, a filtering view is the correct mechanism.
+Re-adding it is additive and needs no change to the `pipeline` module. A
+`SELECT *` view, however, provides no license protection, so it was never
+buying that either.
+
+## ADR-010: Rollback from the GCS Parquet, not a BigQuery snapshot
+
+**Status:** accepted. **Supersedes** the snapshot-before-publish step in
+ADR-003.
+
+Publish used to take a BigQuery table snapshot of the marts table before
+replacing it. Snapshots are near-free and restore instantly, so this looked
+like the obvious primitive.
+
+**Why it was reversed.** Creating a snapshot *with an expiration* requires
+`bigquery.tables.deleteSnapshot`, and `roles/bigquery.dataEditor` grants
+`createSnapshot` and `restoreSnapshot` but **not** `deleteSnapshot`. So the
+step forced a custom IAM role for one permission.
+
+And it was unnecessary, because the rollback artifact already existed:
+
+* Every run writes its Parquet to `gs://<raw>/<pipeline>/<table>/run_id=<id>/`
+  — a **distinct object per run**, not a version of a shared one.
+* The raw bucket's only `Delete` lifecycle rule is conditioned on
+  `isLive: false`, so it never touches them. They tier Nearline 30d →
+  Coldline 90d → Archive 365d and are retained indefinitely — **longer than
+  the 30-day snapshots they replace**.
+* `owc_ops.pipeline_runs.source_uri` already records the exact path per run.
+
+**Decision:** no snapshots. Rollback reloads a previous run's Parquet:
+
+```bash
+owcdata rollback dim_area                      # the run before the current one
+owcdata rollback dim_area --run-id <run_id>    # a specific run
+```
+
+That is an ordinary BigQuery load job, so `dataEditor` + `jobUser` is the
+entire permission set either pipeline needs. **There are no custom roles in
+this project.**
+
+**Consequences, stated plainly.** A snapshot restore is a metadata operation;
+a Parquet reload is a load job, so rolling back a multi-GB fact table takes
+minutes rather than seconds. Both are free. BigQuery's 7-day time travel also
+remains available for very recent mistakes and needs nothing at all.
+
+This change also required the **enrollment** pipeline to write its merged
+output as Parquet to the raw bucket rather than loading a DataFrame directly,
+so both pipelines produce the same artifact and share one publish and one
+rollback path. `land_dataframe` is gone.
 
 ## ADR-007: One container image for both pipelines
 

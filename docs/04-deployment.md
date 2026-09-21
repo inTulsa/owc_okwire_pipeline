@@ -87,13 +87,15 @@ gcloud artifacts docker images list \
 
 ### A published table
 
-Every publish snapshots the marts table first. Snapshots are near-free — they
-bill only for bytes that later diverge.
+Every run's Parquet stays in GCS under its own `run_id`, and
+`owc_ops.pipeline_runs.source_uri` records the path. Rolling back reloads it:
 
 ```bash
-bq ls --project_id=owc-data-prod owc_ops | grep THE_TABLE
-.venv/bin/owcdata rollback THE_TABLE owc-data-prod.owc_ops.THE_TABLE__RUN_ID
+owcdata rollback THE_TABLE                    # the run before the current one
+owcdata rollback THE_TABLE --run-id RUN_ID    # a specific run
 ```
+
+See [ADR-010](01-architecture.md#adr-010-rollback-from-the-gcs-parquet-not-a-bigquery-snapshot).
 
 ### Infrastructure
 

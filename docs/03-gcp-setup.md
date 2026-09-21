@@ -295,11 +295,19 @@ gcloud storage buckets get-iam-policy gs://okw-enrollment-state-$ENV --format=js
   | grep -q "okw-lightcast-$ENV" \
   && echo "PROBLEM: lightcast can write the scrape cache" \
   || echo "OK: lightcast has no access to the enrollment state bucket"
+
+# PowerBI reads owc_marts and NOTHING else — not staging (unvalidated data),
+# not ops (the run manifest).
+for ds in owc_staging owc_ops; do
+  bq show --format=prettyjson $PROJECT:$ds | grep -q "okw-powerbi-$ENV" \
+    && echo "PROBLEM: PowerBI has a grant on $ds" \
+    || echo "OK: PowerBI has no grant on $ds"
+done
 ```
 
 ## 8. Region co-location
 
-`location` feeds both the GCS buckets and all four BigQuery datasets from one
+`location` feeds both the GCS buckets and all three BigQuery datasets from one
 variable. **This is mandatory, not a preference:** a load job from a bucket in
 one location into a dataset in another fails outright. Never set them
 separately, and never mix them between environments you plan to copy data
@@ -325,7 +333,7 @@ between.
 ```bash
 gcloud run jobs execute $(make -s tf-output ENV=dev NAME=lightcast_job) \
   --region us-central1 --project owc-data-dev \
-  --args="run,lightcast,--dataset,dim_area,--limit,1000" --tasks=1 --wait
+  --args="run,lightcast,--dataset,dim_area" --tasks=1 --wait
 
 gcloud run jobs execute $(make -s tf-output ENV=dev NAME=enrollment_job) \
   --region us-central1 --project owc-data-dev --wait
@@ -333,6 +341,50 @@ gcloud run jobs execute $(make -s tf-output ENV=dev NAME=enrollment_job) \
 
 `make tf-output ENV=dev` with no `NAME` lists everything, including the job
 names, bucket names, and service-account emails the runbook refers to.
+
+### What success looks like
+
+The lightcast smoke test uses `--limit`, and **a row-limited run deliberately
+does not publish**. Its rows are a truncation of the real result, so copying
+them into `owc_marts` would replace a production table with a sample. Expect:
+
+```text
+extract_finished  dim_area  rows=78
+bq_load_finished            rows=78
+publish_skipped_row_limited rows=78
+pipeline_succeeded
+```
+
+So after a successful smoke test, `owc_marts` will **not** contain
+`dim_area` — that is correct, not a failure. The manifest records the run as
+`success_limited`, a status that `previous_successful()` excludes so it cannot
+become the baseline the next real run is compared against.
+
+Confirm it succeeded from the manifest rather than from marts:
+
+```bash
+bq query --project_id=owc-data-dev --use_legacy_sql=false \
+'SELECT pipeline, dataset, status, row_count, duration_seconds
+ FROM `owc_ops.pipeline_runs` ORDER BY started_at DESC LIMIT 5'
+```
+
+### Verifying the publish path
+
+To exercise snapshot → table copy, run one **small dimension with no limit**.
+`dim_area` is 78 rows, so this is cheap:
+
+```bash
+gcloud run jobs execute okw-lightcast-dev --region us-central1 \
+  --project owc-data-dev --args="run,lightcast,--dataset,dim_area" \
+  --tasks=1 --wait
+```
+
+Then check all three landed:
+
+```bash
+bq ls --project_id=owc-data-dev owc_marts   # dim_area TABLE
+bq ls --project_id=owc-data-dev owc_ops     # a dim_area__<run_id> snapshot
+```
 
 Then confirm the manifest recorded both:
 

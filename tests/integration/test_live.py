@@ -223,9 +223,9 @@ def test_gcs_and_bigquery_round_trip():
     _require("OWC_GCP_PROJECT", "OWC_GCS_RAW_BUCKET")
     import pyarrow as pa
 
+    from owcdata.core.parquet import write_parquet_stream
     from owcdata.core.sinks.bigquery import BigQueryClient, arrow_to_bq_schema
     from owcdata.core.sinks.gcs import GCSSink
-    from owcdata.pipelines.lightcast.run import _write_parquet_stream
 
     class Fake:
         def __init__(self, batches, schema):
@@ -244,7 +244,7 @@ def test_gcs_and_bigquery_round_trip():
     sink = GCSSink(os.environ["OWC_GCS_RAW_BUCKET"], prefix="itest")
     rel = "roundtrip/itest.parquet"
     with sink.open_write(rel) as fh:
-        rows, written_schema = _write_parquet_stream(Fake([batch], schema), fh)
+        rows, written_schema = write_parquet_stream(iter([batch]), fh, fallback_schema=schema)
     assert rows == 3
 
     bq = BigQueryClient(os.environ["OWC_GCP_PROJECT"], location=os.getenv("OWC_BQ_LOCATION", "US"))
