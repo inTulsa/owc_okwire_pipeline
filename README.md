@@ -33,7 +33,7 @@ make run PIPELINE=enrollment TARGET=local
 | [`01-architecture.md`](docs/01-architecture.md) | Data flow and the ADRs behind it |
 | [`02-runbook.md`](docs/02-runbook.md) | **On-call** — one entry per alert: symptom → diagnosis → fix |
 | [`03-gcp-setup.md`](docs/03-gcp-setup.md) | One-time bootstrap of a GCP project |
-| [`04-deployment.md`](docs/04-deployment.md) | Deploy, roll back, promote dev → prod |
+| [`04-deployment.md`](docs/04-deployment.md) | **GitHub Actions setup**, deploy, roll back, promote dev → prod |
 | [`05-local-development.md`](docs/05-local-development.md) | Laptop to first run |
 | [`06-adding-a-pipeline.md`](docs/06-adding-a-pipeline.md) | Adding a dataset vs. adding a whole pipeline |
 | [`07-monitoring.md`](docs/07-monitoring.md) | Every alert, its threshold, and why |

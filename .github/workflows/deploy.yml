@@ -5,8 +5,14 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      target:
+        description: "Which environment to deploy"
+        required: true
+        type: choice
+        options: [dev, prod]
+        default: dev
       image_digest:
-        description: "Existing digest to promote (skips the build). Use this to roll back."
+        description: "Existing digest to promote (skips the build). Use to roll back, or to promote the digest already running in dev."
         required: false
         type: string
 
@@ -78,6 +84,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     environment: dev
+    if: github.event_name == 'push' || inputs.target == 'dev' 
     steps:
       - uses: actions/checkout@v4
 
@@ -132,15 +139,43 @@ jobs:
   # ---------------------------------------------------------------------------
   # prod: gated on a GitHub environment with required reviewers.
   # ---------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
+  # prod is MANUAL ONLY. A push to main never reaches it.
+  #
+  # The original design gated this with required reviewers on the `prod`
+  # GitHub environment. That protection rule needs a paid plan on a private
+  # repo — GitHub returns 422 without one — and, importantly, the environment
+  # still exists and the job still RUNS when the rule cannot be created. So
+  # relying on it here would have meant every push to main deploying straight
+  # to prod with no gate at all.
+  #
+  # Running the workflow by hand is the gate instead: it is explicit, it
+  # records who did it, and it costs nothing. If the plan is ever upgraded,
+  # add required reviewers to the `prod` environment and this job can move
+  # back onto the push trigger.
+  # ---------------------------------------------------------------------------
   deploy-prod:
-    name: apply prod
-    needs: [build, deploy-dev]
+    name: apply prod (manual)
+    needs: build
     runs-on: ubuntu-latest
-    # Configure required reviewers on this environment in repo settings.
-    # That approval gate is the manual step, not a workflow input.
     environment: prod
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'prod' 
     steps:
       - uses: actions/checkout@v4
+
+      # Fail with a sentence rather than an opaque auth error.
+      - name: check prod is configured
+        run: |
+          missing=""
+          [ -n "${{ vars.WIF_PROVIDER_PROD }}" ] || missing="$missing WIF_PROVIDER_PROD"
+          [ -n "${{ vars.DEPLOYER_SA_PROD }}"  ] || missing="$missing DEPLOYER_SA_PROD"
+          [ -n "${{ vars.PROJECT_ID_PROD }}"   ] || missing="$missing PROJECT_ID_PROD"
+          if [ -n "$missing" ]; then
+            echo "::error::prod is not set up yet. Missing repository variables:$missing"
+            echo "Bootstrap the prod project, then: make gh-vars ENV=prod"
+            echo "See docs/04-deployment.md#setting-up-github-actions"
+            exit 1
+          fi
 
       - uses: google-github-actions/auth@v2
         with:

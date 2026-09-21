@@ -108,9 +108,33 @@ jobs:
           workload_identity_provider: ${{ vars.WIF_PROVIDER_DEV }}
           service_account: ${{ vars.DEPLOYER_SA_DEV }}
 
+      - uses: google-github-actions/setup-gcloud@v2
+
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.13.4
+
+      # Resolve the digest instead of reading it from a repo variable.
+      #
+      # A hand-maintained CURRENT_IMAGE_DIGEST_DEV variable goes stale the
+      # first time anyone builds without updating it, and then every PR plan
+      # shows a spurious image change. Reading :latest is always current, and
+      # the placeholder keeps the plan renderable on a project that has no
+      # image yet.
+      - name: resolve the deployed image digest
+        id: img
+        run: |
+          set -euo pipefail
+          REPO="${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID_DEV }}/okw-images/owcdata"
+          DIGEST=$(gcloud artifacts docker images describe "$REPO:latest" \
+            --project "${{ vars.PROJECT_ID_DEV }}" \
+            --format='value(image_summary.digest)' 2>/dev/null || true)
+          if [ -n "$DIGEST" ]; then
+            echo "image=$REPO@$DIGEST" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::no image in the registry yet; planning with a placeholder digest"
+            echo "image=placeholder@sha256:$(printf '0%.0s' $(seq 64))" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: plan
         id: plan
@@ -118,7 +142,7 @@ jobs:
         run: |
           terraform init
           terraform plan -no-color -lock=false \
-            -var="image_digest=${{ vars.CURRENT_IMAGE_DIGEST_DEV }}" \
+            -var="image_digest=${{ steps.img.outputs.image }}" \
             > plan.txt 2>&1 || true
           {
             echo 'summary<<PLANEOF'

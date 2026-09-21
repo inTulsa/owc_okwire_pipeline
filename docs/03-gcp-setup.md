@@ -258,21 +258,10 @@ make tf-output ENV=dev NAME=workload_identity_provider
 make tf-output ENV=dev NAME=deployer_service_account
 ```
 
-Those two become the GitHub repository variables `WIF_PROVIDER_DEV` and
-`DEPLOYER_SA_DEV`. Set them under **Settings → Secrets and variables →
-Actions → Variables**, or with the `gh` CLI:
-
-```bash
-gh variable set WIF_PROVIDER_DEV --body "$(make -s tf-output ENV=dev NAME=workload_identity_provider)"
-gh variable set DEPLOYER_SA_DEV  --body "$(make -s tf-output ENV=dev NAME=deployer_service_account)"
-gh variable set PROJECT_ID_DEV   --body "owc-data-dev"
-gh variable set REGION           --body "us-central1"
-```
-
-The workflows also read `WIF_PROVIDER_PROD`, `DEPLOYER_SA_PROD`, and
-`PROJECT_ID_PROD`. Until those exist, the Actions workflows will fail on the
-auth step — which is expected, and does not affect anything you deploy by
-hand.
+Those two become GitHub repository variables. **The full GitHub Actions
+setup — all seven variables plus the two environments and the approval gate —
+is in [`04-deployment.md`](04-deployment.md#setting-up-github-actions).**
+Nothing in it is needed to deploy by hand.
 
 Plus `PROJECT_ID_DEV`, `PROJECT_ID_PROD`, `REGION`, and the `_PROD` variants.
 
@@ -407,6 +396,8 @@ not a quota.
 Same steps with `ENV=prod`, plus:
 
 - `allowed_refs = ["refs/heads/main"]`
-- Configure **required reviewers** on the `prod` GitHub environment. That
-  approval gate is the manual step in the deploy pipeline.
+- Prod deploys are **manual only** (`Actions → Deploy → Run workflow`), not
+  gated by required reviewers — that protection rule needs a paid GitHub plan
+  on a private repo, and without it the environment exists but gates nothing.
+  See [`04-deployment.md`](04-deployment.md#why-prod-is-manual-rather-than-an-approval-gate).
 - Leave `raw_bucket_force_destroy = false`.

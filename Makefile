@@ -39,7 +39,7 @@ RUN_ARGS += --limit $(LIMIT)
 endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check \
-        diff-enrollment derive-scrape derive-check build deploy set-image which-image image-digest tf-init tf-bootstrap preflight wif-check tf-output tf-plan tf-apply tf-fmt tf-validate clean
+        diff-enrollment derive-scrape derive-check build deploy set-image which-image image-digest tf-init tf-bootstrap preflight wif-check tf-output gh-vars tf-plan tf-apply tf-fmt tf-validate clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -282,7 +282,27 @@ preflight: wif-check ## Check the Snowflake secret has a version before applying
 # next prompt or error. The `&& echo` restores it without affecting capture,
 # since command substitution strips trailing newlines anyway.
 tf-output: ## Show terraform outputs for $(ENV). Add NAME=<output> for one value.
-	@cd $(TF_DIR) && $(if $(NAME),terraform output -raw $(NAME) && echo,terraform output)
+	@scripts/tf-output.sh $(TF_DIR) $(ENV) $(PROJECT) $(NAME)
+
+# Sets the three per-environment GitHub repository variables in one step.
+#
+# Doing this by hand is a trap: `gh variable set --body "$$(...)"` does NOT
+# abort when the inner command fails — it passes an empty string, and gh then
+# drops into an interactive "Paste your variable" prompt. Pressing enter sets
+# the variable to empty, which fails later at the auth step with nothing
+# pointing at the cause. This resolves every value first and only then writes.
+gh-vars: ## Set the GitHub repo variables for $(ENV) from its terraform outputs
+	@command -v gh >/dev/null || { echo "gh CLI not installed: https://cli.github.com" >&2; exit 1; }
+	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@up=$$(echo $(ENV) | tr a-z A-Z); \
+	  wif=$$($(MAKE) -s --no-print-directory tf-output ENV=$(ENV) NAME=workload_identity_provider) || exit 1; \
+	  sa=$$($(MAKE)  -s --no-print-directory tf-output ENV=$(ENV) NAME=deployer_service_account)  || exit 1; \
+	  test -n "$$wif" && test -n "$$sa" || { echo "refusing to set an empty variable" >&2; exit 1; }; \
+	  gh variable set REGION              --body "$(REGION)"; \
+	  gh variable set PROJECT_ID_$$up     --body "$(PROJECT)"; \
+	  gh variable set WIF_PROVIDER_$$up   --body "$$wif"; \
+	  gh variable set DEPLOYER_SA_$$up    --body "$$sa"; \
+	  echo ""; gh variable list
 
 tf-plan: ## terraform plan for $(ENV). Add TF_ARGS='-var=image_digest=...'
 	cd $(TF_DIR) && terraform plan $(TF_ARGS)
