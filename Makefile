@@ -482,6 +482,15 @@ gh-vars: deployer-check ## Set the GitHub repo variables for $(ENV) from its ter
 	  wif=$$($(MAKE) -s --no-print-directory tf-output ENV=$(ENV) NAME=workload_identity_provider) || exit 1; \
 	  sa=$$($(MAKE)  -s --no-print-directory tf-output ENV=$(ENV) NAME=deployer_service_account)  || exit 1; \
 	  test -n "$$wif" && test -n "$$sa" || { echo "refusing to set an empty variable" >&2; exit 1; }; \
+	  case "$$wif" in projects/*/locations/global/workloadIdentityPools/*/providers/*) ;; \
+	    *) echo "" >&2; echo "workload_identity_provider does not look like a provider path:" >&2; \
+	       echo "  $$wif" >&2; echo "" >&2; \
+	       echo "terraform output prints 'Warning: No outputs found' and exits ZERO when the" >&2; \
+	       echo "state has no outputs, so a non-empty check is not enough. Apply this" >&2; \
+	       echo "environment first: make tf-apply ENV=$(ENV)" >&2; echo "" >&2; exit 1 ;; esac; \
+	  case "$$sa" in *@*.iam.gserviceaccount.com) ;; \
+	    *) echo "" >&2; echo "deployer_service_account does not look like an SA email:" >&2; \
+	       echo "  $$sa" >&2; echo "" >&2; exit 1 ;; esac; \
 	  test -n "$(NAME_PREFIX)" || { echo "could not read name_prefix from $(TFVARS)" >&2; exit 1; }; \
 	  gh variable set REGION              --body "$(REGION)"; \
 	  gh variable set PROJECT_ID_$$up     --body "$(PROJECT)"; \
