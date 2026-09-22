@@ -99,6 +99,9 @@ module "platform" {
   # fat-fingered `terraform destroy`, not a quota.
   raw_bucket_force_destroy = false
 
+  # Prod is the environment whose freshness is real.
+  freshness_check_enabled = true
+
   freshness_thresholds = concat(
     [
       for name, cfg in local.lightcast.groups : {
@@ -134,6 +137,9 @@ module "lightcast" {
 
   service_account_email           = module.platform.service_account_emails.lightcast
   scheduler_service_account_email = module.platform.service_account_emails.scheduler
+
+  # Prod is the environment whose schedule is real.
+  schedulers_paused = false
 
   schedules          = local.lightcast_schedules
   task_count_default = length(local.sql_datasets)
@@ -225,6 +231,9 @@ module "enrollment" {
 
   service_account_email           = module.platform.service_account_emails.enrollment
   scheduler_service_account_email = module.platform.service_account_emails.scheduler
+
+  # Prod is the environment whose schedule is real.
+  schedulers_paused = false
 
   schedules = [{
     name       = "monthly"

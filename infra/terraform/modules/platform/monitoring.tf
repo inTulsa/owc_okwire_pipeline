@@ -138,6 +138,10 @@ locals {
 }
 
 resource "google_bigquery_data_transfer_config" "freshness_check" {
+  # Off in dev, where nothing runs on a schedule to be fresh. See the
+  # variable's documentation.
+  count = var.freshness_check_enabled ? 1 : 0
+
   project              = var.project_id
   location             = var.location
   display_name         = "OWC pipeline freshness check (${var.env})"
@@ -196,7 +200,8 @@ resource "time_sleep" "platform_metric_propagation" {
 }
 
 resource "google_monitoring_alert_policy" "didnt_run" {
-  count = length(var.alert_emails) > 0 ? 1 : 0
+  # Needs both an alert destination AND a freshness query to alert on.
+  count = var.freshness_check_enabled && length(var.alert_emails) > 0 ? 1 : 0
 
   depends_on = [time_sleep.platform_metric_propagation]
 

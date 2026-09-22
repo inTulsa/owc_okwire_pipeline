@@ -113,6 +113,11 @@ green Cloud Scheduler history proves nothing: `jobs:run` returns a
 long-running Operation immediately, so Scheduler gets a 200 in milliseconds
 regardless of what the job then does.
 
+**Prod only.** Dev's schedulers are paused and its freshness check is off
+(`freshness_check_enabled = false`), because dev only runs when someone
+deploys — so "nothing ran this month" is dev working as intended, not a
+fault. If you are seeing this in dev, something re-enabled it.
+
 **Diagnose.**
 
 ```bash
@@ -129,7 +134,8 @@ gcloud scheduler jobs describe cs-$PREFIX-lightcast-monthly-1 --location=$REGION
 
 | Cause | Fix |
 |---|---|
-| Scheduler is PAUSED | `gcloud scheduler jobs resume cs-$PREFIX-lightcast-monthly-1 --location=$REGION` |
+| Scheduler is PAUSED **in prod** | `gcloud scheduler jobs resume cs-$PREFIX-lightcast-monthly-1 --location=$REGION` |
+| Scheduler is PAUSED **in dev** | Expected — do not resume. Dev's schedulers are paused by Terraform (`schedulers_paused = true`) so dev does not re-run prod's 41 Snowflake queries and bill Lightcast twice. This alert is also disabled in dev, so you should not be reading this there. |
 | Scheduler was deleted | `make tf-apply ENV=$ENV` |
 | Scheduler fires but jobs never start | That is [alert 3](#alert-3-scheduler-failing) |
 | Jobs run but the manifest is empty | Check for `manifest_write_failed` in the logs — the run may be fine while the record-keeping is broken, which disables this alert. Verify `bigquery.dataEditor` on `owc_ops`. |
