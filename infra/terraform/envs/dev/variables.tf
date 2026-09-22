@@ -80,7 +80,16 @@ variable "snowflake_account" {
 variable "snowflake_user" {
   type        = string
   description = "Snowflake login. Not a secret; the password is in Secret Manager."
-  default     = ""
+
+  # No default, and the placeholder is rejected. This value is only ever
+  # used at RUNTIME, as an env var on the lightcast job, so a wrong one
+  # applies perfectly cleanly and then fails on the 1st of the month at
+  # 06:00, unattended, with a Snowflake auth error. In prod that is a month
+  # after the mistake was made. Failing the plan costs a second instead.
+  validation {
+    condition     = length(trimspace(var.snowflake_user)) > 0 && !can(regex("REPLACE_ME", var.snowflake_user))
+    error_message = "snowflake_user must be this environment's real Snowflake login — the tfvars ship with a REPLACE_ME placeholder. It is not a secret; the password goes to Secret Manager separately."
+  }
 }
 
 variable "name_prefix" {

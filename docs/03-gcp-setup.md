@@ -599,6 +599,17 @@ Same steps with `ENV=prod`, plus:
   [what dev does differently](04-deployment.md#what-dev-does-differently).
 - Its own state bucket, `gcs-owc-dpar-p-tfstate-1`, in the **prod** project —
   not the dev one.
+- **`snowflake_user` — the prod tfvars ship a `REPLACE_ME@` placeholder.**
+  This value is only used at runtime, as an env var on the lightcast job, so
+  a wrong one applies perfectly cleanly and then fails at 06:00 on the 1st,
+  unattended, with a Snowflake auth error — a month after the mistake. The
+  variable now rejects the placeholder at plan time, so you cannot miss it,
+  but it is the one field with no sensible default.
+- The **password** for that user goes into
+  `sm-owc-dpar-p-snowflake-password-1`, separately, before the apply. It is
+  a different Secret Manager secret in a different project from dev's; dev's
+  value is not reachable from prod and should not be reused if the reader
+  accounts differ.
 
 Prod is a separate project with its own WIF pool, deployer, registry and
 state. Nothing in it depends on dev, and nothing in dev can reach it.
