@@ -113,7 +113,7 @@ service accounts, confirm the license permits these derived tables in a
 PowerBI report with the intended audience.
 
 **Current state:** access is limited to the pipeline service accounts plus
-`okw-powerbi-{env}` read-only on `owc_marts` only. Nothing is public; both buckets
+`sa-<name_prefix>-powerbi-1` read-only on `owc_marts` only. Nothing is public; both buckets
 have `public_access_prevention = "enforced"`.
 
 ---
@@ -123,7 +123,7 @@ have `public_access_prevention = "enforced"`.
 **The PowerBI JSON key exception.** The PowerBI BigQuery connector
 authenticates as a Google organizational account or via a service-account JSON
 key. There is no third option, and per-user OAuth breaks scheduled refresh the
-day that person leaves. One tightly-scoped key for `okw-powerbi-{env}` is the
+day that person leaves. One tightly-scoped key for `sa-<name_prefix>-powerbi-1` is the
 accepted answer — see
 [ADR-006](01-architecture.md#adr-006-one-tightly-scoped-json-key-for-powerbi).
 **Set a rotation reminder.**

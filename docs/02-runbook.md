@@ -6,9 +6,15 @@ One entry per alert: symptom → diagnosis → fix. Start with the alert you got
 
 ```bash
 export ENV=dev                      # or prod
-export PROJECT=owc-data-$ENV
+export PREFIX=owc-dpar-d            # or owc-dpar-p  — matches name_prefix in tfvars
+export PROJECT=$PREFIX              # project id and name_prefix are the same value
 export REGION=us-central1
 ```
+
+Resource names follow the OMES convention
+`<type>-<name_prefix>-<qualifier>-<seq>`, so the commands below build them
+from `$PREFIX`: `cr-$PREFIX-lightcast-1`, `gs://gcs-$PREFIX-raw-1`, and so
+on. See [`modules/platform/naming.tf`](../infra/terraform/modules/platform/naming.tf).
 
 ## Exit codes
 
@@ -75,7 +81,7 @@ gcloud logging read \
 surgical and does not re-bill Lightcast for the 40 that already succeeded:
 
 ```bash
-gcloud run jobs execute okw-lightcast-$ENV --region=$REGION --project=$PROJECT \
+gcloud run jobs execute cr-$PREFIX-lightcast-1 --region=$REGION --project=$PROJECT \
   --args="run,lightcast,--dataset,THE_DATASET" --wait
 ```
 
@@ -116,14 +122,14 @@ bq query --use_legacy_sql=false --project_id=$PROJECT \
 
 # Is the scheduler even enabled?
 gcloud scheduler jobs list --location=$REGION --project=$PROJECT
-gcloud scheduler jobs describe okw-lightcast-monthly-$ENV --location=$REGION --project=$PROJECT
+gcloud scheduler jobs describe cs-$PREFIX-lightcast-monthly-1 --location=$REGION --project=$PROJECT
 ```
 
 **Fix, by cause:**
 
 | Cause | Fix |
 |---|---|
-| Scheduler is PAUSED | `gcloud scheduler jobs resume okw-lightcast-monthly-$ENV --location=$REGION` |
+| Scheduler is PAUSED | `gcloud scheduler jobs resume cs-$PREFIX-lightcast-monthly-1 --location=$REGION` |
 | Scheduler was deleted | `make tf-apply ENV=$ENV` |
 | Scheduler fires but jobs never start | That is [alert 3](#alert-3-scheduler-failing) |
 | Jobs run but the manifest is empty | Check for `manifest_write_failed` in the logs — the run may be fine while the record-keeping is broken, which disables this alert. Verify `bigquery.dataEditor` on `owc_ops`. |
@@ -131,7 +137,7 @@ gcloud scheduler jobs describe okw-lightcast-monthly-$ENV --location=$REGION --p
 Then catch up manually:
 
 ```bash
-gcloud run jobs execute okw-lightcast-$ENV --region=$REGION --project=$PROJECT \
+gcloud run jobs execute cr-$PREFIX-lightcast-1 --region=$REGION --project=$PROJECT \
   --args="run,lightcast,--group,monthly" --tasks=41 --wait
 ```
 
@@ -159,7 +165,7 @@ gcloud logging read \
    hand:
 
    ```bash
-   gcloud scheduler jobs describe okw-lightcast-monthly-$ENV \
+   gcloud scheduler jobs describe cs-$PREFIX-lightcast-monthly-1 \
      --location=$REGION --project=$PROJECT --format='yaml(httpTarget)'
    ```
 
@@ -259,7 +265,7 @@ a surprise.
 before parsing it:
 
 ```bash
-RAW=okw-raw-$ENV
+RAW=gcs-$PREFIX-raw-1
 gcloud storage ls gs://$RAW/enrollment/page_snapshots/ | sort | tail -5
 
 # Pull the failing run and the last good one, and diff them
@@ -324,7 +330,7 @@ selectors are drifting. The next change is likely to break discovery outright.
 **Diagnose.** Diff this run's snapshot against the previous one:
 
 ```bash
-RAW=okw-raw-$ENV
+RAW=gcs-$PREFIX-raw-1
 gcloud storage ls gs://$RAW/enrollment/page_snapshots/ | sort | tail -2
 gcloud storage cp gs://$RAW/enrollment/page_snapshots/OLD.html /tmp/old.html
 gcloud storage cp gs://$RAW/enrollment/page_snapshots/NEW.html /tmp/new.html
@@ -353,8 +359,8 @@ gcloud logging read \
   'resource.type="cloud_run_job" (jsonPayload.event="workbook_reshape_skipped" OR jsonPayload.event="no_matching_sheet")' \
   --project=$PROJECT --limit=20 --format='value(jsonPayload.detail)'
 
-gcloud storage ls gs://okw-raw-$ENV/enrollment/source_files/
-gcloud storage cp gs://okw-raw-$ENV/enrollment/source_files/THE_FILE.xlsx /tmp/
+gcloud storage ls gs://gcs-$PREFIX-raw-1/enrollment/source_files/
+gcloud storage cp gs://gcs-$PREFIX-raw-1/enrollment/source_files/THE_FILE.xlsx /tmp/
 ```
 
 ```bash
@@ -435,7 +441,7 @@ bq query --use_legacy_sql=false --project_id=$PROJECT \
  GROUP BY user_email ORDER BY gib_billed DESC'
 ```
 
-**Fix.** If `okw-powerbi-*` is the top consumer, PowerBI is on DirectQuery and
+**Fix.** If `sa-*-powerbi-1` is the top consumer, PowerBI is on DirectQuery and
 is billing a scan per slicer click. Either move the model to Import mode or
 set a **custom daily query quota** on that service account. See open item 5 —
 Import mode on a Pro workspace caps a semantic model at 1 GB compressed.
@@ -447,7 +453,7 @@ Import mode on a Pro workspace caps a semantic model at 1 GB compressed.
 These are ordering problems on a brand-new project, not broken config. Full
 sequence: [`03-gcp-setup.md`](03-gcp-setup.md).
 
-### `name unknown: Repository "okw-images" not found`
+### `name unknown: Repository "ar-$PREFIX-images-1" not found`
 
 The Docker build succeeded and the **push** failed. Terraform creates the
 Artifact Registry repository, so it has to exist before the first build:
@@ -512,7 +518,7 @@ the client library does and it is the whole failure mode:
 ```bash
 TOK=$(gcloud auth application-default print-access-token)
 curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOK" \
-  "https://storage.googleapis.com/storage/v1/b/okw-tfstate/o?prefix=env&maxResults=1"
+  "https://storage.googleapis.com/storage/v1/b/gcs-owc-dpar-d-tfstate-1/o?prefix=env&maxResults=1"
 # 200
 ```
 
@@ -550,7 +556,7 @@ rollback is a revert rather than a race against a moving tag.
 make image-digest ENV=$ENV      # prints the correct, digest-pinned reference
 ```
 
-### `Secret projects/.../secrets/okw-snowflake-password-<env>/versions/latest was not found`
+### `Secret projects/.../secrets/sm-<name_prefix>-snowflake-password-1/versions/latest was not found`
 
 The secret **container** exists but has no **version**. Terraform creates the
 container and never the value — deliberately, so the password stays out of
@@ -563,14 +569,14 @@ is granted no secret access at all.
 
 ```bash
 # Container present but empty?
-gcloud secrets versions list okw-snowflake-password-$ENV --project=$PROJECT
+gcloud secrets versions list sm-$PREFIX-snowflake-password-1 --project=$PROJECT
 ```
 
 Fix, then re-apply:
 
 ```bash
 printf '%s' 'THE_PASSWORD' | \
-  gcloud secrets versions add okw-snowflake-password-$ENV --data-file=- --project $PROJECT
+  gcloud secrets versions add sm-$PREFIX-snowflake-password-1 --data-file=- --project $PROJECT
 
 IMAGE=$(make -s image-digest ENV=$ENV)
 make tf-apply ENV=$ENV TF_ARGS="-var=image_digest=$IMAGE"
@@ -677,7 +683,7 @@ lightcast that means re-querying and re-billing Lightcast's warehouse twice.
 
 ```bash
 # Verify no retries, on either scheduler
-gcloud scheduler jobs describe okw-lightcast-monthly-$ENV --location=$REGION \
+gcloud scheduler jobs describe cs-$PREFIX-lightcast-monthly-1 --location=$REGION \
   --project=$PROJECT --format='yaml(retryConfig)'
 # no retryCount field, or retryCount: 0 -> correct
 ```
@@ -728,7 +734,7 @@ To actually populate marts, run without `--limit`. Use a small dimension if
 you just want to prove the publish path:
 
 ```bash
-gcloud run jobs execute okw-lightcast-$ENV --region $REGION --project $PROJECT \
+gcloud run jobs execute cr-$PREFIX-lightcast-1 --region $REGION --project $PROJECT \
   --args="run,lightcast,--dataset,dim_area" --tasks=1 --wait
 ```
 
@@ -766,8 +772,8 @@ make which-image ENV=$ENV
 
 ```text
   newest build      : ...owcdata@sha256:f79b1fb2...
-  okw-lightcast-dev : ...owcdata@sha256:a217ebdb...   <- stale
-  okw-enrollment-dev: ...owcdata@sha256:a217ebdb...   <- stale
+  cr-owc-dpar-d-lightcast-1 : ...owcdata@sha256:a217ebdb...   <- stale
+  cr-owc-dpar-d-enrollment-1: ...owcdata@sha256:a217ebdb...   <- stale
 ```
 
 Fix:
@@ -792,7 +798,7 @@ absent resource. Two real examples of the same root cause:
 
 ```text
 no image found at .../owcdata:585e9f2 or :latest.  Build one first
-The secret container okw-snowflake-password-dev does not exist yet
+The secret container sm-owc-dpar-d-snowflake-password-1 does not exist yet
 ```
 
 Both were false. The image had three tags and the secret returned HTTP 200.
@@ -821,7 +827,7 @@ token:
 ```bash
 TOK=$(gcloud auth application-default print-access-token)
 curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOK" \
-  "https://secretmanager.googleapis.com/v1/projects/$PROJECT/secrets/okw-snowflake-password-$ENV"
+  "https://secretmanager.googleapis.com/v1/projects/$PROJECT/secrets/sm-$PREFIX-snowflake-password-1"
 ```
 
 ## CI/CD failures
@@ -839,7 +845,7 @@ is also what `make setup` does locally:
     uv pip install -e ".[dev]"
 ```
 
-### Build: `okw-build-<env>@... does not have storage.objects.get access` to the source tarball
+### Build: `sa-<name_prefix>-build-1@... does not have storage.objects.get access` to the source tarball
 
 Almost always **IAM propagation**, not a missing grant. The build SA holds
 `roles/storage.objectViewer` at project level, which covers the
@@ -851,7 +857,7 @@ Confirm the grant exists, then retry:
 
 ```bash
 gcloud projects get-iam-policy $PROJECT --flatten='bindings[].members' \
-  --filter="bindings.members:okw-build-$ENV" --format='table(bindings.role)'
+  --filter="bindings.members:sa-$PREFIX-build-1" --format='table(bindings.role)'
 # expect: roles/logging.logWriter, roles/storage.objectViewer
 
 make deploy ENV=$ENV
@@ -885,7 +891,7 @@ build runs as. Without an explicit one, that is the **Compute Engine default**
 service account — which carries project Editor, so granting the deployer
 `actAs` on it would be a privilege-escalation path rather than a fix.
 
-Instead, builds run as `okw-build-<env>`, named by the `_BUILD_SA`
+Instead, builds run as `sa-<name_prefix>-build-1`, named by the `_BUILD_SA`
 substitution in `docker/cloudbuild.yaml`. To resolve a numeric id from an
 error like this:
 
@@ -990,9 +996,9 @@ the apply rather than shipping a condition that cannot match.
 
 Other things to check, in order:
 
-1. **`allowed_refs`.** Prod pins `refs/heads/main`, so a branch or a fork's
-   pull request cannot deploy. That is intentional — confirm the workflow is
-   running on `main`.
+1. **`allowed_refs`.** Prod pins `refs/heads/prod`, so a branch or a fork's
+   pull request cannot deploy there. That is intentional — confirm the
+   workflow is running on the `prod` branch.
 2. **The repository variables.** `WIF_PROVIDER_<ENV>` and
    `DEPLOYER_SA_<ENV>` must match `make tf-output`.
 3. **`id-token: write`** permission on the workflow job. Without it GitHub
@@ -1010,15 +1016,15 @@ succeeds, and `terraform apply` dies during **refresh** with a wall of
 near-identical errors:
 
 ```text
-Error when reading or editing Resource "project \"owc-data-dev\"" with IAM Member:
-Role "roles/storage.admin" Member "serviceAccount:okw-deployer-dev@...":
-Error retrieving IAM policy for project "owc-data-dev":
+Error when reading or editing Resource "project \"owc-dpar-d\"" with IAM Member:
+Role "roles/storage.admin" Member "serviceAccount:sa-owc-dpar-d-deployer-1@...":
+Error retrieving IAM policy for project "owc-dpar-d":
 googleapi: Error 403: The caller does not have permission, forbidden
 ```
 
 ```text
 Permission 'iam.workloadIdentityPools.get' denied on resource
-'//iam.googleapis.com/projects/.../workloadIdentityPools/okw-github-dev'
+'//iam.googleapis.com/projects/.../workloadIdentityPools/wip-owc-dpar-d-github-1'
 ```
 
 **WIF is not the problem** — assuming the deployer worked. The deployer is
@@ -1075,7 +1081,7 @@ bq query --use_legacy_sql=false --project_id=$PROJECT \
 owcdata rollback THE_TABLE
 
 # Or to a specific run
-owcdata rollback THE_TABLE --run-id okw-lightcast-$ENV-abc12
+owcdata rollback THE_TABLE --run-id cr-$PREFIX-lightcast-1-abc12
 ```
 
 Equivalently by hand:
@@ -1083,7 +1089,7 @@ Equivalently by hand:
 ```bash
 bq load --replace --source_format=PARQUET \
   $PROJECT:owc_marts.THE_TABLE \
-  gs://okw-raw-$ENV/lightcast/THE_TABLE/run_id=RUN_ID/THE_TABLE.parquet
+  gs://gcs-$PREFIX-raw-1/lightcast/THE_TABLE/run_id=RUN_ID/THE_TABLE.parquet
 ```
 
 For a mistake made in the last few days, BigQuery **time travel** is even
@@ -1098,14 +1104,14 @@ bq cp -f "$PROJECT:owc_marts.THE_TABLE@-3600000" $PROJECT:owc_marts.THE_TABLE
 ### Re-run one dataset
 
 ```bash
-gcloud run jobs execute okw-lightcast-$ENV --region=$REGION --project=$PROJECT \
+gcloud run jobs execute cr-$PREFIX-lightcast-1 --region=$REGION --project=$PROJECT \
   --args="run,lightcast,--dataset,dim_area" --tasks=1 --wait
 ```
 
 ### Re-run a whole group
 
 ```bash
-gcloud run jobs execute okw-lightcast-$ENV --region=$REGION --project=$PROJECT \
+gcloud run jobs execute cr-$PREFIX-lightcast-1 --region=$REGION --project=$PROJECT \
   --args="run,lightcast,--group,monthly" --tasks=41 --wait
 ```
 
@@ -1115,8 +1121,8 @@ The originals are archived. Copy them back into the state bucket's cache and
 the scraper will reuse them:
 
 ```bash
-gcloud storage cp "gs://okw-raw-$ENV/enrollment/source_files/*" \
-  "gs://okw-enrollment-state-$ENV/data_sources/"
+gcloud storage cp "gs://gcs-$PREFIX-raw-1/enrollment/source_files/*" \
+  "gs://gcs-$PREFIX-enrollment-state-1/data_sources/"
 ```
 
 ### Force the enrollment pipeline to rebuild from scratch
@@ -1126,8 +1132,8 @@ rebuild, clear the cache — the originals stay archived in the raw bucket, so
 this is recoverable:
 
 ```bash
-gcloud storage rm "gs://okw-enrollment-state-$ENV/data_sources/**"
-gcloud run jobs execute okw-enrollment-$ENV --region=$REGION --project=$PROJECT --wait
+gcloud storage rm "gs://gcs-$PREFIX-enrollment-state-1/data_sources/**"
+gcloud run jobs execute cr-$PREFIX-enrollment-1 --region=$REGION --project=$PROJECT --wait
 ```
 
 ### Pause everything
@@ -1145,14 +1151,14 @@ That is the alert working.
 
 ```bash
 printf '%s' 'NEW_PASSWORD' | \
-  gcloud secrets versions add okw-snowflake-password-$ENV --data-file=- --project=$PROJECT
+  gcloud secrets versions add sm-$PREFIX-snowflake-password-1 --data-file=- --project=$PROJECT
 ```
 
 The job reads `version = "latest"`, so the next run picks it up. Verify before
 the next scheduled run:
 
 ```bash
-gcloud run jobs execute okw-lightcast-$ENV --region=$REGION --project=$PROJECT \
+gcloud run jobs execute cr-$PREFIX-lightcast-1 --region=$REGION --project=$PROJECT \
   --args="run,lightcast,--dataset,dim_area,--limit,10" --tasks=1 --wait
 ```
 
@@ -1162,8 +1168,8 @@ Phase 2's acceptance check, worth repeating after any IAM change:
 
 ```bash
 # The enrollment SA must NOT be able to read the Snowflake secret.
-gcloud secrets get-iam-policy okw-snowflake-password-$ENV --project=$PROJECT \
-  --format=json | grep -q "okw-enrollment-$ENV" \
+gcloud secrets get-iam-policy sm-$PREFIX-snowflake-password-1 --project=$PROJECT \
+  --format=json | grep -q "cr-$PREFIX-enrollment-1" \
   && echo "PROBLEM: enrollment can read the Snowflake secret" \
   || echo "OK: enrollment has no access to the Snowflake secret"
 
@@ -1175,7 +1181,7 @@ bq show --format=prettyjson $PROJECT:owc_marts \
 
 # ...and must have NOTHING on staging (unvalidated) or ops (manifest, snapshots).
 for ds in owc_staging owc_ops; do
-  bq show --format=prettyjson $PROJECT:$ds | grep -q "okw-powerbi-$ENV" \
+  bq show --format=prettyjson $PROJECT:$ds | grep -q "sa-$PREFIX-powerbi-1" \
     && echo "PROBLEM: PowerBI has a grant on $ds" \
     || echo "OK: PowerBI has no grant on $ds"
 done

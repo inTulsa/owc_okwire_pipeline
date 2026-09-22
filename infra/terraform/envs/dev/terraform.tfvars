@@ -16,7 +16,10 @@ region            = "us-central1"
 location          = "US"
 github_repository = "inTulsa/owc_okwire_pipeline"
 
-# Dev accepts any ref so a branch can be tested. Prod pins refs/heads/main.
+# Deliberately open. Prod pins refs/heads/prod, but dev must accept ANY ref:
+# ci.yml runs the pull-request plan as this environment's deployer, and a PR
+# head is an arbitrary ref. Pinning dev to refs/heads/dev would fail every
+# plan on every pull request.
 allowed_refs = []
 
 # A distribution list, so people join and leave without a Terraform change.

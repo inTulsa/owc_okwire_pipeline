@@ -104,7 +104,7 @@ resource "google_storage_bucket_iam_member" "deployer_state" {
 # Actions fails at REFRESH, before it changes anything:
 #
 #   projectIamAdmin missing:
-#     Error retrieving IAM policy for project "owc-data-dev":
+#     Error retrieving IAM policy for project "owc-dpar-d":
 #     googleapi: Error 403: The caller does not have permission, forbidden
 #
 #   workloadIdentityPoolAdmin missing:

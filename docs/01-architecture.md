@@ -189,7 +189,7 @@ exists to prevent. There is no third option.
 The alternative, per-user OAuth, breaks scheduled refresh the day that person
 leaves.
 
-**Decision:** one key for `okw-powerbi-{env}`, scoped to `bigquery.dataViewer`
+**Decision:** one key for `sa-<name_prefix>-powerbi-1`, scoped to `bigquery.dataViewer`
 on `owc_marts` **only** plus `bigquery.jobUser` — read-only, and nothing on
 `owc_staging` (unvalidated data) or `owc_ops` (the run manifest).
 Rotate annually.

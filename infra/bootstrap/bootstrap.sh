@@ -8,8 +8,8 @@
 # Everything else is Terraform's job. Run once per project, then never again.
 # Idempotent: safe to re-run.
 #
-#   ./infra/bootstrap/bootstrap.sh owc-data-dev
-#   ./infra/bootstrap/bootstrap.sh owc-data-prod
+#   ./infra/bootstrap/bootstrap.sh owc-dpar-d
+#   ./infra/bootstrap/bootstrap.sh owc-dpar-p
 # ---------------------------------------------------------------------------
 set -euo pipefail
 

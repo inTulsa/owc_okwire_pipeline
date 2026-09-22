@@ -210,7 +210,7 @@ intentional for a scratch environment and is exactly wrong for prod — verify
 after the first prod apply:
 
 ```bash
-gcloud monitoring policies list --project=owc-data-prod --format='value(displayName)' | wc -l
+gcloud monitoring policies list --project=owc-dpar-p --format='value(displayName)' | wc -l
 # expect 9-ish; 0 means alert_emails was empty
 ```
 
@@ -221,7 +221,7 @@ in dev.
 
 | Alert | How to trigger it |
 |---|---|
-| 1 | `gcloud run jobs execute okw-lightcast-dev --args="run,lightcast,--dataset,dim_area" --update-env-vars=SNOWFLAKE_PASSWORD=wrong` |
+| 1 | `gcloud run jobs execute cr-owc-dpar-d-lightcast-1 --args="run,lightcast,--dataset,dim_area" --update-env-vars=SNOWFLAKE_PASSWORD=wrong` |
 | 2 | Pause a scheduler and wait past the grace window — or temporarily lower `max_age_hours` to 1 and re-apply |
 | 3 | Temporarily change the scheduler's `oauth_token` to an `oidc_token` by hand. Expect a 401. Revert with `terraform apply`. |
 | 4 / 5 | Set `known_row_counts: {dim_area: 1}` in `pipelines.yml` and run `dim_area`. Confirm publish is blocked and `owc_marts.dim_area` is unchanged. |

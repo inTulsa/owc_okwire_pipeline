@@ -3,58 +3,79 @@
 ## How a change reaches production
 
 ```
-PR  → ruff, mypy, derive-check, owcdata validate, unit tests
-    → terraform fmt / validate (dev + prod), tflint
-    → terraform plan dev, posted as a PR comment
+PR -> dev   → ruff, mypy, derive-check, owcdata validate, unit tests
+            → lock-check, terraform fmt / validate (dev + prod), tflint
+            → terraform plan DEV, posted as a PR comment
       │
-main → Cloud Build, image tagged with the git SHA
-    → terraform apply dev, with the digest
-    → smoke run: lightcast --dataset dim_area --limit 1000, and enrollment
-    → STOPS HERE
+merge dev   → Cloud Build in the dev project, image tagged with the git SHA
+            → terraform apply dev, with that digest
+            → smoke run: lightcast --dataset dim_area --limit 1000, and enrollment
       │
-prod → run the workflow by hand: Actions → Deploy → Run workflow
-    → target: prod, image_digest: the digest already running in dev
-    → terraform plan + apply prod
+PR dev -> prod  → same checks, but the plan posted is the PROD plan
+      │
+merge prod  → Cloud Build in the PROD project
+            → terraform apply prod, with that digest
+            → no smoke run (see below)
 ```
 
-`dev` and `prod` are **environments, not branches**. There is no `dev` branch
-in this model — `main` is the only branch that deploys, and promotion to prod
-is a deliberate manual step.
+**Branch is the environment.** `dev` deploys to the dev project, `prod`
+deploys to the prod project, and the two projects never touch each other.
+Promotion is a pull request from `dev` into `prod`, so the thing being
+promoted is a reviewable diff and the prod plan is attached to it.
 
-One image is built and that **exact digest** is what you promote. Nothing is
-rebuilt between dev and prod, so what was smoke-tested is what ships.
+`dev` is the default branch: GitHub bases new PRs on the default, so the safe
+target is automatic and reaching production is a deliberate act of changing
+the base.
 
-### Why prod is manual rather than an approval gate
+### Why not build once and promote the digest
 
-The obvious design is required reviewers on the `prod` GitHub environment.
-That protection rule needs a **paid plan on a private repo** — GitHub returns
+The obvious alternative is to build a single image and promote that exact
+digest, which guarantees prod runs the bytes dev tested. It was the original
+design here, and it was dropped for one reason: the only way to make it work
+across two projects is for prod to pull its runtime image from **dev's**
+Artifact Registry. That puts production's image inside the environment people
+feel free to break, and it means anyone who can push to dev controls what
+prod runs. Every other boundary in this repo is drawn to prevent exactly that.
+
+Rebuilding per branch keeps the projects independent, at the cost of needing
+the build to be reproducible — otherwise "same commit" would not mean "same
+image". Two pins buy that back:
+
+- `docker/Dockerfile` pins the base image by **digest**, not the
+  `python:3.12-slim-bookworm` tag, which moves whenever upstream rebuilds.
+- Dependencies install from a fully pinned `requirements.txt` (194
+  transitive pins), not from `pyproject.toml`'s version ranges.
+
+Those two lines are what make this model safe. `make lock-check` runs in CI
+so the pins cannot silently drift from `pyproject.toml`, and
+`make base-digest` reports when upstream has moved so refreshing the base is
+a deliberate commit rather than something that happens to you.
+
+This matters more than it looks. `xlrd` is the only reader for the pre-2019
+`.xls` workbooks still linked on oklahoma.gov — losing or changing it in a
+rebuild drops the oldest fiscal years *silently*, because the scrape still
+succeeds with fewer years.
+
+### The gate on production
+
+Merging into `prod` is the gate, and it has teeth beyond repo settings:
+`allowed_refs = ["refs/heads/prod"]` on the prod WIF provider means a token
+minted from any other branch is rejected by **GCP**, not just by GitHub.
+
+Required reviewers on the `prod` GitHub environment would add a second gate,
+but that protection rule needs a paid plan on a private repo — GitHub returns
 `422 Please ensure the billing plan supports the required reviewers
-protection rule`.
-
-The trap is what happens when you cannot create it: **the environment still
-exists and the job still runs.** It gates nothing, silently. So a push to
-`main` would go straight to production.
-
-Running the workflow by hand is the gate instead. It is explicit, it records
-who did it, and it costs nothing. It also means the promotion and the
-rollback are the same operation — both are "run Deploy with a digest".
-
-To promote what dev is currently running:
-
-```bash
-IMAGE=$(make -s image-digest ENV=dev)
-gh workflow run deploy.yml -f target=prod -f image_digest="$IMAGE"
-```
-
-**If you later upgrade the plan:** add required reviewers to the `prod`
-environment and move `deploy-prod` back onto the push trigger by changing its
-`if:` condition. Nothing else needs to change.
+protection rule`. The trap is what happens when it cannot be created: the
+environment still exists and the job still runs, gating nothing, silently. So
+do not rely on it. Protect the `prod` branch instead — require a pull request
+and at least one approval — which is free and is enforced before the workflow
+ever starts.
 
 ## Setting up GitHub Actions
 
 **The workflows themselves need no creating** — `.github/workflows/ci.yml`
 and `deploy.yml` are committed and run as soon as the repo has what they
-need. That is seven repository variables and two environments.
+need. That is nine repository variables and two environments.
 
 Nothing here is required to deploy by hand; see
 [Deploying by hand](#deploying-by-hand). Do it when you want Actions to
@@ -97,8 +118,11 @@ Verify what landed:
 gh variable list
 ```
 
-Seven in total. Until the `_PROD` three exist, the prod deploy job fails at
-its auth step — expected, and it affects nothing you deploy by hand.
+Nine in total: `REGION`, plus `PROJECT_ID_`, `NAME_PREFIX_`,
+`WIF_PROVIDER_` and `DEPLOYER_SA_` for each of `DEV` and `PROD`. Until the
+four `_PROD` ones exist, a push to `prod` stops at the "check prod is
+configured" step and names exactly which are missing — expected, and it
+affects nothing you deploy by hand.
 
 ### 2. Environments
 
@@ -107,23 +131,36 @@ its auth step — expected, and it affects nothing you deploy by hand.
 | Environment | Configure |
 |---|---|
 | `dev` | Nothing. It exists so the dev apply shows as a deployment. |
-| `prod` | **Required reviewers** — add whoever approves production changes |
-
-That reviewer prompt **is** the manual approval gate in the pipeline. There is
-no workflow input for it and no way to skip it from the workflow file, which
-is the point: the gate lives in repo settings where a workflow edit cannot
-remove it silently.
+| `prod` | Nothing required. Add **required reviewers** if your plan supports it — a second gate, not the only one. |
 
 ```bash
 gh api -X PUT "repos/{owner}/{repo}/environments/dev"
-gh api -X PUT "repos/{owner}/{repo}/environments/prod" \
-  -F "reviewers[][type]=User" -F "reviewers[][id]=$(gh api user -q .id)"
+gh api -X PUT "repos/{owner}/{repo}/environments/prod"
 ```
+
+The real gate is **branch protection on `prod`**, because it is enforced
+before the workflow starts and it is free:
+
+```bash
+gh api -X PUT "repos/{owner}/{repo}/branches/prod/protection" \
+  --input - <<'JSON'
+{
+  "required_pull_request_reviews": {"required_approving_review_count": 1},
+  "required_status_checks": null,
+  "enforce_admins": false,
+  "restrictions": null
+}
+JSON
+```
+
+Backed by `allowed_refs = ["refs/heads/prod"]` in Terraform, so even a token
+minted from another branch is refused by GCP.
 
 ### 3. Check the WIF condition allows the ref
 
-Prod pins `allowed_refs = ["refs/heads/main"]`, so only `main` can deploy
-there. A branch or a fork's pull request cannot. Confirm what is allowed:
+Prod pins `allowed_refs = ["refs/heads/prod"]`, so only the `prod` branch can
+deploy there. A branch or a fork's pull request cannot. Confirm what is
+allowed:
 
 ```bash
 make tf-output ENV=prod NAME=wif_attribute_condition
@@ -131,22 +168,25 @@ make tf-output ENV=prod NAME=wif_attribute_condition
 
 ### 4. Verify
 
-Open a pull request. `ci.yml` should run lint, types, tests, `terraform
-validate` for both envs, and post a dev plan as a PR comment. If the auth
-step fails, start at
+Open a pull request against `dev`. `ci.yml` should run lint, types, tests,
+`lock-check`, `terraform validate` for both envs, and post the **dev** plan
+as a PR comment. If the auth step fails, start at
 [the runbook's WIF section](02-runbook.md#github-actions-deploys-fail-to-authenticate-via-wif).
 
-Merging to `main` then runs `deploy.yml`: build → apply dev → smoke both
-pipelines → **wait for approval** → apply prod.
+Merging it runs `deploy.yml`: build in the dev project → apply dev → smoke
+both pipelines.
+
+Then open a pull request from `dev` into `prod`. The same checks run, but the
+plan posted is the **prod** plan — review that, and merging deploys prod.
 
 ## The build identity
 
-Builds run as `okw-build-<env>`, not as the Compute Engine default service
+Builds run as `sa-<name_prefix>-build-1`, not as the Compute Engine default service
 account. The default carries project **Editor**, and submitting a build
 requires `actAs` on whatever identity it runs as — so using the default would
 hand the deployer `actAs` on an Editor-privileged account.
 
-`okw-build-<env>` has three grants and nothing else: `logging.logWriter`
+That identity has three grants and nothing else: `logging.logWriter`
 (required for a build with its own service account),
 `storage.objectViewer` to read the uploaded source, and
 `artifactregistry.writer` to push the image.
@@ -197,28 +237,34 @@ sets the image explicitly for the same reason.
 
 ### The application
 
-Re-run the deploy workflow with an older digest — no rebuild, no revert
-needed:
+Revert the commit on the branch and push. The branch is the environment, so
+this is the whole procedure:
 
 ```bash
-gh workflow run deploy.yml \
-  -f image_digest=us-central1-docker.pkg.dev/owc-data-prod/okw-images/owcdata@sha256:OLDER
+git checkout prod
+git revert <commit>
+git push
 ```
 
-Or immediately, without waiting for CI:
+That rebuilds and redeploys the previous source. For an outage where a
+rebuild is too slow, pin an older digest directly and revert afterwards:
 
 ```bash
-gcloud run jobs update okw-lightcast-prod \
-  --image us-central1-docker.pkg.dev/owc-data-prod/okw-images/owcdata@sha256:OLDER \
-  --region us-central1 --project owc-data-prod
+gcloud run jobs update cr-<name_prefix>-lightcast-1 \
+  --image <REGION>-docker.pkg.dev/<PROJECT>/ar-<name_prefix>-images-1/owcdata@sha256:OLDER \
+  --region us-central1 --project <PROJECT>
 ```
+
+The job's image is in `lifecycle.ignore_changes`, so the next unrelated
+`terraform apply` will not revert that pin — but the next deploy of this
+branch will, which is why the revert still needs to happen.
 
 To find a previous digest:
 
 ```bash
 gcloud artifacts docker images list \
-  us-central1-docker.pkg.dev/owc-data-prod/okw-images/owcdata \
-  --include-tags --sort-by=~CREATE_TIME --limit=10 --project owc-data-prod
+  us-central1-docker.pkg.dev/owc-dpar-p/ar-owc-dpar-p-images-1/owcdata \
+  --include-tags --sort-by=~CREATE_TIME --limit=10 --project owc-dpar-p
 ```
 
 ### A published table
@@ -239,25 +285,26 @@ See [ADR-010](01-architecture.md#adr-010-rollback-from-the-gcs-parquet-not-a-big
 git revert <commit> && git push
 ```
 
-The `main` push re-applies. For something urgent, apply the reverted config
+The push to that branch re-applies. For something urgent, apply the reverted config
 directly from a local checkout.
 
 ## Promoting dev → prod
 
+Open a pull request from `dev` into `prod`:
+
 ```bash
-IMAGE=$(make -s image-digest ENV=dev)
-gh workflow run deploy.yml -f target=prod -f image_digest="$IMAGE"
+gh pr create --base prod --head dev \
+  --title "promote dev to prod" \
+  --body "Deploying $(git rev-parse --short dev) to production."
 ```
 
-Passing dev's digest is what makes this a *promotion* rather than a fresh
-build: the artifact that ships is the one dev smoke-tested. Omitting it
-builds from the current commit instead, which is occasionally what you want
-and usually not.
+CI posts the **prod** plan on that PR — that plan is the thing to review.
+Merging it builds in the prod project and applies.
 
 Before promoting, confirm dev is actually healthy rather than merely applied:
 
 ```bash
-bq query --use_legacy_sql=false --project_id=owc-data-dev \
+bq query --use_legacy_sql=false --project_id=owc-dpar-d \
 'SELECT pipeline, dataset, status, row_count, finished_at
  FROM `owc_ops.pipeline_runs`
  WHERE started_at > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 HOUR)

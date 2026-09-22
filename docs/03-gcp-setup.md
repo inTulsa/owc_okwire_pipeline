@@ -5,7 +5,7 @@ One-time bootstrap per environment. About 30 minutes.
 ## What you need first
 
 - A GCP project with billing linked, one per environment
-  (`owc-data-dev`, `owc-data-prod`)
+  (`owc-dpar-d`, `owc-dpar-p`)
 - `roles/owner` on it, or enough to create service accounts and set IAM
 - `gcloud` and `terraform` locally
 - The Snowflake reader-account password
@@ -20,8 +20,8 @@ other is the most common way this setup fails on a fresh machine:
 ```bash
 gcloud auth login                                    # the gcloud CLI itself
 gcloud auth application-default login                # what TERRAFORM uses
-gcloud config set project owc-data-dev
-gcloud auth application-default set-quota-project owc-data-dev
+gcloud config set project owc-dpar-d
+gcloud auth application-default set-quota-project owc-dpar-d
 ```
 
 The quota project matters more than it looks. Terraform's GCS backend bills
@@ -35,11 +35,11 @@ Credentials; if that project is deleted or inactive, **every** call returns
 ## 1. Bootstrap the two things Terraform cannot create
 
 ```bash
-./infra/bootstrap/bootstrap.sh owc-data-dev
+./infra/bootstrap/bootstrap.sh owc-dpar-d
 ```
 
 This enables `cloudresourcemanager.googleapis.com` and
-`serviceusage.googleapis.com`, creates `gs://okw-tfstate`, and then **verifies
+`serviceusage.googleapis.com`, creates `gs://gcs-owc-dpar-d-tfstate-1`, and then **verifies
 that Terraform's own credentials can read that bucket** — running the exact
 `objects.list` call the GCS backend makes, including the quota-project header.
 If it cannot, the script stops with the specific fix rather than letting
@@ -61,7 +61,7 @@ $EDITOR infra/terraform/envs/dev/terraform.tfvars
 |---|---|
 | `project_id` | This environment's project |
 | `github_repository` | `owner/repo`, exactly. **Validated — no wildcards.** See step 6. |
-| `allowed_refs` | `[]` for dev; `["refs/heads/main"]` for prod |
+| `allowed_refs` | `[]` for dev (CI plans PRs as the dev deployer, from arbitrary refs); `["refs/heads/prod"]` for prod |
 | `alert_emails` | The distribution list |
 | `snowflake_user` | The login. Not a secret; the password goes to Secret Manager. |
 | `billing_account` | Only needed if you want the budget alert. Off by default in both envs (`billing_budget_amount = 0`) — see below before turning it on. |
@@ -73,7 +73,7 @@ $EDITOR infra/terraform/envs/dev/terraform.tfvars
 >
 > ```bash
 > gcloud billing accounts add-iam-policy-binding <ACCOUNT_ID> \
->   --member=serviceAccount:okw-deployer-<env>@<project>.iam.gserviceaccount.com \
+>   --member=serviceAccount:sa-<name_prefix>-deployer-1@<project>.iam.gserviceaccount.com \
 >   --role=roles/billing.costsManager
 > ```
 >
@@ -89,7 +89,7 @@ repository that `make build` pushes to, so on a brand-new project the build
 has nowhere to push and fails with:
 
 ```
-name unknown: Repository "okw-images" not found
+name unknown: Repository "ar-$PREFIX-images-1" not found
 ```
 
 ```bash
@@ -119,11 +119,11 @@ excludes. **No Cloud Run job is created by this step.**
 ### Store the Snowflake password now
 
 Do this **before** step 5, not after. The lightcast Cloud Run job mounts
-`SNOWFLAKE_PASSWORD` from `okw-snowflake-password-dev/versions/latest`, and
+`SNOWFLAKE_PASSWORD` from `sm-owc-dpar-d-snowflake-password-1/versions/latest`, and
 `latest` cannot resolve to nothing — with no version, job creation fails with:
 
 ```
-Secret projects/.../secrets/okw-snowflake-password-dev/versions/latest was not found
+Secret projects/.../secrets/sm-owc-dpar-d-snowflake-password-1/versions/latest was not found
 ```
 
 Terraform creates the container but never the value, deliberately, so the
@@ -131,7 +131,7 @@ password stays out of Terraform state:
 
 ```bash
 printf '%s' 'THE_PASSWORD' | \
-  gcloud secrets versions add okw-snowflake-password-dev --data-file=- --project owc-data-dev
+  gcloud secrets versions add sm-owc-dpar-d-snowflake-password-1 --data-file=- --project owc-dpar-d
 ```
 
 `make tf-apply` preflights this and refuses to start if the version is
@@ -172,7 +172,7 @@ Cloud Run jobs and the schedulers:
 
 ```bash
 IMAGE=$(make -s image-digest ENV=dev)
-echo "$IMAGE"   # us-central1-docker.pkg.dev/owc-data-dev/okw-images/owcdata@sha256:...
+echo "$IMAGE"   # us-central1-docker.pkg.dev/owc-dpar-d/ar-$PREFIX-images-1/owcdata@sha256:...
 
 make tf-apply ENV=dev TF_ARGS="-var=image_digest=$IMAGE"
 ```
@@ -264,8 +264,10 @@ project.** It is the most common WIF misconfiguration and a full compromise.
 The module's variable validation refuses an empty or wildcard value, and this
 output exists specifically so the condition is visible in every plan diff.
 
-For prod, also set `allowed_refs = ["refs/heads/main"]`. That stops a branch —
-or a fork's pull request — from deploying.
+For prod, also set `allowed_refs = ["refs/heads/prod"]`. Branch is the
+environment here, so that single line is what stops any branch other than
+`prod` — or a fork's pull request — from deploying to production, enforced by
+GCP rather than by repo settings.
 
 ### Confirm the deployer can actually deploy
 
@@ -274,7 +276,7 @@ about what that account is allowed to do once assumed — and those are the two
 things it is easy to conflate.
 
 Everything you have run so far went through **your** credentials. GitHub
-Actions runs the identical Terraform as `okw-deployer-<env>`, so "the apply
+Actions runs the identical Terraform as `sa-<name_prefix>-deployer-1`, so "the apply
 worked on my laptop" is not evidence that CI can run it:
 
 ```bash
@@ -282,7 +284,7 @@ make deployer-check ENV=dev
 ```
 
 ```text
->> deployer-check OK: okw-deployer-dev@owc-data-dev.iam.gserviceaccount.com has all 14 project roles
+>> deployer-check OK: sa-owc-dpar-d-deployer-1@owc-dpar-d.iam.gserviceaccount.com has all 14 project roles
 ```
 
 The roles are granted by the step 5 apply, so a pass here usually means only
@@ -294,7 +296,7 @@ are two more permissions on top of that, and without them a CI run dies during
 granted rather than the role that is missing:
 
 ```text
-Error retrieving IAM policy for project "owc-data-dev":
+Error retrieving IAM policy for project "owc-dpar-d":
 googleapi: Error 403: The caller does not have permission, forbidden
 ```
 
@@ -329,24 +331,24 @@ Each pipeline has its own service account, and every grant is scoped to a
 specific resource. Confirm the separation is real:
 
 ```bash
-ENV=dev PROJECT=owc-data-dev
+ENV=dev PROJECT=owc-dpar-d
 
 # The enrollment SA must NOT be able to read the Snowflake secret.
-gcloud secrets get-iam-policy okw-snowflake-password-$ENV --project=$PROJECT --format=json \
-  | grep -q "okw-enrollment-$ENV" \
+gcloud secrets get-iam-policy sm-$PREFIX-snowflake-password-1 --project=$PROJECT --format=json \
+  | grep -q "cr-$PREFIX-enrollment-1" \
   && echo "PROBLEM: enrollment can read the Snowflake secret" \
   || echo "OK: enrollment has no secret access"
 
 # The lightcast SA must NOT be able to write the scrape cache.
-gcloud storage buckets get-iam-policy gs://okw-enrollment-state-$ENV --format=json \
-  | grep -q "okw-lightcast-$ENV" \
+gcloud storage buckets get-iam-policy gs://gcs-$PREFIX-enrollment-state-1 --format=json \
+  | grep -q "cr-$PREFIX-lightcast-1" \
   && echo "PROBLEM: lightcast can write the scrape cache" \
   || echo "OK: lightcast has no access to the enrollment state bucket"
 
 # PowerBI reads owc_marts and NOTHING else — not staging (unvalidated data),
 # not ops (the run manifest).
 for ds in owc_staging owc_ops; do
-  bq show --format=prettyjson $PROJECT:$ds | grep -q "okw-powerbi-$ENV" \
+  bq show --format=prettyjson $PROJECT:$ds | grep -q "sa-$PREFIX-powerbi-1" \
     && echo "PROBLEM: PowerBI has a grant on $ds" \
     || echo "OK: PowerBI has no grant on $ds"
 done
@@ -379,11 +381,11 @@ between.
 
 ```bash
 gcloud run jobs execute $(make -s tf-output ENV=dev NAME=lightcast_job) \
-  --region us-central1 --project owc-data-dev \
+  --region us-central1 --project owc-dpar-d \
   --args="run,lightcast,--dataset,dim_area" --tasks=1 --wait
 
 gcloud run jobs execute $(make -s tf-output ENV=dev NAME=enrollment_job) \
-  --region us-central1 --project owc-data-dev --wait
+  --region us-central1 --project owc-dpar-d --wait
 ```
 
 `make tf-output ENV=dev` with no `NAME` lists everything, including the job
@@ -410,7 +412,7 @@ become the baseline the next real run is compared against.
 Confirm it succeeded from the manifest rather than from marts:
 
 ```bash
-bq query --project_id=owc-data-dev --use_legacy_sql=false \
+bq query --project_id=owc-dpar-d --use_legacy_sql=false \
 'SELECT pipeline, dataset, status, row_count, duration_seconds
  FROM `owc_ops.pipeline_runs` ORDER BY started_at DESC LIMIT 5'
 ```
@@ -421,22 +423,22 @@ To exercise snapshot → table copy, run one **small dimension with no limit**.
 `dim_area` is 78 rows, so this is cheap:
 
 ```bash
-gcloud run jobs execute okw-lightcast-dev --region us-central1 \
-  --project owc-data-dev --args="run,lightcast,--dataset,dim_area" \
+gcloud run jobs execute cr-owc-dpar-d-lightcast-1 --region us-central1 \
+  --project owc-dpar-d --args="run,lightcast,--dataset,dim_area" \
   --tasks=1 --wait
 ```
 
 Then check all three landed:
 
 ```bash
-bq ls --project_id=owc-data-dev owc_marts   # dim_area TABLE
-bq ls --project_id=owc-data-dev owc_ops     # a dim_area__<run_id> snapshot
+bq ls --project_id=owc-dpar-d owc_marts   # dim_area TABLE
+bq ls --project_id=owc-dpar-d owc_ops     # a dim_area__<run_id> snapshot
 ```
 
 Then confirm the manifest recorded both:
 
 ```bash
-bq query --use_legacy_sql=false --project_id=owc-data-dev \
+bq query --use_legacy_sql=false --project_id=owc-dpar-d \
 'SELECT pipeline, dataset, status, row_count FROM `owc_ops.pipeline_runs` ORDER BY started_at DESC LIMIT 10'
 ```
 
@@ -453,9 +455,10 @@ not a quota.
 
 Same steps with `ENV=prod`, plus:
 
-- `allowed_refs = ["refs/heads/main"]`
-- Prod deploys are **manual only** (`Actions → Deploy → Run workflow`), not
-  gated by required reviewers — that protection rule needs a paid GitHub plan
-  on a private repo, and without it the environment exists but gates nothing.
-  See [`04-deployment.md`](04-deployment.md#why-prod-is-manual-rather-than-an-approval-gate).
+- `allowed_refs = ["refs/heads/prod"]`
+- Prod deploys when the `prod` branch is pushed, which in practice means
+  merging a pull request from `dev`. Protect the `prod` branch to require
+  that review — required reviewers on the GitHub *environment* needs a paid
+  plan on a private repo, and without it the environment exists but gates
+  nothing. See [`04-deployment.md`](04-deployment.md#the-gate-on-production).
 - Leave `raw_bucket_force_destroy = false`.

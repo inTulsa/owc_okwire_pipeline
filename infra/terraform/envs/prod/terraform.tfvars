@@ -9,10 +9,13 @@ region            = "us-central1"
 location          = "US"
 github_repository = "inTulsa/owc_okwire_pipeline"
 
-# Prod pins the ref: only main can deploy. Combined with the repository
-# condition in the WIF provider, this is what stops any other repo — or any
-# branch in this one — from minting tokens for this project.
-allowed_refs = ["refs/heads/main"]
+# Prod pins the ref: only the prod branch can deploy here. Combined with the
+# repository condition in the WIF provider, this is what stops any other
+# repo — or any branch in this one — from minting tokens for this project.
+#
+# Branch == environment, so this is also the teeth behind the promotion gate:
+# reaching prod requires a merge into `prod`, which is a reviewable PR.
+allowed_refs = ["refs/heads/prod"]
 
 alert_emails = ["owc-data-alerts@tulsaforyou.com"]
 
@@ -20,7 +23,7 @@ snowflake_user = "REPLACE_ME@tulsaforyou.com"
 
 # Required, supplied by the deploy workflow with the digest it just promoted
 # from dev. No default on purpose.
-# image_digest = "us-central1-docker.pkg.dev/owc-data-prod/okw-images/owcdata@sha256:..."
+# image_digest = "us-central1-docker.pkg.dev/owc-dpar-p/ar-owc-dpar-p-images-1/owcdata@sha256:..."
 
 # 0 disables the budget resource entirely (modules/platform/monitoring.tf
 # gates it on amount > 0 AND a billing account).
@@ -33,7 +36,7 @@ snowflake_user = "REPLACE_ME@tulsaforyou.com"
 #
 # To enable it later: set an amount, uncomment billing_account, and grant
 #   gcloud billing accounts add-iam-policy-binding <ACCOUNT_ID> \
-#     --member=serviceAccount:okw-deployer-prod@owc-data-prod.iam.gserviceaccount.com \
+#     --member=serviceAccount:sa-owc-dpar-p-deployer-1@owc-dpar-p.iam.gserviceaccount.com \
 #     --role=roles/billing.costsManager
 billing_budget_amount = 0
 # billing_account     = "0X0X0X-0X0X0X-0X0X0X"

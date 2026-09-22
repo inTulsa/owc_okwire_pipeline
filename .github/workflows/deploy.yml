@@ -1,219 +1,179 @@
 name: Deploy
 
+# ---------------------------------------------------------------------------
+# Branch IS the environment. `dev` deploys to the dev project, `prod` deploys
+# to the prod project, and neither project can reach the other.
+#
+# The earlier design built once on main and promoted that exact digest into
+# prod. It guaranteed prod ran the bytes dev tested, but it only worked by
+# having prod pull from DEV's Artifact Registry — a cross-project dependency
+# that put production's runtime image inside the environment people feel free
+# to break. Promotion is a pull request from dev to prod instead: the diff is
+# reviewable, and the two projects stay genuinely independent.
+#
+# The cost of rebuilding rather than promoting is that "same commit" only
+# means "same image" if the build is reproducible, so docker/Dockerfile pins
+# the base image by digest and installs from a fully pinned requirements.txt.
+# Those two pins are what make this model safe; do not loosen them.
+# ---------------------------------------------------------------------------
 on:
   push:
-    branches: [main]
+    branches: [dev, prod]
   workflow_dispatch:
-    inputs:
-      target:
-        description: "Which environment to deploy"
-        required: true
-        type: choice
-        options: [dev, prod]
-        default: dev
-      image_digest:
-        description: "Existing digest to promote (skips the build). Use to roll back, or to promote the digest already running in dev."
-        required: false
-        type: string
 
 permissions:
   contents: read
   id-token: write
 
+# Per environment, so a dev deploy never queues behind a prod one.
 concurrency:
-  group: deploy
+  group: deploy-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Build once, deploy that exact digest everywhere. Terraform pins by digest,
-  # so a rollback is `workflow_dispatch` with an older digest — or a revert.
-  # ---------------------------------------------------------------------------
-  build:
-    name: build image
+  deploy:
+    name: build + deploy ${{ github.ref_name }}
     runs-on: ubuntu-latest
-    outputs:
-      digest: ${{ steps.out.outputs.digest }}
+    environment: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ vars.WIF_PROVIDER_DEV }}
-          service_account: ${{ vars.DEPLOYER_SA_DEV }}
-
-      - uses: google-github-actions/setup-gcloud@v2
-
-      - name: reuse an existing digest
-        id: existing
-        if: inputs.image_digest != ''
-        run: echo "digest=${{ inputs.image_digest }}" >> "$GITHUB_OUTPUT"
-
-      - name: Cloud Build
-        id: built
-        if: inputs.image_digest == ''
+      # One job serves both environments by looking its settings up in the
+      # `vars` context by name, rather than duplicating the whole job behind
+      # two `if:` conditions that would then drift apart.
+      - name: resolve environment
+        id: env
         run: |
           set -euo pipefail
-          SHA=$(git rev-parse --short HEAD)
-          # _TAG, not the built-in SHORT_SHA: built-ins are only populated for
-          # trigger-started builds. And no _ENV — every substitution passed
-          # here must be referenced in cloudbuild.yaml or the build fails.
-          gcloud builds submit \
-            --config docker/cloudbuild.yaml \
-            --substitutions="_TAG=${SHA},_REGION=${{ vars.REGION }},_REPOSITORY=ar-${{ vars.NAME_PREFIX_DEV }}-images-1,_BUILD_SA=sa-${{ vars.NAME_PREFIX_DEV }}-build-1@${{ vars.PROJECT_ID_DEV }}.iam.gserviceaccount.com" \
-            --project "${{ vars.PROJECT_ID_DEV }}" \
-            .
-          IMAGE="${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID_DEV }}/ar-${{ vars.NAME_PREFIX_DEV }}-images-1/owcdata"
-          DIGEST=$(gcloud artifacts docker images describe "${IMAGE}:${SHA}" \
-            --format='value(image_summary.digest)' --project "${{ vars.PROJECT_ID_DEV }}")
-          echo "digest=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
+          ENV="${{ github.ref_name }}"
+          case "$ENV" in
+            dev|prod) ;;
+            *) echo "::error::Deploy only runs on dev or prod, not '$ENV'."; exit 1 ;;
+          esac
+          UP=$(echo "$ENV" | tr a-z A-Z)
+          echo "env=$ENV"   >> "$GITHUB_OUTPUT"
+          echo "upper=$UP"  >> "$GITHUB_OUTPUT"
 
-      - id: out
+      # Fail with a sentence rather than an opaque auth error further down.
+      - name: check ${{ steps.env.outputs.env }} is configured
+        env:
+          WIF: ${{ vars[format('WIF_PROVIDER_{0}', steps.env.outputs.upper)] }}
+          SA: ${{ vars[format('DEPLOYER_SA_{0}', steps.env.outputs.upper)] }}
+          PROJECT: ${{ vars[format('PROJECT_ID_{0}', steps.env.outputs.upper)] }}
+          PREFIX: ${{ vars[format('NAME_PREFIX_{0}', steps.env.outputs.upper)] }}
         run: |
-          D="${{ steps.existing.outputs.digest || steps.built.outputs.digest }}"
-          test -n "$D" || { echo "::error::no image digest resolved"; exit 1; }
-          echo "digest=$D" >> "$GITHUB_OUTPUT"
-          echo "Deploying $D"
-
-  # ---------------------------------------------------------------------------
-  # dev: apply, then actually run both pipelines row-limited. An apply that
-  # succeeds proves Terraform is happy; only a run proves the image works.
-  # ---------------------------------------------------------------------------
-  deploy-dev:
-    name: apply + smoke dev
-    needs: build
-    runs-on: ubuntu-latest
-    environment: dev
-    if: github.event_name == 'push' || inputs.target == 'dev' 
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ vars.WIF_PROVIDER_DEV }}
-          service_account: ${{ vars.DEPLOYER_SA_DEV }}
-
-      - uses: google-github-actions/setup-gcloud@v2
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.13.4
-
-      - name: apply
-        working-directory: infra/terraform/envs/dev
-        run: |
-          terraform init
-          terraform apply -auto-approve \
-            -var="image_digest=${{ needs.build.outputs.digest }}"
-
-      # The image digest is in lifecycle.ignore_changes on the job, so it is
-      # set here explicitly rather than by the apply above. That keeps a
-      # manual `gcloud run jobs execute` during an incident from being
-      # reverted by the next unrelated apply.
-      - name: point both jobs at the new digest
-        run: |
-          set -euo pipefail
-          for job in cr-${{ vars.NAME_PREFIX_DEV }}-lightcast-1 cr-${{ vars.NAME_PREFIX_DEV }}-enrollment-1; do
-            gcloud run jobs update "$job" \
-              --image "${{ needs.build.outputs.digest }}" \
-              --region "${{ vars.REGION }}" \
-              --project "${{ vars.PROJECT_ID_DEV }}"
-          done
-
-      - name: smoke — lightcast, one small dataset, row limited
-        run: |
-          set -euo pipefail
-          gcloud run jobs execute cr-${{ vars.NAME_PREFIX_DEV }}-lightcast-1 \
-            --region "${{ vars.REGION }}" --project "${{ vars.PROJECT_ID_DEV }}" \
-            --tasks 1 --task-timeout 600s --wait \
-            --args="run,lightcast,--dataset,dim_area,--limit,1000"
-
-      - name: smoke — enrollment
-        run: |
-          set -euo pipefail
-          # Expected to short-circuit on the cache in most months, which is a
-          # success. A non-zero exit here means something real broke.
-          gcloud run jobs execute cr-${{ vars.NAME_PREFIX_DEV }}-enrollment-1 \
-            --region "${{ vars.REGION }}" --project "${{ vars.PROJECT_ID_DEV }}" \
-            --wait
-
-  # ---------------------------------------------------------------------------
-  # prod: gated on a GitHub environment with required reviewers.
-  # ---------------------------------------------------------------------------
-  # ---------------------------------------------------------------------------
-  # prod is MANUAL ONLY. A push to main never reaches it.
-  #
-  # The original design gated this with required reviewers on the `prod`
-  # GitHub environment. That protection rule needs a paid plan on a private
-  # repo — GitHub returns 422 without one — and, importantly, the environment
-  # still exists and the job still RUNS when the rule cannot be created. So
-  # relying on it here would have meant every push to main deploying straight
-  # to prod with no gate at all.
-  #
-  # Running the workflow by hand is the gate instead: it is explicit, it
-  # records who did it, and it costs nothing. If the plan is ever upgraded,
-  # add required reviewers to the `prod` environment and this job can move
-  # back onto the push trigger.
-  # ---------------------------------------------------------------------------
-  deploy-prod:
-    name: apply prod (manual)
-    needs: build
-    runs-on: ubuntu-latest
-    environment: prod
-    if: github.event_name == 'workflow_dispatch' && inputs.target == 'prod' 
-    steps:
-      - uses: actions/checkout@v4
-
-      # Fail with a sentence rather than an opaque auth error.
-      - name: check prod is configured
-        run: |
+          UP="${{ steps.env.outputs.upper }}"
           missing=""
-          [ -n "${{ vars.WIF_PROVIDER_PROD }}" ] || missing="$missing WIF_PROVIDER_PROD"
-          [ -n "${{ vars.DEPLOYER_SA_PROD }}"  ] || missing="$missing DEPLOYER_SA_PROD"
-          [ -n "${{ vars.PROJECT_ID_PROD }}"   ] || missing="$missing PROJECT_ID_PROD"
-          [ -n "${{ vars.NAME_PREFIX_PROD }}" ] || missing="$missing NAME_PREFIX_PROD"
+          [ -n "$WIF" ]     || missing="$missing WIF_PROVIDER_$UP"
+          [ -n "$SA" ]      || missing="$missing DEPLOYER_SA_$UP"
+          [ -n "$PROJECT" ] || missing="$missing PROJECT_ID_$UP"
+          [ -n "$PREFIX" ]  || missing="$missing NAME_PREFIX_$UP"
           if [ -n "$missing" ]; then
-            echo "::error::prod is not set up yet. Missing repository variables:$missing"
-            echo "Bootstrap the prod project, then: make gh-vars ENV=prod"
+            echo "::error::${{ steps.env.outputs.env }} is not set up yet. Missing repository variables:$missing"
+            echo "Bootstrap the project, then: make gh-vars ENV=${{ steps.env.outputs.env }}"
             echo "See docs/04-deployment.md#setting-up-github-actions"
             exit 1
           fi
 
       - uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ vars.WIF_PROVIDER_PROD }}
-          service_account: ${{ vars.DEPLOYER_SA_PROD }}
+          workload_identity_provider: ${{ vars[format('WIF_PROVIDER_{0}', steps.env.outputs.upper)] }}
+          service_account: ${{ vars[format('DEPLOYER_SA_{0}', steps.env.outputs.upper)] }}
 
       - uses: google-github-actions/setup-gcloud@v2
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.13.4
 
-      - name: plan
-        working-directory: infra/terraform/envs/prod
-        run: |
-          terraform init
-          terraform plan -out=tfplan \
-            -var="image_digest=${{ needs.build.outputs.digest }}"
-
-      - name: apply
-        working-directory: infra/terraform/envs/prod
-        run: terraform apply -auto-approve tfplan
-
-      - name: point both jobs at the new digest
+      - name: Cloud Build
+        id: build
+        env:
+          PROJECT: ${{ vars[format('PROJECT_ID_{0}', steps.env.outputs.upper)] }}
+          PREFIX: ${{ vars[format('NAME_PREFIX_{0}', steps.env.outputs.upper)] }}
+          REGION: ${{ vars.REGION }}
         run: |
           set -euo pipefail
-          for job in cr-${{ vars.NAME_PREFIX_PROD }}-lightcast-1 cr-${{ vars.NAME_PREFIX_PROD }}-enrollment-1; do
+          SHA=$(git rev-parse --short HEAD)
+          # _TAG, not the built-in SHORT_SHA: built-ins are only populated for
+          # trigger-started builds. Every substitution passed here must be
+          # referenced in cloudbuild.yaml or the build fails.
+          gcloud builds submit \
+            --config docker/cloudbuild.yaml \
+            --substitutions="_TAG=${SHA},_REGION=${REGION},_REPOSITORY=ar-${PREFIX}-images-1,_BUILD_SA=sa-${PREFIX}-build-1@${PROJECT}.iam.gserviceaccount.com" \
+            --project "${PROJECT}" \
+            .
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/ar-${PREFIX}-images-1/owcdata"
+          DIGEST=$(gcloud artifacts docker images describe "${IMAGE}:${SHA}" \
+            --format='value(image_summary.digest)' --project "${PROJECT}")
+          echo "digest=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Built ${IMAGE}@${DIGEST}"
+
+      - name: apply
+        working-directory: infra/terraform/envs/${{ steps.env.outputs.env }}
+        run: |
+          terraform init
+          terraform apply -auto-approve \
+            -var="image_digest=${{ steps.build.outputs.digest }}"
+
+      # The image digest is in lifecycle.ignore_changes on the job, so it is
+      # set here explicitly rather than by the apply above. That keeps a
+      # manual `gcloud run jobs update` during an incident from being
+      # reverted by the next unrelated apply.
+      - name: point both jobs at the new digest
+        env:
+          PROJECT: ${{ vars[format('PROJECT_ID_{0}', steps.env.outputs.upper)] }}
+          PREFIX: ${{ vars[format('NAME_PREFIX_{0}', steps.env.outputs.upper)] }}
+        run: |
+          set -euo pipefail
+          for job in "cr-${PREFIX}-lightcast-1" "cr-${PREFIX}-enrollment-1"; do
             gcloud run jobs update "$job" \
-              --image "${{ needs.build.outputs.digest }}" \
+              --image "${{ steps.build.outputs.digest }}" \
               --region "${{ vars.REGION }}" \
-              --project "${{ vars.PROJECT_ID_PROD }}"
+              --project "${PROJECT}"
           done
+
+      # ---------------------------------------------------------------------
+      # Smoke, dev only.
+      #
+      # An apply proves Terraform is happy; only a run proves the image works.
+      # But these are not dry runs — enrollment scrapes oklahoma.gov and
+      # publishes for real. Doing that on every prod deploy would make
+      # deploying and running the pipeline the same act, which is exactly what
+      # the schedulers exist to keep separate.
+      # ---------------------------------------------------------------------
+      - name: smoke — lightcast, one small dataset, row limited
+        if: steps.env.outputs.env == 'dev'
+        env:
+          PROJECT: ${{ vars.PROJECT_ID_DEV }}
+          PREFIX: ${{ vars.NAME_PREFIX_DEV }}
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "cr-${PREFIX}-lightcast-1" \
+            --region "${{ vars.REGION }}" --project "${PROJECT}" \
+            --tasks 1 --task-timeout 600s --wait \
+            --args="run,lightcast,--dataset,dim_area,--limit,1000"
+
+      - name: smoke — enrollment
+        if: steps.env.outputs.env == 'dev'
+        env:
+          PROJECT: ${{ vars.PROJECT_ID_DEV }}
+          PREFIX: ${{ vars.NAME_PREFIX_DEV }}
+        run: |
+          set -euo pipefail
+          # Expected to short-circuit on the cache in most months, which is a
+          # success. A non-zero exit here means something real broke.
+          gcloud run jobs execute "cr-${PREFIX}-enrollment-1" \
+            --region "${{ vars.REGION }}" --project "${PROJECT}" \
+            --wait
 
       - name: record what was deployed
         run: |
-          echo "### Deployed to prod" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "- image: \`${{ needs.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- commit: \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "To roll back: re-run this workflow via workflow_dispatch with the previous digest." >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### Deployed to ${{ steps.env.outputs.env }}"
+            echo ""
+            echo "- image: \`${{ steps.build.outputs.digest }}\`"
+            echo "- commit: \`${{ github.sha }}\`"
+            echo "- branch: \`${{ github.ref_name }}\`"
+            echo ""
+            echo "To roll back: revert the commit on this branch and push."
+          } >> "$GITHUB_STEP_SUMMARY"

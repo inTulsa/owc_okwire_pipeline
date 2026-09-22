@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [dev, prod]
 
 permissions:
   contents: read
@@ -102,8 +102,11 @@ jobs:
           tflint_version: latest
       - run: tflint --recursive --chdir=infra/terraform || true
 
+  # Plans the environment the PR TARGETS, not always dev. A dev -> prod pull
+  # request is the promotion gate in this model, so the prod plan is exactly
+  # the diff a reviewer needs to see before approving it.
   plan:
-    name: plan dev
+    name: plan ${{ github.base_ref }}
     runs-on: ubuntu-latest
     # A plan needs real credentials, which a fork PR cannot have.
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
@@ -111,10 +114,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: resolve target environment
+        id: env
+        run: |
+          set -euo pipefail
+          ENV="${{ github.base_ref }}"
+          case "$ENV" in
+            dev|prod) ;;
+            *) echo "::error::PRs must target dev or prod, not '$ENV'."; exit 1 ;;
+          esac
+          echo "env=$ENV" >> "$GITHUB_OUTPUT"
+          echo "upper=$(echo "$ENV" | tr a-z A-Z)" >> "$GITHUB_OUTPUT"
+
       - uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ vars.WIF_PROVIDER_DEV }}
-          service_account: ${{ vars.DEPLOYER_SA_DEV }}
+          workload_identity_provider: ${{ vars[format('WIF_PROVIDER_{0}', steps.env.outputs.upper)] }}
+          service_account: ${{ vars[format('DEPLOYER_SA_{0}', steps.env.outputs.upper)] }}
 
       - uses: google-github-actions/setup-gcloud@v2
 
@@ -131,11 +146,14 @@ jobs:
       # image yet.
       - name: resolve the deployed image digest
         id: img
+        env:
+          PROJECT: ${{ vars[format('PROJECT_ID_{0}', steps.env.outputs.upper)] }}
+          PREFIX: ${{ vars[format('NAME_PREFIX_{0}', steps.env.outputs.upper)] }}
         run: |
           set -euo pipefail
-          REPO="${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID_DEV }}/ar-${{ vars.NAME_PREFIX_DEV }}-images-1/owcdata"
+          REPO="${{ vars.REGION }}-docker.pkg.dev/${PROJECT}/ar-${PREFIX}-images-1/owcdata"
           DIGEST=$(gcloud artifacts docker images describe "$REPO:latest" \
-            --project "${{ vars.PROJECT_ID_DEV }}" \
+            --project "${PROJECT}" \
             --format='value(image_summary.digest)' 2>/dev/null || true)
           if [ -n "$DIGEST" ]; then
             echo "image=$REPO@$DIGEST" >> "$GITHUB_OUTPUT"
@@ -146,7 +164,7 @@ jobs:
 
       - name: plan
         id: plan
-        working-directory: infra/terraform/envs/dev
+        working-directory: infra/terraform/envs/${{ steps.env.outputs.env }}
         run: |
           terraform init
           terraform plan -no-color -lock=false \
@@ -160,9 +178,9 @@ jobs:
 
       - uses: marocchino/sticky-pull-request-comment@v2
         with:
-          header: tf-plan-dev
+          header: tf-plan-${{ steps.env.outputs.env }}
           message: |
-            ### Terraform plan — dev
+            ### Terraform plan — ${{ steps.env.outputs.env }}
 
             <details><summary>Show plan</summary>
 

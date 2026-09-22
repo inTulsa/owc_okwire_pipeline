@@ -55,7 +55,7 @@ RUN_ARGS += --limit $(LIMIT)
 endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check auth-check \
-        diff-enrollment derive-scrape derive-check build deploy set-image which-image image-digest tf-init tf-bootstrap preflight wif-check deployer-check tf-output gh-vars tf-plan tf-apply tf-fmt tf-validate clean
+        diff-enrollment derive-scrape derive-check lock lock-check base-digest build deploy set-image which-image image-digest tf-init tf-bootstrap preflight wif-check deployer-check tf-output gh-vars tf-plan tf-apply tf-fmt tf-validate clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -96,7 +96,7 @@ fmt: ## ruff format + fix
 typecheck: ## mypy
 	$(VENV)/bin/mypy
 
-check: lint typecheck derive-check validate test ## Everything CI runs on a PR
+check: lint typecheck derive-check lock-check validate test ## Everything CI runs on a PR
 
 diff-enrollment: ## Show every change made to the carried-over enrollment script
 	@diff -u $(ORIGINAL) $(SCRAPE) || true
@@ -225,6 +225,50 @@ tf-bootstrap: ## First deploy only: create Artifact Registry + the secret contai
 	@echo "   Next:"
 	@echo "     1. printf '%s' 'THE_PASSWORD' | gcloud secrets versions add $(SECRET_NAME) --data-file=- --project $(PROJECT)"
 	@echo "     2. make build ENV=$(ENV)"
+
+# requirements.txt is the release artifact's dependency tree; pyproject.toml's
+# ranges are for development. Regenerate after changing dependencies.
+#
+# Compiled for the TARGET platform, not this laptop: resolving on
+# darwin/arm64 picks different wheels (and can drop or add platform-specific
+# transitive deps) from the linux/amd64 image Cloud Run actually runs.
+lock: ## Regenerate requirements.txt from pyproject.toml (run after changing deps)
+	uv pip compile pyproject.toml --python-version 3.12 \
+	  --python-platform x86_64-unknown-linux-gnu -o requirements.txt
+	@echo ">> requirements.txt regenerated — commit it with the pyproject change"
+
+lock-check: ## Verify requirements.txt matches pyproject.toml (CI runs this)
+	@uv pip compile pyproject.toml --quiet --python-version 3.12 \
+	  --python-platform x86_64-unknown-linux-gnu -o /tmp/owc-req-check.txt
+	@# Compare the pins only: uv writes the -o path into a header comment, so
+	@# a byte-for-byte diff always fails on the temp filename.
+	@if ! diff -q <(grep -v '^#' requirements.txt) <(grep -v '^#' /tmp/owc-req-check.txt) >/dev/null 2>&1; then \
+	  echo ""; \
+	  echo "requirements.txt is stale — pyproject.toml has changed since it was compiled."; \
+	  echo "The image would install a dependency tree nobody reviewed."; \
+	  echo ""; \
+	  echo "  make lock"; \
+	  echo ""; \
+	  diff <(grep -v '^#' requirements.txt) <(grep -v '^#' /tmp/owc-req-check.txt) | head -20; \
+	  exit 1; \
+	fi
+	@echo ">> lock-check OK: requirements.txt matches pyproject.toml"
+
+# The base image is pinned by digest in docker/Dockerfile so a rebuild of one
+# commit cannot land on a different base. Upstream publishes security fixes
+# under the same tag, so refresh this deliberately rather than never.
+base-digest: ## Print the current digest for the Dockerfile's base image tag
+	@tok=$$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/python:pull" \
+	  | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])'); \
+	  d=$$(curl -sI -H "Authorization: Bearer $$tok" \
+	    -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json" \
+	    "https://registry-1.docker.io/v2/library/python/manifests/3.12-slim-bookworm" \
+	    | tr -d '\r' | awk -F': ' '/^[Dd]ocker-[Cc]ontent-[Dd]igest/{print $$2}'); \
+	  cur=$$(awk -F'@' '/^FROM python/{print $$2}' docker/Dockerfile); \
+	  echo "  Dockerfile : $$cur"; \
+	  echo "  upstream   : $$d"; \
+	  if [ "$$cur" = "$$d" ]; then echo "  OK: current"; \
+	  else echo ""; echo "  Base image moved. To adopt it, replace the digest in docker/Dockerfile."; fi
 
 tf-fmt: ## terraform fmt across all modules and envs
 	terraform fmt -recursive infra/terraform
