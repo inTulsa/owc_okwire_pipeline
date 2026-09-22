@@ -55,12 +55,9 @@ Credentials; if that project is deleted or inactive, **every** call returns
 ./infra/bootstrap/bootstrap.sh owc-dpar-d
 ```
 
-> **The bucket name has to agree in three places** — the argument above
-> (which derives `gcs-<project>-tfstate-1`), `state_bucket` in
-> `terraform.tfvars`, and `bucket` in `backend.tf`. Terraform's backend block
-> cannot read a variable, so the literal is committed and has to be edited if
-> you use a different project id. A mismatch surfaces at `terraform init`
-> as a bucket that does not exist.
+> The script derives the bucket name from the project id:
+> `gcs-<project>-tfstate-1`. **Step 2 puts that same name in two more
+> files** — get all three matching or `terraform init` fails in step 3.
 >
 > One bucket per environment, in that environment's own project. Never share
 > one: bucket names are globally unique, so a shared name is not one bucket
@@ -81,7 +78,9 @@ enable the APIs that let it enable APIs. And Terraform cannot create the
 bucket that holds its own state. Everything else — the other 13 APIs and every
 resource — is Terraform's job.
 
-## 2. Fill in tfvars
+## 2. Fill in tfvars **and backend.tf**
+
+Two files per environment, in the same directory. Both, or step 3 fails.
 
 ```bash
 $EDITOR infra/terraform/envs/dev/terraform.tfvars
@@ -91,7 +90,7 @@ $EDITOR infra/terraform/envs/dev/terraform.tfvars
 |---|---|
 | `project_id` | This environment's project |
 | `name_prefix` | **Required, no default.** Drives every resource name via the OMES convention `<type>-<name_prefix>-<qualifier>-<seq>`, so `owc-dpar-d` gives `gcs-owc-dpar-d-raw-1`. Normally identical to `project_id`. Capped at 14 characters, because it is embedded in service account ids and GCP caps those at 30 — the plan fails with that sentence if you exceed it. |
-| `state_bucket` | **Required, no default.** This environment's Terraform state bucket, `gcs-<name_prefix>-tfstate-1`. It must match `backend.tf` in the same directory — see the warning below. |
+| `state_bucket` | **Required, no default.** This environment's Terraform state bucket, `gcs-<name_prefix>-tfstate-1`. Must match `backend.tf` — see directly below. |
 | `github_repository` | `owner/repo`, exactly. **Validated — no wildcards.** See step 6. |
 | `allowed_refs` | `[]` for dev (CI plans PRs as the dev deployer, from arbitrary refs); `["refs/heads/prod"]` for prod |
 | `alert_emails` | The distribution list |
@@ -113,6 +112,38 @@ $EDITOR infra/terraform/envs/dev/terraform.tfvars
 > budget** — the same shape of failure as
 > [the deployer permission gap](#confirm-the-deployer-can-actually-deploy),
 > and `deployer-check` will not catch it because the role is not project-level.
+
+### Then backend.tf, in the same directory
+
+Terraform's backend block **cannot read a variable** — not `state_bucket`,
+not anything. The bucket is a committed literal, so it is the one value you
+set in two places:
+
+```bash
+$EDITOR infra/terraform/envs/dev/backend.tf
+```
+
+```hcl
+terraform {
+  backend "gcs" {
+    bucket = "gcs-owc-dpar-d-tfstate-1"   # must equal state_bucket above
+    prefix = "env/dev"                     # leave this alone
+  }
+}
+```
+
+Leave `prefix` as it is. It separates the two environments' state *within* a
+bucket, which matters only if you ever do share one — and you should not.
+
+A mismatch does not say "mismatch". It surfaces in step 3 as:
+
+```
+Error: Failed to get existing workspaces: querying Cloud Storage failed:
+storage: bucket doesn't exist
+```
+
+which reads like the bootstrap failed, when the bucket is fine and Terraform
+is simply looking for a different one.
 
 ## 3. Create Artifact Registry and the secret container
 
