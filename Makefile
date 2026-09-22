@@ -26,6 +26,10 @@ SECRET_NAME = okw-snowflake-password-$(ENV)
 # Cloud Build runs as this rather than the Compute Engine default SA. Mirrors
 # modules/platform/iam.tf.
 BUILD_SA    = okw-build-$(ENV)@$(PROJECT).iam.gserviceaccount.com
+# The identity GitHub Actions assumes via WIF. Mirrors modules/wif/main.tf,
+# which is also the source `deployer-check` reads the expected roles from.
+DEPLOYER_SA = okw-deployer-$(ENV)@$(PROJECT).iam.gserviceaccount.com
+WIF_TF     := infra/terraform/modules/wif/main.tf
 ORIGINAL   := tests/fixtures/primary_enrollment_data_script.original.py
 SCRAPE     := src/owcdata/pipelines/enrollment/scrape.py
 
@@ -42,7 +46,7 @@ RUN_ARGS += --limit $(LIMIT)
 endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check auth-check \
-        diff-enrollment derive-scrape derive-check build deploy set-image which-image image-digest tf-init tf-bootstrap preflight wif-check tf-output gh-vars tf-plan tf-apply tf-fmt tf-validate clean
+        diff-enrollment derive-scrape derive-check build deploy set-image which-image image-digest tf-init tf-bootstrap preflight wif-check deployer-check tf-output gh-vars tf-plan tf-apply tf-fmt tf-validate clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -290,6 +294,56 @@ preflight: auth-check wif-check ## Check the Snowflake secret has a version befo
 tf-output: ## Show terraform outputs for $(ENV). Add NAME=<output> for one value.
 	@scripts/tf-output.sh $(TF_DIR) $(ENV) $(PROJECT) $(NAME)
 
+# Deploying by hand runs as YOUR credentials; GitHub Actions runs as the
+# deployer service account. Those are different identities with different
+# permissions, so "the apply worked on my laptop" says nothing about whether
+# CI can run the same apply. That gap is invisible until a push fails.
+#
+# It bites hardest on the two roles that are about administering IAM itself
+# rather than a resource — projectIamAdmin and workloadIdentityPoolAdmin —
+# because every google_project_iam_member needs getIamPolicy to refresh, and
+# serviceAccountAdmin grants no workloadIdentityPools permissions at all. A
+# CI run missing either dies at refresh with a 403 and a wall of identical
+# errors that name the role being granted, not the role that is missing.
+#
+# The expected list is parsed out of modules/wif/main.tf rather than repeated
+# here, so adding a role to that module cannot leave this check behind. Only
+# google_project_iam_member blocks are read: the artifact-registry and
+# service-account grants in that file are not project-level and would never
+# appear in a project IAM policy.
+deployer-check: auth-check ## Verify the deployer SA has every role GitHub Actions needs
+	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@expected=$$(awk '/^resource "google_project_iam_member"/,/^\}$$/' $(WIF_TF) \
+	    | grep -oE '"roles/[A-Za-z.]+"' | tr -d '"' | sort -u); \
+	  test -n "$$expected" || { echo "could not parse any roles from $(WIF_TF)" >&2; exit 1; }; \
+	  actual=$$(gcloud projects get-iam-policy $(PROJECT) \
+	    --flatten="bindings[].members" \
+	    --filter="bindings.members:$(DEPLOYER_SA)" \
+	    --format="value(bindings.role)" 2>/dev/null | sort -u); \
+	  if [ -z "$$actual" ]; then \
+	    echo ""; \
+	    echo "  $(DEPLOYER_SA)"; \
+	    echo "  has no roles on $(PROJECT) — or it does not exist yet."; \
+	    echo ""; \
+	    echo "  Run the apply that creates it:  make tf-apply ENV=$(ENV)"; \
+	    echo ""; exit 1; \
+	  fi; \
+	  missing=$$(comm -23 <(echo "$$expected") <(echo "$$actual")); \
+	  if [ -n "$$missing" ]; then \
+	    echo ""; \
+	    echo "  $(DEPLOYER_SA) is missing $$(echo "$$missing" | wc -l | tr -d ' ') role(s):"; \
+	    echo ""; \
+	    echo "$$missing" | sed 's/^/    /'; \
+	    echo ""; \
+	    echo "  GitHub Actions will fail at terraform refresh with a 403. Your own"; \
+	    echo "  applies keep working, because they run as you and not as this SA."; \
+	    echo ""; \
+	    echo "  Fix — apply as a project owner, which creates the bindings:"; \
+	    echo "    make tf-apply ENV=$(ENV) TF_ARGS=\"-var=image_digest=\$$(make -s image-digest ENV=$(ENV))\""; \
+	    echo ""; exit 1; \
+	  fi; \
+	  echo ">> deployer-check OK: $(DEPLOYER_SA) has all $$(echo "$$expected" | wc -l | tr -d ' ') project roles"
+
 # Sets the three per-environment GitHub repository variables in one step.
 #
 # Doing this by hand is a trap: `gh variable set --body "$$(...)"` does NOT
@@ -297,7 +351,11 @@ tf-output: ## Show terraform outputs for $(ENV). Add NAME=<output> for one value
 # drops into an interactive "Paste your variable" prompt. Pressing enter sets
 # the variable to empty, which fails later at the auth step with nothing
 # pointing at the cause. This resolves every value first and only then writes.
-gh-vars: ## Set the GitHub repo variables for $(ENV) from its terraform outputs
+#
+# deployer-check runs first for the same reason tf-apply runs preflight: this
+# is the moment you hand deploys over to CI, so it is the last moment the
+# permission gap is cheap to find.
+gh-vars: deployer-check ## Set the GitHub repo variables for $(ENV) from its terraform outputs
 	@command -v gh >/dev/null || { echo "gh CLI not installed: https://cli.github.com" >&2; exit 1; }
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@up=$$(echo $(ENV) | tr a-z A-Z); \

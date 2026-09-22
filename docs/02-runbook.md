@@ -1003,6 +1003,58 @@ Changing `github_repository` replaces
 the repository is embedded in its `principalSet` member string. That
 replacement is expected and safe.
 
+### GitHub Actions authenticates fine, then the apply 403s
+
+A different failure with a similar smell. The `auth` step is green, the build
+succeeds, and `terraform apply` dies during **refresh** with a wall of
+near-identical errors:
+
+```text
+Error when reading or editing Resource "project \"owc-data-dev\"" with IAM Member:
+Role "roles/storage.admin" Member "serviceAccount:okw-deployer-dev@...":
+Error retrieving IAM policy for project "owc-data-dev":
+googleapi: Error 403: The caller does not have permission, forbidden
+```
+
+```text
+Permission 'iam.workloadIdentityPools.get' denied on resource
+'//iam.googleapis.com/projects/.../workloadIdentityPools/okw-github-dev'
+```
+
+**WIF is not the problem** — assuming the deployer worked. The deployer is
+missing permissions once assumed.
+
+The misleading part is that each error names the role being *granted*
+(`roles/storage.admin`, etc.), which the deployer already has. The role that
+is *missing* is never named. Every `google_project_iam_member` read-modify-
+writes the project IAM policy, so all 22 of them fail on the same absent
+`resourcemanager.projects.getIamPolicy`.
+
+```bash
+make deployer-check ENV=$ENV
+```
+
+That names the missing roles directly. The usual answers are
+`roles/resourcemanager.projectIamAdmin` and
+`roles/iam.workloadIdentityPoolAdmin` — neither is implied by the resource
+admin roles, and `serviceAccountAdmin` grants no `workloadIdentityPools`
+permissions at all.
+
+Both are declared in `modules/wif/main.tf`, so the fix is an apply run as a
+project owner — the deployer cannot grant itself the permission it needs to
+make the grant:
+
+```bash
+make tf-apply ENV=$ENV TF_ARGS="-var=image_digest=$(make -s image-digest ENV=$ENV)"
+make deployer-check ENV=$ENV      # confirm, then re-run the failed workflow
+```
+
+Nothing is half-applied when this happens: refresh fails before the plan, so
+the run changes nothing. Re-running after the fix is safe.
+
+**Why it never failed locally:** `make tf-apply` on your laptop runs as you,
+and you are project owner. Only CI runs as the deployer.
+
 ## Common procedures
 
 ### Roll back a published table

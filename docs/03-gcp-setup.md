@@ -64,7 +64,23 @@ $EDITOR infra/terraform/envs/dev/terraform.tfvars
 | `allowed_refs` | `[]` for dev; `["refs/heads/main"]` for prod |
 | `alert_emails` | The distribution list |
 | `snowflake_user` | The login. Not a secret; the password goes to Secret Manager. |
-| `billing_account` | Only needed if you want the budget alert |
+| `billing_account` | Only needed if you want the budget alert. Off by default in both envs (`billing_budget_amount = 0`) — see below before turning it on. |
+
+> **Turning the budget alert on costs one manual grant.** A
+> `google_billing_budget` lives on the **billing account**, not the project,
+> so Terraform cannot grant the deployer access to it the way it grants
+> everything else here. Set an amount and a `billing_account`, then also:
+>
+> ```bash
+> gcloud billing accounts add-iam-policy-binding <ACCOUNT_ID> \
+>   --member=serviceAccount:okw-deployer-<env>@<project>.iam.gserviceaccount.com \
+>   --role=roles/billing.costsManager
+> ```
+>
+> Without it, hand applies keep working and **CI 403s on every refresh of the
+> budget** — the same shape of failure as
+> [the deployer permission gap](#confirm-the-deployer-can-actually-deploy),
+> and `deployer-check` will not catch it because the role is not project-level.
 
 ## 3. Create Artifact Registry and the secret container
 
@@ -250,6 +266,48 @@ output exists specifically so the condition is visible in every plan diff.
 
 For prod, also set `allowed_refs = ["refs/heads/main"]`. That stops a branch —
 or a fork's pull request — from deploying.
+
+### Confirm the deployer can actually deploy
+
+WIF controls *who* may assume the deployer service account. It says nothing
+about what that account is allowed to do once assumed — and those are the two
+things it is easy to conflate.
+
+Everything you have run so far went through **your** credentials. GitHub
+Actions runs the identical Terraform as `okw-deployer-<env>`, so "the apply
+worked on my laptop" is not evidence that CI can run it:
+
+```bash
+make deployer-check ENV=dev
+```
+
+```text
+>> deployer-check OK: okw-deployer-dev@owc-data-dev.iam.gserviceaccount.com has all 14 project roles
+```
+
+The roles are granted by the step 5 apply, so a pass here usually means only
+that you did step 5. It is worth one second anyway, because the failure it
+catches is genuinely hard to read: the deployer administers every *resource*
+in the project, but managing the project's **IAM policy** and its **WIF pool**
+are two more permissions on top of that, and without them a CI run dies during
+`terraform refresh` with 23 near-identical 403s that each name the role being
+granted rather than the role that is missing:
+
+```text
+Error retrieving IAM policy for project "owc-data-dev":
+googleapi: Error 403: The caller does not have permission, forbidden
+```
+
+The two to know about, because neither is implied by the others:
+
+| Role | Why |
+|---|---|
+| `roles/resourcemanager.projectIamAdmin` | Every `google_project_iam_member` read-modify-writes the project IAM policy. All 22 of them need `getIamPolicy` just to refresh. |
+| `roles/iam.workloadIdentityPoolAdmin` | `roles/iam.serviceAccountAdmin` contains **zero** `workloadIdentityPools` permissions. Managing service accounts and managing WIF pools are separate roles. |
+
+Both are predefined — there are no custom roles in this project. The check
+parses its expected list straight out of `modules/wif/main.tf`, so adding a
+role there cannot leave the check behind.
 
 Wire the outputs into GitHub as **repository variables**:
 

@@ -72,6 +72,13 @@ make gh-vars ENV=dev
 Run it again with `ENV=prod` **once prod has been applied** — not before. The
 prod project has to exist and have state, or there is nothing to read.
 
+`gh-vars` runs [`deployer-check`](03-gcp-setup.md#confirm-the-deployer-can-actually-deploy)
+first, for the same reason `tf-apply` runs `preflight`. Setting these
+variables is the moment deploys stop being yours and become CI's, so it is
+the last moment the difference between your permissions and the deployer's
+is cheap to find. Skipping straight to a push turns a one-second check into
+a failed run and 23 identical 403s.
+
 These are **variables, not secrets**: a WIF provider path and a service
 account email are not sensitive, and there are no keys anywhere in this
 setup.

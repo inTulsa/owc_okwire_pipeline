@@ -17,5 +17,18 @@ snowflake_user = "REPLACE_ME@tulsaforyou.com"
 # from dev. No default on purpose.
 # image_digest = "us-central1-docker.pkg.dev/owc-data-prod/okw-images/owcdata@sha256:..."
 
-billing_budget_amount = 500
+# 0 disables the budget resource entirely (modules/platform/monitoring.tf
+# gates it on amount > 0 AND a billing account).
+#
+# Deliberate: google_billing_budget lives on the BILLING ACCOUNT, not the
+# project, so Terraform cannot grant the deployer access to it the way it
+# grants everything else here — it would need roles/billing.costsManager
+# added by hand at the billing-account level, outside this repo's blast
+# radius. CI would then 403 on every refresh of the budget.
+#
+# To enable it later: set an amount, uncomment billing_account, and grant
+#   gcloud billing accounts add-iam-policy-binding <ACCOUNT_ID> \
+#     --member=serviceAccount:okw-deployer-prod@owc-data-prod.iam.gserviceaccount.com \
+#     --role=roles/billing.costsManager
+billing_budget_amount = 0
 # billing_account     = "0X0X0X-0X0X0X-0X0X0X"
