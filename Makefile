@@ -55,7 +55,7 @@ RUN_ARGS += --limit $(LIMIT)
 endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check auth-check \
-        diff-enrollment derive-scrape derive-check lock lock-check base-digest build deploy set-image which-image image-digest tf-init tf-reinit tf-bootstrap preflight wif-check deployer-check verify-separation tf-output gh-vars tf-plan tf-apply tf-fmt tf-validate clean
+        diff-enrollment derive-scrape derive-check lock lock-check docs-check base-digest build deploy set-image which-image image-digest tf-init tf-reinit tf-bootstrap preflight wif-check deployer-check verify-separation tf-output gh-vars tf-plan tf-apply tf-fmt tf-validate clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -96,7 +96,15 @@ fmt: ## ruff format + fix
 typecheck: ## mypy
 	$(VENV)/bin/mypy
 
-check: lint typecheck derive-check lock-check validate test ## Everything CI runs on a PR
+# The docs are the handoff artifact — OMES runs this project from them, with
+# nobody to ask when a command turns out not to exist. Several doc/code
+# couplings were introduced at once (make targets, the naming convention,
+# scripts, terraform outputs) and they all rot silently: nothing fails until
+# a person follows the instructions, by which point you are not there.
+docs-check: ## Verify the docs only reference targets, outputs and scripts that exist
+	@python3 scripts/docs-check.py
+
+check: lint typecheck derive-check lock-check docs-check validate test ## Everything CI runs on a PR
 
 diff-enrollment: ## Show every change made to the carried-over enrollment script
 	@diff -u $(ORIGINAL) $(SCRAPE) || true
