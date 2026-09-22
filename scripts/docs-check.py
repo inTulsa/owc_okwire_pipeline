@@ -22,6 +22,22 @@ targets = set(re.findall(r"^([a-z][a-z0-9-]*):", makefile, re.M))
 outputs = set(re.findall(r'output "([a-z_]+)"',
                          (ROOT / "infra/terraform/envs/dev/outputs.tf").read_text()))
 
+def anchors(text):
+    """GitHub's heading -> anchor rule, plus explicit {#id} anchors."""
+    out = set()
+    for m in re.finditer(r"^#{1,6}\s+(.*?)\s*$", text, re.M):
+        h = m.group(1)
+        explicit = re.search(r"\{#([\w-]+)\}", h)
+        if explicit:
+            out.add(explicit.group(1))
+            h = re.sub(r"\{#[\w-]+\}", "", h)
+        a = re.sub(r"[^\w\s-]", "", h.lower()).strip()
+        out.add(re.sub(r"\s+", "-", a))
+    return out
+
+
+ANCHORS = {d.name: anchors(d.read_text()) for d in DOCS}
+
 problems = []
 
 for doc in DOCS:
@@ -99,6 +115,21 @@ for doc in DOCS:
     for m in re.finditer(r"\bokw-[a-z]+", text):
         line_no = text[: m.start()].count("\n") + 1
         problems.append(f"{doc.relative_to(ROOT)}:{line_no}: {m.group(0)} — pre-rename resource name")
+
+# Cross-document links. Sections get renamed — "Why prod is manual" became
+# "The gate on production", "step 0" was folded into the prerequisites — and
+# a stale anchor silently lands the reader at the top of the right file,
+# which looks like the link worked.
+for doc in DOCS:
+    text = doc.read_text()
+    for m in re.finditer(r"\]\(([^)]*?)#([\w-]+)\)", text):
+        target, anchor = m.group(1), m.group(2)
+        name = pathlib.Path(target).name if target else doc.name
+        line_no = text[: m.start()].count("\n") + 1
+        if name not in ANCHORS:
+            problems.append(f"{doc.relative_to(ROOT)}:{line_no}: link to {target}#{anchor} — no such doc")
+        elif anchor not in ANCHORS[name]:
+            problems.append(f"{doc.relative_to(ROOT)}:{line_no}: link to {target or doc.name}#{anchor} — no such heading")
 
 if problems:
     print("Docs reference things that do not exist:\n")

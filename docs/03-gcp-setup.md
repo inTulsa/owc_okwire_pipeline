@@ -504,23 +504,13 @@ names, bucket names, and service-account emails the runbook refers to.
 
 ### What success looks like
 
-The lightcast smoke test uses `--limit`, and **a row-limited run deliberately
-does not publish**. Its rows are a truncation of the real result, so copying
-them into `owc_marts` would replace a production table with a sample. Expect:
+`gcloud run jobs execute --wait` prints only the execution's progress and
+exits 0. **The pipeline's own output is not on your terminal** — it is
+structured logging in Cloud Logging, and the authoritative record is the run
+manifest. Check those, not the console.
 
-```text
-extract_finished  dim_area  rows=78
-bq_load_finished            rows=78
-publish_skipped_row_limited rows=78
-pipeline_succeeded
-```
-
-So after a successful smoke test, `owc_marts` will **not** contain
-`dim_area` — that is correct, not a failure. The manifest records the run as
-`success_limited`, a status that `previous_successful()` excludes so it cannot
-become the baseline the next real run is compared against.
-
-Confirm it succeeded from the manifest rather than from marts:
+The command above has **no `--limit`**, so it is a real run: `dim_area` is 78
+rows, it passes its quality checks, and it publishes.
 
 ```bash
 bq query --project_id=$PROJECT --use_legacy_sql=false \
@@ -528,30 +518,60 @@ bq query --project_id=$PROJECT --use_legacy_sql=false \
  FROM `owc_ops.pipeline_runs` ORDER BY started_at DESC LIMIT 5'
 ```
 
-### Verifying the publish path
-
-To exercise snapshot → table copy, run one **small dimension with no limit**.
-`dim_area` is 78 rows, so this is cheap:
-
-```bash
-gcloud run jobs execute cr-owc-dpar-d-lightcast-1 --region us-central1 \
-  --project $PROJECT --args="run,lightcast,--dataset,dim_area" \
-  --tasks=1 --wait
+```text
+lightcast   dim_area             success   78
+enrollment  enrollment_primary   success   1435546
 ```
 
-Then check all three landed:
+`status = success` is the thing to look for. Then confirm the table landed:
 
 ```bash
-bq ls --project_id=$PROJECT owc_marts   # dim_area TABLE
-bq ls --project_id=$PROJECT owc_ops     # a dim_area__<run_id> snapshot
+bq ls --project_id=$PROJECT owc_marts
 ```
 
-Then confirm the manifest recorded both:
+```text
+dim_area             TABLE
+enrollment_primary   TABLE
+```
+
+`owc_ops` holds only `pipeline_runs`, `pipeline_runs_recent` and
+`dataset_freshness`. There is **no per-run snapshot table** — an earlier
+design took one before each publish and it was removed, because rollback
+reloads the previous run's Parquet from GCS instead and that needs no extra
+BigQuery permission. See
+[ADR-010](01-architecture.md#adr-010-rollback-from-the-gcs-parquet-not-a-bigquery-snapshot).
+
+To read the structured log for a run:
 
 ```bash
-bq query --use_legacy_sql=false --project_id=$PROJECT \
-'SELECT pipeline, dataset, status, row_count FROM `owc_ops.pipeline_runs` ORDER BY started_at DESC LIMIT 10'
+gcloud logging read \
+  'resource.type="cloud_run_job" jsonPayload.event="pipeline_succeeded"' \
+  --project=$PROJECT --limit=5 \
+  --format='value(jsonPayload.dataset,jsonPayload.event,jsonPayload.row_count)'
 ```
+
+### The row-limited variant, which does NOT publish
+
+`--limit` is what the deploy workflow runs on every push to `dev`, and it
+behaves differently on purpose. A limited result is a truncation of the real
+one, so copying it into `owc_marts` would replace a published table with a
+sample:
+
+```bash
+gcloud run jobs execute $(make -s tf-output ENV=dev NAME=lightcast_job) \
+  --region $REGION --project $PROJECT --tasks=1 --wait \
+  --args="run,lightcast,--dataset,dim_area,--limit,1000"
+```
+
+Its log ends `publish_skipped_row_limited` rather than a publish, and the
+manifest records **`success_limited`** — a status `previous_successful()`
+excludes, so a truncated run can never become the baseline that the next
+real run's drift check is compared against.
+
+So if you run this variant on a fresh project, `owc_marts` stays empty. That
+is correct, not a failure — but it is also why the smoke test above uses the
+unlimited run: on a new environment you want to prove the publish path
+works, and a limited run deliberately never exercises it.
 
 ## Terraform guardrails
 
