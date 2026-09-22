@@ -1015,6 +1015,35 @@ Changing `github_repository` replaces
 the repository is embedded in its `principalSet` member string. That
 replacement is expected and safe.
 
+### `Backend configuration changed` after pointing at a different project
+
+```text
+Error: Backend configuration changed
+
+A change in the backend configuration has been detected, which may require
+migrating existing state.
+```
+
+Terraform caches the backend config in `.terraform/`, so editing the bucket
+in `backend.tf` invalidates it. **A fresh clone never sees this** — there is
+no cache to invalidate — so it is a working-copy problem, not a setup one.
+
+**Take `-reconfigure`, not the `-migrate-state` the error suggests first.**
+
+```bash
+make tf-reinit ENV=$ENV
+```
+
+`-migrate-state` copies the OLD project's state into the NEW bucket. Terraform
+then believes the old project's resources exist in the new project and plans
+against them — deleting and recreating things that were never there. It is the
+right flag for moving one environment's state to a new bucket, and the wrong
+one for pointing a working copy at a different environment.
+
+Each environment already keeps its state in its own bucket, so switching
+projects means adopting that bucket as it is. `tf-reinit` prints the resource
+count afterwards; `0` is correct for a project you have not applied to yet.
+
 ### GitHub Actions authenticates fine, then the apply 403s
 
 A different failure with a similar smell. The `auth` step is green, the build

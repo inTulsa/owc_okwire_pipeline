@@ -55,7 +55,7 @@ RUN_ARGS += --limit $(LIMIT)
 endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check auth-check \
-        diff-enrollment derive-scrape derive-check lock lock-check base-digest build deploy set-image which-image image-digest tf-init tf-bootstrap preflight wif-check deployer-check tf-output gh-vars tf-plan tf-apply tf-fmt tf-validate clean
+        diff-enrollment derive-scrape derive-check lock lock-check base-digest build deploy set-image which-image image-digest tf-init tf-reinit tf-bootstrap preflight wif-check deployer-check tf-output gh-vars tf-plan tf-apply tf-fmt tf-validate clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -197,6 +197,27 @@ image-digest: auth-check ## Print just the digest-pinned image reference (script
 # -- terraform ---------------------------------------------------------------
 tf-init: ## terraform init for $(ENV)
 	cd $(TF_DIR) && terraform init
+
+# Re-point a working copy at a different project's state bucket.
+#
+# terraform caches the backend config in .terraform/, so after editing
+# backend.tf every command stops with "Backend configuration changed" and
+# suggests `-migrate-state` FIRST. That suggestion is wrong here and it is
+# destructive in a quiet way: migrating copies the OLD project's state into
+# the NEW bucket, after which Terraform believes the old project's resources
+# exist in the new one and plans against them.
+#
+# Each environment's state already lives in its own bucket. Switching
+# projects means adopting that bucket as-is, which is -reconfigure. The old
+# state is left untouched where it is.
+#
+# A fresh clone never needs this — there is no cache to invalidate.
+tf-reinit: ## Re-point $(ENV) at the bucket in its backend.tf (after changing projects)
+	@echo ">> re-pointing $(ENV) at $$(awk -F'"' '/bucket/{print $$2}' $(TF_DIR)/backend.tf)"
+	cd $(TF_DIR) && terraform init -reconfigure
+	@echo ""
+	@echo ">> resources in state: $$(cd $(TF_DIR) && terraform state list 2>/dev/null | wc -l | tr -d ' ')"
+	@echo "   0 is correct for a project you have not applied to yet."
 
 # Breaks the first-deploy cycle: Terraform creates Artifact Registry, but
 # `make build` needs Artifact Registry to push to.
