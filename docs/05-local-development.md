@@ -67,6 +67,21 @@ See open item 4.
 cache, so a local test cannot corrupt production state. `owcdata validate`
 fails if that ever resolves to `./data`.
 
+## When gcloud credentials expire
+
+`make` targets that touch GCP run `auth-check` first, because an expired
+gcloud token otherwise looks exactly like a missing resource — "no image
+found", "the secret does not exist yet" — and sends you rebuilding things
+that are already there.
+
+```bash
+gcloud auth login                        # the gcloud CLI
+gcloud auth application-default login    # what Terraform uses — separate
+```
+
+The two are independent, so Terraform can keep working while `make build`
+fails, and vice versa.
+
 ## Testing
 
 ```bash

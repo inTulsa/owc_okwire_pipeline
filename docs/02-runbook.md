@@ -784,6 +784,134 @@ the loop to prefer while iterating.
 unrelated `terraform apply` would silently revert that. The cost is that
 deploying an image is an explicit step — hence `set-image`.
 
+## A make target says a resource is missing, but it exists
+
+**Check the gcloud CLI token first.** Every "does this exist?" check in the
+Makefile runs a gcloud command, and an expired token looks identical to an
+absent resource. Two real examples of the same root cause:
+
+```text
+no image found at .../owcdata:585e9f2 or :latest.  Build one first
+The secret container okw-snowflake-password-dev does not exist yet
+```
+
+Both were false. The image had three tags and the secret returned HTTP 200.
+
+```bash
+make auth-check ENV=dev        # what the other targets now run first
+gcloud auth login              # the usual fix
+```
+
+**gcloud CLI credentials and Application Default Credentials are separate.**
+Terraform uses ADC and keeps working while the CLI is expired, which is what
+makes this confusing — `terraform plan` succeeds while `make build` insists
+nothing exists. If Terraform fails too:
+
+```bash
+gcloud auth application-default login
+```
+
+`auth-check` is now a prerequisite of `build`, `image-digest`, `set-image`,
+`which-image` and `preflight`, so the expired-token case reports itself
+instead of being misattributed.
+
+To confirm a resource independently of the CLI, query the API with an ADC
+token:
+
+```bash
+TOK=$(gcloud auth application-default print-access-token)
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOK" \
+  "https://secretmanager.googleapis.com/v1/projects/$PROJECT/secrets/okw-snowflake-password-$ENV"
+```
+
+## CI/CD failures
+
+### CI: `The interpreter at /usr is externally managed`
+
+`uv pip install --system` targets the runner's system Python, which is PEP 668
+externally-managed on Ubuntu. Install into a venv and put it on `PATH`, which
+is also what `make setup` does locally:
+
+```yaml
+- run: |
+    uv venv --python 3.12
+    echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+    uv pip install -e ".[dev]"
+```
+
+### Build: `okw-build-<env>@... does not have storage.objects.get access` to the source tarball
+
+Almost always **IAM propagation**, not a missing grant. The build SA holds
+`roles/storage.objectViewer` at project level, which covers the
+`gs://<project>_cloudbuild` bucket `gcloud builds submit` uploads to — but a
+project-level grant takes 1–2 minutes to take effect (GCP documents up to
+seven), and a build started immediately after `terraform apply` can beat it.
+
+Confirm the grant exists, then retry:
+
+```bash
+gcloud projects get-iam-policy $PROJECT --flatten='bindings[].members' \
+  --filter="bindings.members:okw-build-$ENV" --format='table(bindings.role)'
+# expect: roles/logging.logWriter, roles/storage.objectViewer
+
+make deploy ENV=$ENV
+```
+
+If it persists past a few minutes, the grant is genuinely missing —
+`terraform apply` did not run, or ran without the build-SA resources:
+
+```bash
+cd infra/terraform/envs/$ENV && terraform state list | grep build
+# expect: google_service_account.build, build_log_writer,
+#         build_source_reader, build_writer, and the deployer's act_as
+```
+
+**On the project-level grant.** Scoping it to the `_cloudbuild` bucket would
+be tighter, but that bucket is created by `gcloud builds submit` itself, so a
+bucket-scoped grant cannot exist before the first build. It is read-only
+object access, held by an identity only the deployer can assume, in a project
+where the deployer already has `storage.admin` — so it widens nothing in
+practice. The tighter alternative is `--gcs-source-staging-dir` pointed at a
+Terraform-managed bucket, which would also need that bucket created during
+bootstrap.
+
+Note that `uniform_bucket_level_access: False` on the `_cloudbuild` bucket is
+not the cause — legacy ACLs are additive and do not override an IAM grant.
+
+### Deploy: `caller does not have permission to act as service account .../<numeric id>`
+
+Submitting a Cloud Build requires `iam.serviceAccountUser` on the identity the
+build runs as. Without an explicit one, that is the **Compute Engine default**
+service account — which carries project Editor, so granting the deployer
+`actAs` on it would be a privilege-escalation path rather than a fix.
+
+Instead, builds run as `okw-build-<env>`, named by the `_BUILD_SA`
+substitution in `docker/cloudbuild.yaml`. To resolve a numeric id from an
+error like this:
+
+```bash
+TOK=$(gcloud auth application-default print-access-token)
+curl -s -H "Authorization: Bearer $TOK" \
+  "https://iam.googleapis.com/v1/projects/$PROJECT/serviceAccounts?pageSize=100" \
+  | python3 -c "import json,sys;[print(a['uniqueId'], a['email']) for a in json.load(sys.stdin)['accounts']]"
+```
+
+Note that specifying a build service account **requires**
+`options.logging: CLOUD_LOGGING_ONLY` — a build with its own service account
+cannot use Cloud Build's default logging behavior.
+
+### Reading a failed run
+
+```bash
+gh run list --limit 5
+gh run view <id> --json name,jobs \
+  -q '.jobs[] | "\(.name) -> \(.conclusion)", (.steps[] | select(.conclusion=="failure") | "   FAILED: \(.name)")'
+gh run view <id> --log 2>&1 | grep -iE 'error|denied|not found' | head
+```
+
+`--log-failed` returns the whole failed job including its cleanup, so the real
+error is usually buried; grepping `--log` for `error|denied` finds it faster.
+
 ## WIF and outputs
 
 ### `terraform output` says "No outputs found"

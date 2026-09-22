@@ -26,6 +26,15 @@ substitutions:
   _REPOSITORY: okw-images
   _IMAGE: owcdata
   _TAG: latest
+  # Full email of the build identity. Supplied by `make build` and by the
+  # deploy workflow; see the serviceAccount field below.
+  _BUILD_SA: ""
+
+# Run as our own build identity rather than the Compute Engine default SA,
+# which carries project Editor. Specifying this REQUIRES
+# options.logging: CLOUD_LOGGING_ONLY (set below) — a build with its own
+# service account cannot use the default logging behavior.
+serviceAccount: "projects/${PROJECT_ID}/serviceAccounts/${_BUILD_SA}"
 
 options:
   logging: CLOUD_LOGGING_ONLY

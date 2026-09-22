@@ -32,6 +32,59 @@ resource "google_service_account" "scheduler" {
   depends_on   = [google_project_service.enabled]
 }
 
+# ---------------------------------------------------------------------------
+# Cloud Build's identity.
+#
+# Without an explicit service account, Cloud Build runs builds as the
+# **Compute Engine default** SA, which carries project Editor. Submitting a
+# build then requires iam.serviceAccountUser on that SA — so the deployer
+# would gain actAs on an Editor-privileged identity, which is a privilege
+# escalation path dressed up as a CI fix. The failure was:
+#
+#   PERMISSION_DENIED: caller does not have permission to act as service
+#   account projects/<p>/serviceAccounts/<compute-default-unique-id>
+#
+# So the build gets its own identity with only what a build needs, named in
+# docker/cloudbuild.yaml via the _BUILD_SA substitution. Specifying a service
+# account also requires options.logging to be CLOUD_LOGGING_ONLY, which that
+# file already sets.
+# ---------------------------------------------------------------------------
+resource "google_service_account" "build" {
+  account_id   = "okw-build-${var.env}"
+  project      = var.project_id
+  display_name = "OWC Cloud Build (${var.env})"
+  description  = "Runs container builds. Reads build source, writes the image and logs. Nothing else."
+  depends_on   = [google_project_service.enabled]
+}
+
+# Required when a build specifies its own service account.
+resource "google_project_iam_member" "build_log_writer" {
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.build.email}"
+}
+
+# Reads the uploaded source tarball from gs://<project>_cloudbuild.
+#
+# Project-level rather than scoped to that bucket on purpose: the bucket is
+# created by `gcloud builds submit` itself, so a bucket-scoped grant cannot
+# exist before the first build. This is read-only on objects, held by an
+# identity only the deployer can assume, and the deployer already has
+# storage.admin — so it widens nothing in practice.
+resource "google_project_iam_member" "build_source_reader" {
+  project = var.project_id
+  role    = "roles/storage.objectViewer"
+  member  = "serviceAccount:${google_service_account.build.email}"
+}
+
+resource "google_artifact_registry_repository_iam_member" "build_writer" {
+  project    = var.project_id
+  location   = google_artifact_registry_repository.images.location
+  repository = google_artifact_registry_repository.images.name
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${google_service_account.build.email}"
+}
+
 resource "google_service_account" "powerbi" {
   account_id   = "okw-powerbi-${var.env}"
   project      = var.project_id

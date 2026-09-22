@@ -60,7 +60,7 @@ jobs:
           # here must be referenced in cloudbuild.yaml or the build fails.
           gcloud builds submit \
             --config docker/cloudbuild.yaml \
-            --substitutions="_TAG=${SHA},_REGION=${{ vars.REGION }}" \
+            --substitutions="_TAG=${SHA},_REGION=${{ vars.REGION }},_BUILD_SA=okw-build-dev@${{ vars.PROJECT_ID_DEV }}.iam.gserviceaccount.com" \
             --project "${{ vars.PROJECT_ID_DEV }}" \
             .
           IMAGE="${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID_DEV }}/okw-images/owcdata"

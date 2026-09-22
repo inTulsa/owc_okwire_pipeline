@@ -335,5 +335,7 @@ module "wif" {
   impersonatable_service_accounts = [
     module.platform.service_account_emails.lightcast,
     module.platform.service_account_emails.enrollment,
+    # Submitting a build requires actAs on the identity the build runs as.
+    module.platform.service_account_emails.build,
   ]
 }

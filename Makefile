@@ -23,6 +23,9 @@ IMAGE_REPO  = $(REGION)-docker.pkg.dev/$(PROJECT)/okw-images/owcdata
 # Mirrors modules/platform/secrets.tf. Terraform owns the container; the value
 # is added out of band and never enters Terraform state.
 SECRET_NAME = okw-snowflake-password-$(ENV)
+# Cloud Build runs as this rather than the Compute Engine default SA. Mirrors
+# modules/platform/iam.tf.
+BUILD_SA    = okw-build-$(ENV)@$(PROJECT).iam.gserviceaccount.com
 ORIGINAL   := tests/fixtures/primary_enrollment_data_script.original.py
 SCRAPE     := src/owcdata/pipelines/enrollment/scrape.py
 
@@ -38,7 +41,7 @@ ifdef LIMIT
 RUN_ARGS += --limit $(LIMIT)
 endif
 
-.PHONY: help setup run validate test test-all lint fmt typecheck check \
+.PHONY: help setup run validate test test-all lint fmt typecheck check auth-check \
         diff-enrollment derive-scrape derive-check build deploy set-image which-image image-digest tf-init tf-bootstrap preflight wif-check tf-output gh-vars tf-plan tf-apply tf-fmt tf-validate clean
 
 help: ## Show this help
@@ -91,12 +94,12 @@ derive-scrape: ## Regenerate scrape.py from the pristine original
 derive-check: ## Verify scrape.py matches its derivation (CI runs this)
 	$(PY) scripts/derive_scrape.py --check
 
-build: ## Build and push the image with Cloud Build, then print its digest
+build: auth-check ## Build and push the image with Cloud Build, then print its digest
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)"; exit 1; }
 	@echo ">> building $(IMAGE_REPO):$(IMAGE_TAG)"
 	gcloud builds submit --config docker/cloudbuild.yaml \
 	  --project $(PROJECT) \
-	  --substitutions=_REGION=$(REGION),_TAG=$(IMAGE_TAG) \
+	  --substitutions=_REGION=$(REGION),_TAG=$(IMAGE_TAG),_BUILD_SA=$(BUILD_SA) \
 	  .
 	@image=$$($(MAKE) -s --no-print-directory image-digest ENV=$(ENV)) && \
 	  echo "" && \
@@ -123,7 +126,7 @@ build: ## Build and push the image with Cloud Build, then print its digest
 # newly built image. Without this target, `make build` pushes a fix and the
 # jobs keep running the old digest — silently, because the tag moved but the
 # job pins a digest.
-set-image: ## Point both Cloud Run jobs at a digest (default: the newest build)
+set-image: auth-check ## Point both Cloud Run jobs at a digest (default: the newest build)
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@image="$(if $(IMAGE),$(IMAGE),$$($(MAKE) -s --no-print-directory image-digest ENV=$(ENV)))"; \
 	  case "$$image" in *@sha256:*) ;; *) echo "refusing a non-digest image: $$image" >&2; exit 1;; esac; \
@@ -140,7 +143,7 @@ deploy: build set-image ## Build the image AND point both jobs at it (the dev lo
 	@echo "   gcloud run jobs execute okw-lightcast-$(ENV) --region $(REGION) --project $(PROJECT) \\"
 	@echo "     --args=\"run,lightcast,--dataset,dim_area,--limit,1000\" --tasks=1 --wait"
 
-which-image: ## Show the digest each job is currently running vs the newest build
+which-image: auth-check ## Show the digest each job is currently running vs the newest build
 	@printf '  newest build      : %s\n' "$$($(MAKE) -s --no-print-directory image-digest ENV=$(ENV) 2>/dev/null || echo '<none>')"
 	@for job in okw-lightcast-$(ENV) okw-enrollment-$(ENV); do \
 	  img=$$(gcloud run jobs describe "$$job" --region $(REGION) --project $(PROJECT) \
@@ -156,7 +159,10 @@ which-image: ## Show the digest each job is currently running vs the newest buil
 # then broke `set-image`, `deploy`, and `which-image` with an unhelpful
 # "<none>". The warning goes to stderr so stdout stays clean for
 # `IMAGE=$(make -s image-digest ...)`.
-image-digest: ## Print just the digest-pinned image reference (scriptable)
+auth-check: ## Verify the gcloud CLI has usable credentials
+	@scripts/require-gcloud-auth.sh
+
+image-digest: auth-check ## Print just the digest-pinned image reference (scriptable)
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@digest=$$(gcloud artifacts docker images describe "$(IMAGE_REPO):$(IMAGE_TAG)" \
 	    --project $(PROJECT) --format='value(image_summary.digest)' 2>/dev/null); \
@@ -249,7 +255,7 @@ wif-check: ## Verify github_repository in tfvars matches the actual git remote, 
 	    echo ""; exit 1; \
 	  fi
 
-preflight: wif-check ## Check the Snowflake secret has a version before applying
+preflight: auth-check wif-check ## Check the Snowflake secret has a version before applying
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@if [ -n "$(SKIP_PREFLIGHT)" ]; then echo ">> preflight skipped"; exit 0; fi
 	@if ! gcloud secrets describe $(SECRET_NAME) --project $(PROJECT) >/dev/null 2>&1; then \

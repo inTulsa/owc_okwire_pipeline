@@ -132,6 +132,21 @@ step fails, start at
 Merging to `main` then runs `deploy.yml`: build → apply dev → smoke both
 pipelines → **wait for approval** → apply prod.
 
+## The build identity
+
+Builds run as `okw-build-<env>`, not as the Compute Engine default service
+account. The default carries project **Editor**, and submitting a build
+requires `actAs` on whatever identity it runs as — so using the default would
+hand the deployer `actAs` on an Editor-privileged account.
+
+`okw-build-<env>` has three grants and nothing else: `logging.logWriter`
+(required for a build with its own service account),
+`storage.objectViewer` to read the uploaded source, and
+`artifactregistry.writer` to push the image.
+
+It is named through the `_BUILD_SA` substitution, which both `make build` and
+the deploy workflow supply.
+
 ## Why the image is pinned by digest
 
 The `pipeline` module's `image` variable validates that the reference contains

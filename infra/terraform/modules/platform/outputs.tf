@@ -14,6 +14,7 @@ output "service_account_emails" {
     enrollment = google_service_account.enrollment.email
     scheduler  = google_service_account.scheduler.email
     powerbi    = google_service_account.powerbi.email
+    build      = google_service_account.build.email
     freshness  = google_service_account.freshness.email
   }
   description = "Runtime identities. One per pipeline, plus scheduler, PowerBI, and the freshness check."
