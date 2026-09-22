@@ -32,11 +32,36 @@ Credentials; if that project is deleted or inactive, **every** call returns
 `bootstrap.sh` checks for this in step 1 and tells you the fix. Diagnosis is in
 [the runbook](02-runbook.md#first-deploy-failures).
 
+## 0. The project itself
+
+This repo does **not** create the GCP project. At OMES the project and its
+network — VPC, subnet, Cloud NAT, the router back to the state transit hub —
+are provisioned separately from `omes-net-gcp-tf-owc-dpar-<env>`, per the
+Phase Two infrastructure architecture. This repo deploys the data platform
+*into* a project that already exists and has billing linked.
+
+The Cloud Run jobs use default egress, not the spoke VPC: reaching Snowflake
+and the OSDE site needs no special network path, so nothing here has to
+coordinate with the network layer.
+
 ## 1. Bootstrap the two things Terraform cannot create
 
 ```bash
 ./infra/bootstrap/bootstrap.sh owc-dpar-d
 ```
+
+> **The bucket name has to agree in three places** — the argument above
+> (which derives `gcs-<project>-tfstate-1`), `state_bucket` in
+> `terraform.tfvars`, and `bucket` in `backend.tf`. Terraform's backend block
+> cannot read a variable, so the literal is committed and has to be edited if
+> you use a different project id. A mismatch surfaces at `terraform init`
+> as a bucket that does not exist.
+>
+> One bucket per environment, in that environment's own project. Never share
+> one: bucket names are globally unique, so a shared name is not one bucket
+> per project but **one bucket total**, in whichever project bootstrapped
+> first — which silently puts prod's state inside dev. `bootstrap.sh` refuses
+> to continue if the bucket it finds belongs to a different project.
 
 This enables `cloudresourcemanager.googleapis.com` and
 `serviceusage.googleapis.com`, creates `gs://gcs-owc-dpar-d-tfstate-1`, and then **verifies
@@ -60,6 +85,8 @@ $EDITOR infra/terraform/envs/dev/terraform.tfvars
 | Variable | Notes |
 |---|---|
 | `project_id` | This environment's project |
+| `name_prefix` | **Required, no default.** Drives every resource name via the OMES convention `<type>-<name_prefix>-<qualifier>-<seq>`, so `owc-dpar-d` gives `gcs-owc-dpar-d-raw-1`. Normally identical to `project_id`. Capped at 14 characters, because it is embedded in service account ids and GCP caps those at 30 — the plan fails with that sentence if you exceed it. |
+| `state_bucket` | **Required, no default.** This environment's Terraform state bucket, `gcs-<name_prefix>-tfstate-1`. It must match `backend.tf` in the same directory — see the warning below. |
 | `github_repository` | `owner/repo`, exactly. **Validated — no wildcards.** See step 6. |
 | `allowed_refs` | `[]` for dev (CI plans PRs as the dev deployer, from arbitrary refs); `["refs/heads/prod"]` for prod |
 | `alert_emails` | The distribution list |
@@ -462,3 +489,12 @@ Same steps with `ENV=prod`, plus:
   plan on a private repo, and without it the environment exists but gates
   nothing. See [`04-deployment.md`](04-deployment.md#the-gate-on-production).
 - Leave `raw_bucket_force_destroy = false`.
+- Leave `schedulers_paused = false` and `freshness_check_enabled = true`.
+  These are the two settings dev inverts: prod is the environment whose
+  schedule and freshness are real. See
+  [what dev does differently](04-deployment.md#what-dev-does-differently).
+- Its own state bucket, `gcs-owc-dpar-p-tfstate-1`, in the **prod** project —
+  not the dev one.
+
+Prod is a separate project with its own WIF pool, deployer, registry and
+state. Nothing in it depends on dev, and nothing in dev can reach it.
