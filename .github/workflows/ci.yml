@@ -126,6 +126,32 @@ jobs:
           echo "env=$ENV" >> "$GITHUB_OUTPUT"
           echo "upper=$(echo "$ENV" | tr a-z A-Z)" >> "$GITHUB_OUTPUT"
 
+      # Same shape check deploy.yml runs, for the same reason: a repository
+      # variable holding the TEXT of a terraform warning is non-empty and
+      # passes every presence test. Without this the auth action fails with
+      # "must specify exactly one of workload_identity_provider or
+      # credentials_json", which points at the workflow rather than at the
+      # variable that is actually wrong.
+      - name: check ${{ steps.env.outputs.env }} variables look valid
+        env:
+          WIF: ${{ vars[format('WIF_PROVIDER_{0}', steps.env.outputs.upper)] }}
+          SA: ${{ vars[format('DEPLOYER_SA_{0}', steps.env.outputs.upper)] }}
+          PROJECT: ${{ vars[format('PROJECT_ID_{0}', steps.env.outputs.upper)] }}
+          PREFIX: ${{ vars[format('NAME_PREFIX_{0}', steps.env.outputs.upper)] }}
+        run: |
+          UP="${{ steps.env.outputs.upper }}"
+          bad=""
+          case "$WIF" in projects/*/locations/global/workloadIdentityPools/*/providers/*) ;; *) bad="$bad WIF_PROVIDER_$UP" ;; esac
+          case "$SA" in *@*.iam.gserviceaccount.com) ;; *) bad="$bad DEPLOYER_SA_$UP" ;; esac
+          case "$PROJECT" in *[!a-z0-9-]*|"") bad="$bad PROJECT_ID_$UP" ;; esac
+          case "$PREFIX" in *[!a-z0-9-]*|"") bad="$bad NAME_PREFIX_$UP" ;; esac
+          if [ -n "$bad" ]; then
+            echo "::error::Cannot plan ${{ steps.env.outputs.env }} — these repository variables are missing or malformed:$bad"
+            echo "Set them up with: make gh-vars ENV=${{ steps.env.outputs.env }}"
+            echo "That environment has to be bootstrapped and applied first — see docs/03-gcp-setup.md"
+            exit 1
+          fi
+
       - uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars[format('WIF_PROVIDER_{0}', steps.env.outputs.upper)] }}
