@@ -233,6 +233,17 @@ tf-reinit: ## Re-point $(ENV) at the bucket in its backend.tf (after changing pr
 # provisioned well before `make build` runs, which is what otherwise produces
 # a PERMISSION_DENIED on the first submit.
 #
+# The build IDENTITY is here too, and has to be. `make build` submits as
+# sa-<name_prefix>-build-1 rather than the Compute Engine default (which
+# carries project Editor), so on a cold start the next step fails with:
+#
+#   NOT_FOUND: generic::not_found: Unknown service account
+#
+# That read as an auth problem with the human's own credentials, which it is
+# not. Three grants come with it — logWriter, objectViewer on the source
+# tarball, and writer on the registry — because a build with its own service
+# account fails without them.
+#
 # The placeholder digest satisfies the pipeline module's "must be a digest"
 # validation, which Terraform evaluates even for resources -target excludes.
 # No Cloud Run job is created by this step.
@@ -240,9 +251,13 @@ tf-bootstrap: ## First deploy only: create Artifact Registry + the secret contai
 	cd $(TF_DIR) && terraform init && terraform apply \
 	  -target=module.platform.google_artifact_registry_repository.images \
 	  -target=module.platform.google_secret_manager_secret.snowflake_password \
+	  -target=module.platform.google_service_account.build \
+	  -target=module.platform.google_project_iam_member.build_log_writer \
+	  -target=module.platform.google_project_iam_member.build_source_reader \
+	  -target=module.platform.google_artifact_registry_repository_iam_member.build_writer \
 	  -var='image_digest=bootstrap@sha256:0000000000000000000000000000000000000000000000000000000000000000'
 	@echo ""
-	@echo ">> Artifact Registry ready, and the secret container exists."
+	@echo ">> Artifact Registry, the secret container, and the build identity exist."
 	@echo "   Next:"
 	@echo "     1. printf '%s' 'THE_PASSWORD' | gcloud secrets versions add $(SECRET_NAME) --data-file=- --project $(PROJECT)"
 	@echo "     2. make build ENV=$(ENV)"

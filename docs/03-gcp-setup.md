@@ -159,16 +159,34 @@ name unknown: Repository "ar-$PREFIX-images-1" not found
 make tf-bootstrap ENV=dev
 ```
 
-This targets exactly two resources — the Artifact Registry repository and the
-Snowflake secret container — plus the API enablement they depend on. Nothing
-else. Keeping the target this narrow is deliberate: an earlier version applied
-the whole platform module and failed on unrelated monitoring resources even
+This targets three things and the API enablement they depend on. Nothing
+else. Keeping the target narrow is deliberate: an earlier version applied the
+whole platform module and failed on unrelated monitoring resources even
 though the registry itself was created fine. A bootstrap step should have the
 smallest blast radius that unblocks the next step.
 
-Those two exist because each unblocks something later: the registry is what
-`make build` pushes to, and the secret container is what you store the password
-into — which has to happen **before** the apply in step 5.
+Each one unblocks something later:
+
+| Created here | Because |
+|---|---|
+| Artifact Registry repository | What `make build` pushes to in step 4. |
+| Snowflake secret container | What you store the password into, below — before the apply in step 5. |
+| Build service account, plus its three grants | What `make build` submits **as** in step 4. |
+
+The build identity is the one that looks optional and is not. Builds run as
+`sa-<name_prefix>-build-1` rather than the Compute Engine default, because
+the default carries project **Editor** and submitting a build requires
+`actAs` on whatever it runs as. Without it, step 4 fails on a cold start
+with:
+
+```
+ERROR: (gcloud.builds.submit) NOT_FOUND: generic::not_found: Unknown service
+account. This command is authenticated as you@example.com which is the
+active account specified by the [core/account] property
+```
+
+which reads like a problem with *your* credentials. It is not — the service
+account named in `_BUILD_SA` simply does not exist yet.
 
 Enabling the APIs here also gets Cloud Build's service agent provisioned well
 before step 4, which is what otherwise causes a `PERMISSION_DENIED` on the
