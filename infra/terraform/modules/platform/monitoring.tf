@@ -91,49 +91,79 @@ locals {
     "STRUCT('${t.pipeline}' AS pipeline, '${t.group_name}' AS group_name, ${t.max_age_hours} AS max_age_hours)"
   ])
 
+  # Wrapped in BEGIN...END, and that is load-bearing rather than style.
+  #
+  # The Data Transfer Service rejects a bare SELECT before running it:
+  #   "A destination table must be set with SELECT statements."
+  # So the original form failed EVERY day, on the API's terms, never
+  # reaching the freshness logic at all — and this is the one alert that
+  # catches a scheduler which quietly stopped, so it would have sat dead in
+  # prod exactly when it was needed. Dev never created the resource
+  # (freshness_check_enabled = false), which is why nothing surfaced it.
+  #
+  # The alternative is giving it a destination table, which means upgrading
+  # the freshness SA from dataViewer to dataEditor on owc_ops so it can
+  # write. A multi-statement script is not a "SELECT statement" as far as
+  # DTS is concerned, needs no destination, and keeps the identity
+  # read-only — which is the whole point of it having its own account.
+  #
+  # The signal is still the RUN FAILING: RAISE aborts the job, the DTS logs
+  # an ERROR, and google_logging_metric.freshness_failed turns that into
+  # alert 2.
   freshness_query = <<-SQL
-    -- Fails when any schedule group has not had a successful run inside its
-    -- own interval plus grace. A failure here is alert #2.
-    WITH latest AS (
-      SELECT
-        pipeline,
-        dataset,
-        group_name,
-        MAX(finished_at) AS last_success_at
-      FROM `${var.project_id}.owc_ops.pipeline_runs`
-      WHERE status IN ('success', 'success_no_change')
-      GROUP BY pipeline, dataset, group_name
-    ),
-    thresholds AS (
-      SELECT * FROM UNNEST([
-        ${local.freshness_threshold_struct}
-      ])
-    ),
-    stale AS (
-      SELECT
-        l.pipeline,
-        l.dataset,
-        l.group_name,
-        TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), l.last_success_at, HOUR) AS age_hours,
-        t.max_age_hours
-      FROM latest AS l
-      JOIN thresholds AS t
-        ON l.pipeline = t.pipeline AND l.group_name = t.group_name
-      WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), l.last_success_at, HOUR) > t.max_age_hours
-    )
-    SELECT
-      IF(
-        COUNT(*) = 0,
-        'ok',
-        ERROR(FORMAT(
-          'PIPELINE FRESHNESS FAILURE: %d dataset(s) overdue: %s',
-          COUNT(*),
-          STRING_AGG(FORMAT('%s.%s (%s) %d h old, limit %d h',
-                            pipeline, dataset, group_name, age_hours, max_age_hours),
-                     '; ' ORDER BY age_hours DESC LIMIT 20)
-        ))
-      ) AS status
-    FROM stale
+    BEGIN
+      -- Set when any schedule group has not had a successful run inside its
+      -- own interval plus grace; NULL when everything is current.
+      DECLARE msg STRING;
+
+      SET msg = (
+        WITH latest AS (
+          SELECT
+            pipeline,
+            dataset,
+            group_name,
+            MAX(finished_at) AS last_success_at
+          FROM `${var.project_id}.owc_ops.pipeline_runs`
+          WHERE status IN ('success', 'success_no_change')
+          GROUP BY pipeline, dataset, group_name
+        ),
+        thresholds AS (
+          SELECT * FROM UNNEST([
+            ${local.freshness_threshold_struct}
+          ])
+        ),
+        stale AS (
+          SELECT
+            l.pipeline,
+            l.dataset,
+            l.group_name,
+            TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), l.last_success_at, HOUR) AS age_hours,
+            t.max_age_hours
+          FROM latest AS l
+          JOIN thresholds AS t
+            ON l.pipeline = t.pipeline AND l.group_name = t.group_name
+          WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), l.last_success_at, HOUR) > t.max_age_hours
+        )
+        SELECT
+          IF(
+            COUNT(*) = 0,
+            NULL,
+            FORMAT(
+              'PIPELINE FRESHNESS FAILURE: %d dataset(s) overdue: %s',
+              COUNT(*),
+              STRING_AGG(FORMAT('%s.%s (%s) %d h old, limit %d h',
+                                pipeline, dataset, group_name, age_hours, max_age_hours),
+                         '; ' ORDER BY age_hours DESC LIMIT 20)
+            )
+          )
+        FROM stale
+      );
+
+      -- Failing the run IS the alert. See the comment above.
+      IF msg IS NOT NULL THEN
+        RAISE USING MESSAGE = msg;
+      END IF;
+    END;
   SQL
 }
 
