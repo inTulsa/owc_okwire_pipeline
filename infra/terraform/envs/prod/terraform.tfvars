@@ -2,9 +2,9 @@
 #
 # See envs/dev/terraform.tfvars for how to point an apply at a different
 # project without editing the committed handoff values.
-project_id        = "owc-dpar-p"
-name_prefix       = "owc-dpar-p"
-state_bucket      = "gcs-owc-dpar-p-tfstate-1"
+project_id        = "owc-dpar-tp"
+name_prefix       = "owc-dpar-tp"
+state_bucket      = "gcs-owc-dpar-tp-tfstate-1"
 region            = "us-central1"
 location          = "US"
 github_repository = "inTulsa/owc_okwire_pipeline"

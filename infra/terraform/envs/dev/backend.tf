@@ -2,7 +2,7 @@
 # create the bucket that holds its own state. See docs/03-gcp-setup.md.
 terraform {
   backend "gcs" {
-    bucket = "gcs-owc-dpar-d-tfstate-1"
+    bucket = "gcs-owc-dpar-td-tfstate-1"
     prefix = "env/dev"
   }
 }

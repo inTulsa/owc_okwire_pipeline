@@ -9,9 +9,9 @@
 # and point the backend at your own bucket once, at init:
 #
 #   terraform -chdir=infra/terraform/envs/dev init -reconfigure -backend-config="bucket=my-tfstate"
-project_id        = "owc-dpar-d"
-name_prefix       = "owc-dpar-d"
-state_bucket      = "gcs-owc-dpar-d-tfstate-1"
+project_id        = "owc-dpar-td"
+name_prefix       = "owc-dpar-td"
+state_bucket      = "gcs-owc-dpar-td-tfstate-1"
 region            = "us-central1"
 location          = "US"
 github_repository = "inTulsa/owc_okwire_pipeline"
