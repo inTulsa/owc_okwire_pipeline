@@ -55,7 +55,7 @@ RUN_ARGS += --limit $(LIMIT)
 endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check auth-check \
-        diff-enrollment derive-scrape derive-check lock lock-check base-digest build deploy set-image which-image image-digest tf-init tf-reinit tf-bootstrap preflight wif-check deployer-check tf-output gh-vars tf-plan tf-apply tf-fmt tf-validate clean
+        diff-enrollment derive-scrape derive-check lock lock-check base-digest build deploy set-image which-image image-digest tf-init tf-reinit tf-bootstrap preflight wif-check deployer-check verify-separation tf-output gh-vars tf-plan tf-apply tf-fmt tf-validate clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -347,6 +347,10 @@ wif-check: ## Verify github_repository in tfvars matches the actual git remote, 
 	    echo "  Set github_repository to exactly: $$remote"; \
 	    echo ""; exit 1; \
 	  fi
+
+verify-separation: auth-check ## Check each identity can reach only what it should
+	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@scripts/verify-separation.sh $(PROJECT) $(NAME_PREFIX)
 
 preflight: auth-check wif-check ## Check the Snowflake secret has a version before applying
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }

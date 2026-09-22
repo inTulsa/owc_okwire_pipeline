@@ -152,7 +152,7 @@ repository that `make build` pushes to, so on a brand-new project the build
 has nowhere to push and fails with:
 
 ```
-name unknown: Repository "ar-$PREFIX-images-1" not found
+name unknown: Repository "ar-owc-dpar-d-images-1" not found
 ```
 
 ```bash
@@ -253,7 +253,7 @@ Cloud Run jobs and the schedulers:
 
 ```bash
 IMAGE=$(make -s image-digest ENV=dev)
-echo "$IMAGE"   # us-central1-docker.pkg.dev/owc-dpar-d/ar-$PREFIX-images-1/owcdata@sha256:...
+echo "$IMAGE"   # us-central1-docker.pkg.dev/owc-dpar-d/ar-owc-dpar-d-images-1/owcdata@sha256:...
 
 make tf-apply ENV=dev TF_ARGS="-var=image_digest=$IMAGE"
 ```
@@ -412,28 +412,31 @@ Each pipeline has its own service account, and every grant is scoped to a
 specific resource. Confirm the separation is real:
 
 ```bash
-ENV=dev PROJECT=owc-dpar-d
-
-# The enrollment SA must NOT be able to read the Snowflake secret.
-gcloud secrets get-iam-policy sm-$PREFIX-snowflake-password-1 --project=$PROJECT --format=json \
-  | grep -q "cr-$PREFIX-enrollment-1" \
-  && echo "PROBLEM: enrollment can read the Snowflake secret" \
-  || echo "OK: enrollment has no secret access"
-
-# The lightcast SA must NOT be able to write the scrape cache.
-gcloud storage buckets get-iam-policy gs://gcs-$PREFIX-enrollment-state-1 --format=json \
-  | grep -q "cr-$PREFIX-lightcast-1" \
-  && echo "PROBLEM: lightcast can write the scrape cache" \
-  || echo "OK: lightcast has no access to the enrollment state bucket"
-
-# PowerBI reads owc_marts and NOTHING else — not staging (unvalidated data),
-# not ops (the run manifest).
-for ds in owc_staging owc_ops; do
-  bq show --format=prettyjson $PROJECT:$ds | grep -q "sa-$PREFIX-powerbi-1" \
-    && echo "PROBLEM: PowerBI has a grant on $ds" \
-    || echo "OK: PowerBI has no grant on $ds"
-done
+make verify-separation ENV=dev
 ```
+
+```text
+Identity separation — owc-dpar-d (prefix owc-dpar-d)
+
+  OK       enrollment has no access to the Snowflake secret
+  OK       lightcast has no access to the enrollment state bucket
+  OK       PowerBI has no grant on owc_staging
+  OK       PowerBI has no grant on owc_ops
+  OK       control: PowerBI IS granted on owc_marts (so the checks above can detect a grant)
+
+Separation verified.
+```
+
+The last line is a **positive control**, and it is the point of the whole
+thing. Every other assertion passes by *not* finding a service account in a
+policy — which is also exactly what happens when the lookup is broken, the
+name is misspelled, or you lack permission to read the policy at all. This
+was previously a block of shell to paste, and it had all three of those
+faults at once while cheerfully printing `OK`.
+
+So the control asserts a grant that must exist. If it cannot find that one,
+none of the negative results above it mean anything and the command exits
+non-zero.
 
 ## 8. Region co-location
 
