@@ -21,6 +21,10 @@ resource "google_cloud_scheduler_job" "this" {
   time_zone   = var.timezone
   description = "Runs the ${var.name} pipeline (${each.value.name} group)."
 
+  # Dev is paused: it would otherwise run prod's exact schedule against
+  # Snowflake and bill Lightcast twice. See the variable's documentation.
+  paused = var.schedulers_paused
+
   # jobs:run is not idempotent — see the header comment.
   retry_config {
     retry_count = 0

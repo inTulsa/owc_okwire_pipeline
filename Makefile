@@ -55,7 +55,7 @@ RUN_ARGS += --limit $(LIMIT)
 endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check auth-check \
-        diff-enrollment derive-scrape derive-check lock lock-check base-digest build deploy set-image which-image image-digest tf-init tf-bootstrap preflight wif-check deployer-check tf-output gh-vars tf-plan tf-apply tf-fmt tf-validate clean
+        diff-enrollment derive-scrape derive-check lock lock-check docs-check base-digest build deploy set-image which-image image-digest tf-init tf-reinit tf-bootstrap preflight wif-check deployer-check verify-separation env-exports tf-output gh-vars tf-plan tf-apply tf-fmt tf-validate clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -96,7 +96,15 @@ fmt: ## ruff format + fix
 typecheck: ## mypy
 	$(VENV)/bin/mypy
 
-check: lint typecheck derive-check lock-check validate test ## Everything CI runs on a PR
+# The docs are the handoff artifact — OMES runs this project from them, with
+# nobody to ask when a command turns out not to exist. Several doc/code
+# couplings were introduced at once (make targets, the naming convention,
+# scripts, terraform outputs) and they all rot silently: nothing fails until
+# a person follows the instructions, by which point you are not there.
+docs-check: ## Verify the docs only reference targets, outputs and scripts that exist
+	@python3 scripts/docs-check.py
+
+check: lint typecheck derive-check lock-check docs-check validate test ## Everything CI runs on a PR
 
 diff-enrollment: ## Show every change made to the carried-over enrollment script
 	@diff -u $(ORIGINAL) $(SCRAPE) || true
@@ -198,6 +206,27 @@ image-digest: auth-check ## Print just the digest-pinned image reference (script
 tf-init: ## terraform init for $(ENV)
 	cd $(TF_DIR) && terraform init
 
+# Re-point a working copy at a different project's state bucket.
+#
+# terraform caches the backend config in .terraform/, so after editing
+# backend.tf every command stops with "Backend configuration changed" and
+# suggests `-migrate-state` FIRST. That suggestion is wrong here and it is
+# destructive in a quiet way: migrating copies the OLD project's state into
+# the NEW bucket, after which Terraform believes the old project's resources
+# exist in the new one and plans against them.
+#
+# Each environment's state already lives in its own bucket. Switching
+# projects means adopting that bucket as-is, which is -reconfigure. The old
+# state is left untouched where it is.
+#
+# A fresh clone never needs this — there is no cache to invalidate.
+tf-reinit: ## Re-point $(ENV) at the bucket in its backend.tf (after changing projects)
+	@echo ">> re-pointing $(ENV) at $$(awk -F'"' '/bucket/{print $$2}' $(TF_DIR)/backend.tf)"
+	cd $(TF_DIR) && terraform init -reconfigure
+	@echo ""
+	@echo ">> resources in state: $$(cd $(TF_DIR) && terraform state list 2>/dev/null | wc -l | tr -d ' ')"
+	@echo "   0 is correct for a project you have not applied to yet."
+
 # Breaks the first-deploy cycle: Terraform creates Artifact Registry, but
 # `make build` needs Artifact Registry to push to.
 #
@@ -212,6 +241,17 @@ tf-init: ## terraform init for $(ENV)
 # provisioned well before `make build` runs, which is what otherwise produces
 # a PERMISSION_DENIED on the first submit.
 #
+# The build IDENTITY is here too, and has to be. `make build` submits as
+# sa-<name_prefix>-build-1 rather than the Compute Engine default (which
+# carries project Editor), so on a cold start the next step fails with:
+#
+#   NOT_FOUND: generic::not_found: Unknown service account
+#
+# That read as an auth problem with the human's own credentials, which it is
+# not. Three grants come with it — logWriter, objectViewer on the source
+# tarball, and writer on the registry — because a build with its own service
+# account fails without them.
+#
 # The placeholder digest satisfies the pipeline module's "must be a digest"
 # validation, which Terraform evaluates even for resources -target excludes.
 # No Cloud Run job is created by this step.
@@ -219,9 +259,13 @@ tf-bootstrap: ## First deploy only: create Artifact Registry + the secret contai
 	cd $(TF_DIR) && terraform init && terraform apply \
 	  -target=module.platform.google_artifact_registry_repository.images \
 	  -target=module.platform.google_secret_manager_secret.snowflake_password \
+	  -target=module.platform.google_service_account.build \
+	  -target=module.platform.google_project_iam_member.build_log_writer \
+	  -target=module.platform.google_project_iam_member.build_source_reader \
+	  -target=module.platform.google_artifact_registry_repository_iam_member.build_writer \
 	  -var='image_digest=bootstrap@sha256:0000000000000000000000000000000000000000000000000000000000000000'
 	@echo ""
-	@echo ">> Artifact Registry ready, and the secret container exists."
+	@echo ">> Artifact Registry, the secret container, and the build identity exist."
 	@echo "   Next:"
 	@echo "     1. printf '%s' 'THE_PASSWORD' | gcloud secrets versions add $(SECRET_NAME) --data-file=- --project $(PROJECT)"
 	@echo "     2. make build ENV=$(ENV)"
@@ -312,6 +356,10 @@ wif-check: ## Verify github_repository in tfvars matches the actual git remote, 
 	    echo ""; exit 1; \
 	  fi
 
+verify-separation: auth-check ## Check each identity can reach only what it should
+	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@scripts/verify-separation.sh $(PROJECT) $(NAME_PREFIX)
+
 preflight: auth-check wif-check ## Check the Snowflake secret has a version before applying
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@if [ -n "$(SKIP_PREFLIGHT)" ]; then echo ">> preflight skipped"; exit 0; fi
@@ -344,6 +392,25 @@ preflight: auth-check wif-check ## Check the Snowflake secret has a version befo
 # for `$(...)` capture and wrong for reading: the value runs straight into the
 # next prompt or error. The `&& echo` restores it without affecting capture,
 # since command substitution strips trailing newlines anyway.
+# The shell variables the docs' raw gcloud/bq commands use.
+#
+# Printed rather than documented as literals because this document is run
+# TWICE — once per environment — and a hardcoded project id has to be
+# hand-substituted on the second pass, in every command, with production on
+# the other end. One missed substitution aims a command at dev while you
+# believe you are in prod.
+#
+# Derived from tfvars, never typed: an empty PREFIX silently builds names
+# like "gcs--raw-1" that 404 with no hint as to why, which is exactly how
+# the old step 7 checks passed while testing nothing.
+env-exports: ## Print the shell exports the docs' raw gcloud/bq commands use
+	@test -n "$(PROJECT)"     || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@test -n "$(NAME_PREFIX)" || { echo "could not read name_prefix from $(TFVARS)" >&2; exit 1; }
+	@echo "export ENV=$(ENV)"
+	@echo "export PROJECT=$(PROJECT)"
+	@echo "export PREFIX=$(NAME_PREFIX)"
+	@echo "export REGION=$(REGION)"
+
 tf-output: ## Show terraform outputs for $(ENV). Add NAME=<output> for one value.
 	@scripts/tf-output.sh $(TF_DIR) $(ENV) $(PROJECT) $(NAME)
 
@@ -396,6 +463,13 @@ deployer-check: auth-check ## Verify the deployer SA has every role GitHub Actio
 	    echo ""; exit 1; \
 	  fi; \
 	  echo ">> deployer-check OK: $(DEPLOYER_SA) has all $$(echo "$$expected" | wc -l | tr -d ' ') project roles"
+	@# Project roles are only half of it. Attaching a service account to a
+	@# resource needs iam.serviceAccounts.actAs ON THAT ACCOUNT, which is a
+	@# per-SA binding and invisible to the project-role check above. A human
+	@# applying as owner has actAs on everything, so a missing grant here is
+	@# a CI-only 403 — and for the freshness SA, a PROD-only one, since dev
+	@# does not create that resource at all.
+	@wanted=$$(awk '/impersonatable_service_accounts = \[/,/^  \]/' $(TF_DIR)/main.tf 	    | grep -oE 'service_account_emails\.[a-z]+' | cut -d. -f2 | sort -u); 	  test -n "$$wanted" || { echo "could not parse impersonatable_service_accounts from $(TF_DIR)/main.tf" >&2; exit 1; }; 	  missing=""; 	  for n in $$wanted; do 	    email="sa-$(NAME_PREFIX)-$$n-1@$(PROJECT).iam.gserviceaccount.com"; 	    if ! gcloud iam service-accounts get-iam-policy "$$email" --project $(PROJECT) 	         --flatten='bindings[].members' 	         --filter="bindings.members:$(DEPLOYER_SA) AND bindings.role:roles/iam.serviceAccountUser" 	         --format='value(bindings.role)' 2>/dev/null | grep -q serviceAccountUser; then 	      missing="$$missing $$n"; 	    fi; 	  done; 	  if [ -n "$$missing" ]; then 	    echo ""; 	    echo "  $(DEPLOYER_SA) cannot actAs:$$missing"; 	    echo ""; 	    echo "  Terraform attaches these service accounts to resources, which needs"; 	    echo "  iam.serviceAccountUser on each. CI fails with:"; 	    echo "    Error 403: The principal ... lacks IAM permission \"iam.serviceAccounts.actAs\""; 	    echo "  Your own applies keep working — as owner you have actAs on everything."; 	    echo ""; 	    echo "  Fix — apply as a project owner:  make tf-apply ENV=$(ENV)"; 	    echo ""; exit 1; 	  fi; 	  echo ">> deployer-check OK: and can actAs $$(echo $$wanted | wc -w | tr -d ' ') service account(s):$$(echo $$wanted | tr '\n' ' ' | sed 's/^/ /')"
 
 # Sets the three per-environment GitHub repository variables in one step.
 #
@@ -415,6 +489,15 @@ gh-vars: deployer-check ## Set the GitHub repo variables for $(ENV) from its ter
 	  wif=$$($(MAKE) -s --no-print-directory tf-output ENV=$(ENV) NAME=workload_identity_provider) || exit 1; \
 	  sa=$$($(MAKE)  -s --no-print-directory tf-output ENV=$(ENV) NAME=deployer_service_account)  || exit 1; \
 	  test -n "$$wif" && test -n "$$sa" || { echo "refusing to set an empty variable" >&2; exit 1; }; \
+	  case "$$wif" in projects/*/locations/global/workloadIdentityPools/*/providers/*) ;; \
+	    *) echo "" >&2; echo "workload_identity_provider does not look like a provider path:" >&2; \
+	       echo "  $$wif" >&2; echo "" >&2; \
+	       echo "terraform output prints 'Warning: No outputs found' and exits ZERO when the" >&2; \
+	       echo "state has no outputs, so a non-empty check is not enough. Apply this" >&2; \
+	       echo "environment first: make tf-apply ENV=$(ENV)" >&2; echo "" >&2; exit 1 ;; esac; \
+	  case "$$sa" in *@*.iam.gserviceaccount.com) ;; \
+	    *) echo "" >&2; echo "deployer_service_account does not look like an SA email:" >&2; \
+	       echo "  $$sa" >&2; echo "" >&2; exit 1 ;; esac; \
 	  test -n "$(NAME_PREFIX)" || { echo "could not read name_prefix from $(TFVARS)" >&2; exit 1; }; \
 	  gh variable set REGION              --body "$(REGION)"; \
 	  gh variable set PROJECT_ID_$$up     --body "$(PROJECT)"; \

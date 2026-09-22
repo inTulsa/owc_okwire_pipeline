@@ -236,3 +236,28 @@ variable "name_prefix" {
   type        = string
   description = "Project prefix for the OMES naming convention. See modules/platform/naming.tf."
 }
+
+variable "schedulers_paused" {
+  type        = bool
+  description = <<-EOT
+    Create the Cloud Scheduler jobs but leave them PAUSED. True in dev.
+
+    Both environments read the same pipelines.yml, so without this dev fires
+    the identical schedule prod does — 41 Snowflake queries at 06:00 on the
+    1st, at the same minute as prod, every month. Those credits bill to
+    LIGHTCAST, and the two environments would also contend for
+    TULSA_FOR_YOU_WH. Dev exists to prove a deploy works; the smoke run in
+    the deploy workflow does that, and nobody reads dev's marts.
+
+    Paused rather than absent on purpose. Terraform still manages the job, so
+    the oauth_token wiring and the run.invoker grant are exercised and
+    drift-detected in dev instead of being first tried in prod. Resuming one
+    to test it is a single command and needs no Terraform change:
+
+      gcloud scheduler jobs resume <name> --location <region>
+
+    Note that a resume done by hand is NOT reverted by a later apply only if
+    you also flip this variable; otherwise the next apply pauses it again.
+  EOT
+  default     = false
+}

@@ -1,27 +1,71 @@
 # GCP setup
 
-One-time bootstrap per environment. About 30 minutes.
+**Run this document twice — once per environment.**
+
+Start with [Set your shell up first](#set-your-shell-up-first), immediately
+below. The commands here read `$PROJECT` and `$PREFIX` from that
+environment's `terraform.tfvars`, so moving from dev to prod is one command
+rather than a substitution in every line — and nothing can end up pointed at
+the wrong project because you missed one.
+
+Finish dev end to end before starting prod; the only differences for prod
+are in [Repeat for prod](#repeat-for-prod).
+
+About 30 minutes per environment.
 
 ## What you need first
 
-- A GCP project with billing linked, one per environment
-  (`owc-dpar-d`, `owc-dpar-p`)
+- **A GCP project with billing linked, one per environment**
+  (`owc-dpar-d`, `owc-dpar-p`). **This repo does not create it.** At OMES the
+  project and its spoke network — VPC, subnet, Cloud NAT, and the router back
+  to the state transit hub — are provisioned separately from
+  `omes-net-gcp-tf-owc-dpar-<env>`, per the Phase Two infrastructure
+  architecture. This repo deploys the data platform *into* a project that
+  already exists.
 - `roles/owner` on it, or enough to create service accounts and set IAM
 - `gcloud` and `terraform` locally
 - The Snowflake reader-account password
 - A distribution list for alerts — **not** an individual's address, so people
   can join and leave without a Terraform change
+- The Cloud Run jobs use **default egress**, not the spoke VPC: reaching
+  Snowflake and the OSDE site needs no special network path, so nothing here
+  coordinates with the network layer.
 
-### Authenticate twice
+### Set your shell up first
+
+Every raw `gcloud` and `bq` command below uses these. **Re-run this when you
+switch to prod** — it is the one thing that repoints all of them at once:
+
+```bash
+eval "$(make -s env-exports ENV=dev)"
+echo "$ENV $PROJECT $PREFIX $REGION"     # confirm before continuing
+```
+
+```text
+dev owc-dpar-d owc-dpar-d us-central1
+```
+
+The values come from that environment's `terraform.tfvars`, so they cannot
+drift from what Terraform built. Confirm the echo before continuing: an
+**empty** variable does not error, it silently builds names like
+`gcs--raw-1` that 404 with nothing pointing at the cause.
+
+`make` targets read the project themselves and need none of this.
+
+### Authenticate twice — and re-point it per environment
 
 gcloud and Terraform use **different** credentials, and having one without the
-other is the most common way this setup fails on a fresh machine:
+other is the most common way this setup fails on a fresh machine.
+
+The last two lines are **per environment**: run them again with the prod
+project when you come back to do prod, or every Terraform call will be billed
+to — and resolved against — the wrong project:
 
 ```bash
 gcloud auth login                                    # the gcloud CLI itself
 gcloud auth application-default login                # what TERRAFORM uses
-gcloud config set project owc-dpar-d
-gcloud auth application-default set-quota-project owc-dpar-d
+gcloud config set project $PROJECT
+gcloud auth application-default set-quota-project $PROJECT
 ```
 
 The quota project matters more than it looks. Terraform's GCS backend bills
@@ -38,6 +82,16 @@ Credentials; if that project is deleted or inactive, **every** call returns
 ./infra/bootstrap/bootstrap.sh owc-dpar-d
 ```
 
+> The script derives the bucket name from the project id:
+> `gcs-<project>-tfstate-1`. **Step 2 puts that same name in two more
+> files** — get all three matching or `terraform init` fails in step 3.
+>
+> One bucket per environment, in that environment's own project. Never share
+> one: bucket names are globally unique, so a shared name is not one bucket
+> per project but **one bucket total**, in whichever project bootstrapped
+> first — which silently puts prod's state inside dev. `bootstrap.sh` refuses
+> to continue if the bucket it finds belongs to a different project.
+
 This enables `cloudresourcemanager.googleapis.com` and
 `serviceusage.googleapis.com`, creates `gs://gcs-owc-dpar-d-tfstate-1`, and then **verifies
 that Terraform's own credentials can read that bucket** — running the exact
@@ -51,7 +105,9 @@ enable the APIs that let it enable APIs. And Terraform cannot create the
 bucket that holds its own state. Everything else — the other 13 APIs and every
 resource — is Terraform's job.
 
-## 2. Fill in tfvars
+## 2. Fill in tfvars **and backend.tf**
+
+Two files per environment, in the same directory. Both, or step 3 fails.
 
 ```bash
 $EDITOR infra/terraform/envs/dev/terraform.tfvars
@@ -60,6 +116,8 @@ $EDITOR infra/terraform/envs/dev/terraform.tfvars
 | Variable | Notes |
 |---|---|
 | `project_id` | This environment's project |
+| `name_prefix` | **Required, no default.** Drives every resource name via the OMES convention `<type>-<name_prefix>-<qualifier>-<seq>`, so `owc-dpar-d` gives `gcs-owc-dpar-d-raw-1`. Normally identical to `project_id`. Capped at 14 characters, because it is embedded in service account ids and GCP caps those at 30 — the plan fails with that sentence if you exceed it. |
+| `state_bucket` | **Required, no default.** This environment's Terraform state bucket, `gcs-<name_prefix>-tfstate-1`. Must match `backend.tf` — see directly below. |
 | `github_repository` | `owner/repo`, exactly. **Validated — no wildcards.** See step 6. |
 | `allowed_refs` | `[]` for dev (CI plans PRs as the dev deployer, from arbitrary refs); `["refs/heads/prod"]` for prod |
 | `alert_emails` | The distribution list |
@@ -82,6 +140,38 @@ $EDITOR infra/terraform/envs/dev/terraform.tfvars
 > [the deployer permission gap](#confirm-the-deployer-can-actually-deploy),
 > and `deployer-check` will not catch it because the role is not project-level.
 
+### Then backend.tf, in the same directory
+
+Terraform's backend block **cannot read a variable** — not `state_bucket`,
+not anything. The bucket is a committed literal, so it is the one value you
+set in two places:
+
+```bash
+$EDITOR infra/terraform/envs/dev/backend.tf
+```
+
+```hcl
+terraform {
+  backend "gcs" {
+    bucket = "gcs-owc-dpar-d-tfstate-1"   # must equal state_bucket above
+    prefix = "env/dev"                     # leave this alone
+  }
+}
+```
+
+Leave `prefix` as it is. It separates the two environments' state *within* a
+bucket, which matters only if you ever do share one — and you should not.
+
+A mismatch does not say "mismatch". It surfaces in step 3 as:
+
+```
+Error: Failed to get existing workspaces: querying Cloud Storage failed:
+storage: bucket doesn't exist
+```
+
+which reads like the bootstrap failed, when the bucket is fine and Terraform
+is simply looking for a different one.
+
 ## 3. Create Artifact Registry and the secret container
 
 **Do this before `make build`.** Terraform creates the Artifact Registry
@@ -89,23 +179,41 @@ repository that `make build` pushes to, so on a brand-new project the build
 has nowhere to push and fails with:
 
 ```
-name unknown: Repository "ar-$PREFIX-images-1" not found
+name unknown: Repository "ar-owc-dpar-d-images-1" not found
 ```
 
 ```bash
 make tf-bootstrap ENV=dev
 ```
 
-This targets exactly two resources — the Artifact Registry repository and the
-Snowflake secret container — plus the API enablement they depend on. Nothing
-else. Keeping the target this narrow is deliberate: an earlier version applied
-the whole platform module and failed on unrelated monitoring resources even
+This targets three things and the API enablement they depend on. Nothing
+else. Keeping the target narrow is deliberate: an earlier version applied the
+whole platform module and failed on unrelated monitoring resources even
 though the registry itself was created fine. A bootstrap step should have the
 smallest blast radius that unblocks the next step.
 
-Those two exist because each unblocks something later: the registry is what
-`make build` pushes to, and the secret container is what you store the password
-into — which has to happen **before** the apply in step 5.
+Each one unblocks something later:
+
+| Created here | Because |
+|---|---|
+| Artifact Registry repository | What `make build` pushes to in step 4. |
+| Snowflake secret container | What you store the password into, below — before the apply in step 5. |
+| Build service account, plus its three grants | What `make build` submits **as** in step 4. |
+
+The build identity is the one that looks optional and is not. Builds run as
+`sa-<name_prefix>-build-1` rather than the Compute Engine default, because
+the default carries project **Editor** and submitting a build requires
+`actAs` on whatever it runs as. Without it, step 4 fails on a cold start
+with:
+
+```
+ERROR: (gcloud.builds.submit) NOT_FOUND: generic::not_found: Unknown service
+account. This command is authenticated as you@example.com which is the
+active account specified by the [core/account] property
+```
+
+which reads like a problem with *your* credentials. It is not — the service
+account named in `_BUILD_SA` simply does not exist yet.
 
 Enabling the APIs here also gets Cloud Build's service agent provisioned well
 before step 4, which is what otherwise causes a `PERMISSION_DENIED` on the
@@ -131,7 +239,7 @@ password stays out of Terraform state:
 
 ```bash
 printf '%s' 'THE_PASSWORD' | \
-  gcloud secrets versions add sm-owc-dpar-d-snowflake-password-1 --data-file=- --project owc-dpar-d
+  gcloud secrets versions add sm-$PREFIX-snowflake-password-1 --data-file=- --project $PROJECT
 ```
 
 `make tf-apply` preflights this and refuses to start if the version is
@@ -172,7 +280,7 @@ Cloud Run jobs and the schedulers:
 
 ```bash
 IMAGE=$(make -s image-digest ENV=dev)
-echo "$IMAGE"   # us-central1-docker.pkg.dev/owc-dpar-d/ar-$PREFIX-images-1/owcdata@sha256:...
+echo "$IMAGE"   # us-central1-docker.pkg.dev/owc-dpar-d/ar-owc-dpar-d-images-1/owcdata@sha256:...
 
 make tf-apply ENV=dev TF_ARGS="-var=image_digest=$IMAGE"
 ```
@@ -331,28 +439,31 @@ Each pipeline has its own service account, and every grant is scoped to a
 specific resource. Confirm the separation is real:
 
 ```bash
-ENV=dev PROJECT=owc-dpar-d
-
-# The enrollment SA must NOT be able to read the Snowflake secret.
-gcloud secrets get-iam-policy sm-$PREFIX-snowflake-password-1 --project=$PROJECT --format=json \
-  | grep -q "cr-$PREFIX-enrollment-1" \
-  && echo "PROBLEM: enrollment can read the Snowflake secret" \
-  || echo "OK: enrollment has no secret access"
-
-# The lightcast SA must NOT be able to write the scrape cache.
-gcloud storage buckets get-iam-policy gs://gcs-$PREFIX-enrollment-state-1 --format=json \
-  | grep -q "cr-$PREFIX-lightcast-1" \
-  && echo "PROBLEM: lightcast can write the scrape cache" \
-  || echo "OK: lightcast has no access to the enrollment state bucket"
-
-# PowerBI reads owc_marts and NOTHING else — not staging (unvalidated data),
-# not ops (the run manifest).
-for ds in owc_staging owc_ops; do
-  bq show --format=prettyjson $PROJECT:$ds | grep -q "sa-$PREFIX-powerbi-1" \
-    && echo "PROBLEM: PowerBI has a grant on $ds" \
-    || echo "OK: PowerBI has no grant on $ds"
-done
+make verify-separation ENV=dev
 ```
+
+```text
+Identity separation — owc-dpar-d (prefix owc-dpar-d)
+
+  OK       enrollment has no access to the Snowflake secret
+  OK       lightcast has no access to the enrollment state bucket
+  OK       PowerBI has no grant on owc_staging
+  OK       PowerBI has no grant on owc_ops
+  OK       control: PowerBI IS granted on owc_marts (so the checks above can detect a grant)
+
+Separation verified.
+```
+
+The last line is a **positive control**, and it is the point of the whole
+thing. Every other assertion passes by *not* finding a service account in a
+policy — which is also exactly what happens when the lookup is broken, the
+name is misspelled, or you lack permission to read the policy at all. This
+was previously a block of shell to paste, and it had all three of those
+faults at once while cheerfully printing `OK`.
+
+So the control asserts a grant that must exist. If it cannot find that one,
+none of the negative results above it mean anything and the command exits
+non-zero.
 
 ## 8. Region co-location
 
@@ -381,11 +492,11 @@ between.
 
 ```bash
 gcloud run jobs execute $(make -s tf-output ENV=dev NAME=lightcast_job) \
-  --region us-central1 --project owc-dpar-d \
+  --region us-central1 --project $PROJECT \
   --args="run,lightcast,--dataset,dim_area" --tasks=1 --wait
 
 gcloud run jobs execute $(make -s tf-output ENV=dev NAME=enrollment_job) \
-  --region us-central1 --project owc-dpar-d --wait
+  --region us-central1 --project $PROJECT --wait
 ```
 
 `make tf-output ENV=dev` with no `NAME` lists everything, including the job
@@ -393,54 +504,74 @@ names, bucket names, and service-account emails the runbook refers to.
 
 ### What success looks like
 
-The lightcast smoke test uses `--limit`, and **a row-limited run deliberately
-does not publish**. Its rows are a truncation of the real result, so copying
-them into `owc_marts` would replace a production table with a sample. Expect:
+`gcloud run jobs execute --wait` prints only the execution's progress and
+exits 0. **The pipeline's own output is not on your terminal** — it is
+structured logging in Cloud Logging, and the authoritative record is the run
+manifest. Check those, not the console.
 
-```text
-extract_finished  dim_area  rows=78
-bq_load_finished            rows=78
-publish_skipped_row_limited rows=78
-pipeline_succeeded
-```
-
-So after a successful smoke test, `owc_marts` will **not** contain
-`dim_area` — that is correct, not a failure. The manifest records the run as
-`success_limited`, a status that `previous_successful()` excludes so it cannot
-become the baseline the next real run is compared against.
-
-Confirm it succeeded from the manifest rather than from marts:
+The command above has **no `--limit`**, so it is a real run: `dim_area` is 78
+rows, it passes its quality checks, and it publishes.
 
 ```bash
-bq query --project_id=owc-dpar-d --use_legacy_sql=false \
+bq query --project_id=$PROJECT --use_legacy_sql=false \
 'SELECT pipeline, dataset, status, row_count, duration_seconds
  FROM `owc_ops.pipeline_runs` ORDER BY started_at DESC LIMIT 5'
 ```
 
-### Verifying the publish path
-
-To exercise snapshot → table copy, run one **small dimension with no limit**.
-`dim_area` is 78 rows, so this is cheap:
-
-```bash
-gcloud run jobs execute cr-owc-dpar-d-lightcast-1 --region us-central1 \
-  --project owc-dpar-d --args="run,lightcast,--dataset,dim_area" \
-  --tasks=1 --wait
+```text
+lightcast   dim_area             success   78
+enrollment  enrollment_primary   success   1435546
 ```
 
-Then check all three landed:
+`status = success` is the thing to look for. Then confirm the table landed:
 
 ```bash
-bq ls --project_id=owc-dpar-d owc_marts   # dim_area TABLE
-bq ls --project_id=owc-dpar-d owc_ops     # a dim_area__<run_id> snapshot
+bq ls --project_id=$PROJECT owc_marts
 ```
 
-Then confirm the manifest recorded both:
+```text
+dim_area             TABLE
+enrollment_primary   TABLE
+```
+
+`owc_ops` holds only `pipeline_runs`, `pipeline_runs_recent` and
+`dataset_freshness`. There is **no per-run snapshot table** — an earlier
+design took one before each publish and it was removed, because rollback
+reloads the previous run's Parquet from GCS instead and that needs no extra
+BigQuery permission. See
+[ADR-010](01-architecture.md#adr-010-rollback-from-the-gcs-parquet-not-a-bigquery-snapshot).
+
+To read the structured log for a run:
 
 ```bash
-bq query --use_legacy_sql=false --project_id=owc-dpar-d \
-'SELECT pipeline, dataset, status, row_count FROM `owc_ops.pipeline_runs` ORDER BY started_at DESC LIMIT 10'
+gcloud logging read \
+  'resource.type="cloud_run_job" jsonPayload.event="pipeline_succeeded"' \
+  --project=$PROJECT --limit=5 \
+  --format='value(jsonPayload.dataset,jsonPayload.event,jsonPayload.row_count)'
 ```
+
+### The row-limited variant, which does NOT publish
+
+`--limit` is what the deploy workflow runs on every push to `dev`, and it
+behaves differently on purpose. A limited result is a truncation of the real
+one, so copying it into `owc_marts` would replace a published table with a
+sample:
+
+```bash
+gcloud run jobs execute $(make -s tf-output ENV=dev NAME=lightcast_job) \
+  --region $REGION --project $PROJECT --tasks=1 --wait \
+  --args="run,lightcast,--dataset,dim_area,--limit,1000"
+```
+
+Its log ends `publish_skipped_row_limited` rather than a publish, and the
+manifest records **`success_limited`** — a status `previous_successful()`
+excludes, so a truncated run can never become the baseline that the next
+real run's drift check is compared against.
+
+So if you run this variant on a fresh project, `owc_marts` stays empty. That
+is correct, not a failure — but it is also why the smoke test above uses the
+unlimited run: on a new environment you want to prove the publish path
+works, and a limited run deliberately never exercises it.
 
 ## Terraform guardrails
 
@@ -462,3 +593,23 @@ Same steps with `ENV=prod`, plus:
   plan on a private repo, and without it the environment exists but gates
   nothing. See [`04-deployment.md`](04-deployment.md#the-gate-on-production).
 - Leave `raw_bucket_force_destroy = false`.
+- Leave `schedulers_paused = false` and `freshness_check_enabled = true`.
+  These are the two settings dev inverts: prod is the environment whose
+  schedule and freshness are real. See
+  [what dev does differently](04-deployment.md#what-dev-does-differently).
+- Its own state bucket, `gcs-owc-dpar-p-tfstate-1`, in the **prod** project —
+  not the dev one.
+- **`snowflake_user` — the prod tfvars ship a `REPLACE_ME@` placeholder.**
+  This value is only used at runtime, as an env var on the lightcast job, so
+  a wrong one applies perfectly cleanly and then fails at 06:00 on the 1st,
+  unattended, with a Snowflake auth error — a month after the mistake. The
+  variable now rejects the placeholder at plan time, so you cannot miss it,
+  but it is the one field with no sensible default.
+- The **password** for that user goes into
+  `sm-owc-dpar-p-snowflake-password-1`, separately, before the apply. It is
+  a different Secret Manager secret in a different project from dev's; dev's
+  value is not reachable from prod and should not be reused if the reader
+  accounts differ.
+
+Prod is a separate project with its own WIF pool, deployer, registry and
+state. Nothing in it depends on dev, and nothing in dev can reach it.

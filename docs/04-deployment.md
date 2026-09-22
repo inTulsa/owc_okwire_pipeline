@@ -1,5 +1,18 @@
 # Deployment
 
+> **Shell setup.** The raw `gcloud` and `bq` commands here read `$PROJECT`
+> and `$PREFIX`. Set them from the environment you mean, so nothing ends up
+> pointed at the wrong project:
+>
+> ```bash
+> eval "$(make -s env-exports ENV=dev)"    # or ENV=prod
+> echo "$ENV $PROJECT $PREFIX $REGION"
+> ```
+>
+> Values come from that environment's `terraform.tfvars`. `make` targets read
+> the project themselves and need none of this. See
+> [03-gcp-setup.md](03-gcp-setup.md#set-your-shell-up-first).
+
 ## How a change reaches production
 
 ```
@@ -70,6 +83,32 @@ environment still exists and the job still runs, gating nothing, silently. So
 do not rely on it. Protect the `prod` branch instead — require a pull request
 and at least one approval — which is free and is enforced before the workflow
 ever starts.
+
+## What dev does differently
+
+The two environments run the same Terraform, and the roots are deliberately
+near-identical so a change verified in dev reaches prod verbatim. `diff` them
+and you should see exactly four differences:
+
+| Setting | dev | prod | Why |
+|---|---|---|---|
+| `env_name` | `dev` | `prod` | Namespaces the log-based metrics and prints in alert titles. |
+| `raw_bucket_force_destroy` | `true` | `false` | Lets `terraform destroy` clean up a scratch environment. Never true in prod. |
+| `schedulers_paused` | `true` | `false` | **The important one.** Both read the same `pipelines.yml`, so without it dev fires prod's exact schedule — 41 Snowflake queries at 06:00 on the 1st, the same minute as prod, every month. Those credits bill to **Lightcast**, and both environments would contend for `TULSA_FOR_YOU_WH`. |
+| `freshness_check_enabled` | `false` | `true` | Follows the line above. With schedulers paused, "has this run inside its interval?" is permanently no, so the alert would fire monthly for working-as-intended — on the same channel prod uses. |
+
+Dev's schedulers are **created but paused**, not omitted. Terraform still
+manages them, so the `oauth_token` wiring and the `run.invoker` grant are
+exercised and drift-detected in dev rather than first tried in prod. To test
+one, resume it by hand — but remember the next apply pauses it again unless
+you flip the variable:
+
+```bash
+gcloud scheduler jobs resume cs-owc-dpar-d-lightcast-monthly-1 --location us-central1
+```
+
+So dev gets exercised by **deploys and by hand**, not by a cadence. The smoke
+run in the deploy workflow is what proves the image works.
 
 ## Setting up GitHub Actions
 
@@ -264,7 +303,7 @@ To find a previous digest:
 ```bash
 gcloud artifacts docker images list \
   us-central1-docker.pkg.dev/owc-dpar-p/ar-owc-dpar-p-images-1/owcdata \
-  --include-tags --sort-by=~CREATE_TIME --limit=10 --project owc-dpar-p
+  --include-tags --sort-by=~CREATE_TIME --limit=10 --project $PROJECT
 ```
 
 ### A published table
@@ -304,7 +343,7 @@ Merging it builds in the prod project and applies.
 Before promoting, confirm dev is actually healthy rather than merely applied:
 
 ```bash
-bq query --use_legacy_sql=false --project_id=owc-dpar-d \
+bq query --use_legacy_sql=false --project_id=$PROJECT \
 'SELECT pipeline, dataset, status, row_count, finished_at
  FROM `owc_ops.pipeline_runs`
  WHERE started_at > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 HOUR)

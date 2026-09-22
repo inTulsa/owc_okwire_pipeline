@@ -113,6 +113,11 @@ green Cloud Scheduler history proves nothing: `jobs:run` returns a
 long-running Operation immediately, so Scheduler gets a 200 in milliseconds
 regardless of what the job then does.
 
+**Prod only.** Dev's schedulers are paused and its freshness check is off
+(`freshness_check_enabled = false`), because dev only runs when someone
+deploys — so "nothing ran this month" is dev working as intended, not a
+fault. If you are seeing this in dev, something re-enabled it.
+
 **Diagnose.**
 
 ```bash
@@ -129,7 +134,8 @@ gcloud scheduler jobs describe cs-$PREFIX-lightcast-monthly-1 --location=$REGION
 
 | Cause | Fix |
 |---|---|
-| Scheduler is PAUSED | `gcloud scheduler jobs resume cs-$PREFIX-lightcast-monthly-1 --location=$REGION` |
+| Scheduler is PAUSED **in prod** | `gcloud scheduler jobs resume cs-$PREFIX-lightcast-monthly-1 --location=$REGION` |
+| Scheduler is PAUSED **in dev** | Expected — do not resume. Dev's schedulers are paused by Terraform (`schedulers_paused = true`) so dev does not re-run prod's 41 Snowflake queries and bill Lightcast twice. This alert is also disabled in dev, so you should not be reading this there. |
 | Scheduler was deleted | `make tf-apply ENV=$ENV` |
 | Scheduler fires but jobs never start | That is [alert 3](#alert-3-scheduler-failing) |
 | Jobs run but the manifest is empty | Check for `manifest_write_failed` in the logs — the run may be fine while the record-keeping is broken, which disables this alert. Verify `bigquery.dataEditor` on `owc_ops`. |
@@ -1009,6 +1015,35 @@ Changing `github_repository` replaces
 the repository is embedded in its `principalSet` member string. That
 replacement is expected and safe.
 
+### `Backend configuration changed` after pointing at a different project
+
+```text
+Error: Backend configuration changed
+
+A change in the backend configuration has been detected, which may require
+migrating existing state.
+```
+
+Terraform caches the backend config in `.terraform/`, so editing the bucket
+in `backend.tf` invalidates it. **A fresh clone never sees this** — there is
+no cache to invalidate — so it is a working-copy problem, not a setup one.
+
+**Take `-reconfigure`, not the `-migrate-state` the error suggests first.**
+
+```bash
+make tf-reinit ENV=$ENV
+```
+
+`-migrate-state` copies the OLD project's state into the NEW bucket. Terraform
+then believes the old project's resources exist in the new project and plans
+against them — deleting and recreating things that were never there. It is the
+right flag for moving one environment's state to a new bucket, and the wrong
+one for pointing a working copy at a different environment.
+
+Each environment already keeps its state in its own bucket, so switching
+projects means adopting that bucket as it is. `tf-reinit` prints the resource
+count afterwards; `0` is correct for a project you have not applied to yet.
+
 ### GitHub Actions authenticates fine, then the apply 403s
 
 A different failure with a similar smell. The `auth` step is green, the build
@@ -1060,6 +1095,36 @@ the run changes nothing. Re-running after the fix is safe.
 
 **Why it never failed locally:** `make tf-apply` on your laptop runs as you,
 and you are project owner. Only CI runs as the deployer.
+
+#### The other shape: `lacks IAM permission "iam.serviceAccounts.actAs"`
+
+```text
+Error 403: The principal (user or service account) lacks IAM permission
+"iam.serviceAccounts.actAs" for the resource
+"sa-<prefix>-scheduler-1@<project>.iam.gserviceaccount.com"
+```
+
+Same cause, different permission. Attaching a service account to a
+resource requires `actAs` **on that account** — a per-service-account
+binding, not a project role — so the project-role list can be complete and
+this still fails. Terraform attaches one in three places:
+
+| File | Field | Identity |
+|---|---|---|
+| `modules/pipeline/job.tf` | `service_account` | lightcast, enrollment |
+| `modules/pipeline/scheduler.tf` | `service_account_email` | scheduler |
+| `modules/platform/monitoring.tf` | `service_account_name` | freshness |
+
+plus the build identity, which `gcloud builds submit` runs as. All five must
+appear in `impersonatable_service_accounts` in the environment's `main.tf`.
+
+`make deployer-check` verifies both halves — the project roles and the
+actAs bindings — and parses the expected accounts out of that list, so
+adding one cannot leave the check behind.
+
+Note the freshness grant is **prod-only in practice**: dev sets
+`freshness_check_enabled = false`, so the resource is never created there
+and a missing grant cannot surface until prod.
 
 ## Common procedures
 

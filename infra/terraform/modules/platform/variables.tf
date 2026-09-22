@@ -147,3 +147,18 @@ variable "name_prefix" {
     error_message = "name_prefix must be lowercase letters, digits and hyphens, starting with a letter and not ending in a hyphen."
   }
 }
+
+variable "freshness_check_enabled" {
+  type        = bool
+  description = <<-EOT
+    Run the scheduled freshness query and its "a pipeline did not run" alert.
+    False in dev, and it must track `schedulers_paused` on the pipelines.
+
+    Freshness asks "has this pipeline run inside its interval plus grace?".
+    With dev's schedulers paused the honest answer is no, forever — dev only
+    runs when someone deploys — so the alert would fire on a person's inbox
+    every month for working-as-intended. That is how a team learns to ignore
+    an alert channel, and it is the same channel prod uses.
+  EOT
+  default     = true
+}
