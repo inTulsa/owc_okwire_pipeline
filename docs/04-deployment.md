@@ -290,7 +290,7 @@ To find a previous digest:
 ```bash
 gcloud artifacts docker images list \
   us-central1-docker.pkg.dev/owc-dpar-p/ar-owc-dpar-p-images-1/owcdata \
-  --include-tags --sort-by=~CREATE_TIME --limit=10 --project owc-dpar-p
+  --include-tags --sort-by=~CREATE_TIME --limit=10 --project $PROJECT
 ```
 
 ### A published table
@@ -330,7 +330,7 @@ Merging it builds in the prod project and applies.
 Before promoting, confirm dev is actually healthy rather than merely applied:
 
 ```bash
-bq query --use_legacy_sql=false --project_id=owc-dpar-d \
+bq query --use_legacy_sql=false --project_id=$PROJECT \
 'SELECT pipeline, dataset, status, row_count, finished_at
  FROM `owc_ops.pipeline_runs`
  WHERE started_at > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 HOUR)

@@ -55,7 +55,7 @@ RUN_ARGS += --limit $(LIMIT)
 endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check auth-check \
-        diff-enrollment derive-scrape derive-check lock lock-check docs-check base-digest build deploy set-image which-image image-digest tf-init tf-reinit tf-bootstrap preflight wif-check deployer-check verify-separation tf-output gh-vars tf-plan tf-apply tf-fmt tf-validate clean
+        diff-enrollment derive-scrape derive-check lock lock-check docs-check base-digest build deploy set-image which-image image-digest tf-init tf-reinit tf-bootstrap preflight wif-check deployer-check verify-separation env-exports tf-output gh-vars tf-plan tf-apply tf-fmt tf-validate clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -392,6 +392,25 @@ preflight: auth-check wif-check ## Check the Snowflake secret has a version befo
 # for `$(...)` capture and wrong for reading: the value runs straight into the
 # next prompt or error. The `&& echo` restores it without affecting capture,
 # since command substitution strips trailing newlines anyway.
+# The shell variables the docs' raw gcloud/bq commands use.
+#
+# Printed rather than documented as literals because this document is run
+# TWICE — once per environment — and a hardcoded project id has to be
+# hand-substituted on the second pass, in every command, with production on
+# the other end. One missed substitution aims a command at dev while you
+# believe you are in prod.
+#
+# Derived from tfvars, never typed: an empty PREFIX silently builds names
+# like "gcs--raw-1" that 404 with no hint as to why, which is exactly how
+# the old step 7 checks passed while testing nothing.
+env-exports: ## Print the shell exports the docs' raw gcloud/bq commands use
+	@test -n "$(PROJECT)"     || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@test -n "$(NAME_PREFIX)" || { echo "could not read name_prefix from $(TFVARS)" >&2; exit 1; }
+	@echo "export ENV=$(ENV)"
+	@echo "export PROJECT=$(PROJECT)"
+	@echo "export PREFIX=$(NAME_PREFIX)"
+	@echo "export REGION=$(REGION)"
+
 tf-output: ## Show terraform outputs for $(ENV). Add NAME=<output> for one value.
 	@scripts/tf-output.sh $(TF_DIR) $(ENV) $(PROJECT) $(NAME)
 

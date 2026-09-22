@@ -60,6 +60,17 @@ for doc in DOCS:
             line_no = text[: m.start()].count("\n") + 1
             problems.append(f"{doc.relative_to(ROOT)}:{line_no}: {m.group(0)} — file does not exist")
 
+    # A hardcoded project id in a raw gcloud/bq command is how you aim a
+    # command at the wrong environment. The docs are run once per
+    # environment, so a literal has to be hand-substituted on the second
+    # pass, in every command, with production on the other end. Use
+    # $PROJECT, which `make env-exports` sets from that environment's tfvars.
+    for m in re.finditer(r"--project(?:_id)?[= ]owc-[a-z-]+", text):
+        line_no = text[: m.start()].count("\n") + 1
+        problems.append(
+            f"{doc.relative_to(ROOT)}:{line_no}: {m.group(0)} — hardcoded project; use $PROJECT"
+        )
+
     # The old names must not creep back via a copy-paste from an older doc.
     for m in re.finditer(r"\bokw-[a-z]+", text):
         line_no = text[: m.start()].count("\n") + 1

@@ -210,7 +210,7 @@ intentional for a scratch environment and is exactly wrong for prod — verify
 after the first prod apply:
 
 ```bash
-gcloud monitoring policies list --project=owc-dpar-p --format='value(displayName)' | wc -l
+gcloud monitoring policies list --project=$PROJECT --format='value(displayName)' | wc -l
 # expect 9-ish; 0 means alert_emails was empty
 ```
 

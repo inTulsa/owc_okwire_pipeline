@@ -37,8 +37,8 @@ to — and resolved against — the wrong project:
 ```bash
 gcloud auth login                                    # the gcloud CLI itself
 gcloud auth application-default login                # what TERRAFORM uses
-gcloud config set project owc-dpar-d
-gcloud auth application-default set-quota-project owc-dpar-d
+gcloud config set project $PROJECT
+gcloud auth application-default set-quota-project $PROJECT
 ```
 
 The quota project matters more than it looks. Terraform's GCS backend bills
@@ -48,6 +48,27 @@ Credentials; if that project is deleted or inactive, **every** call returns
 `storage: bucket doesn't exist` — pointing at the wrong thing entirely.
 `bootstrap.sh` checks for this in step 1 and tells you the fix. Diagnosis is in
 [the runbook](02-runbook.md#first-deploy-failures).
+
+### Set your shell up first
+
+Every raw `gcloud` and `bq` command below uses these. **Re-run this when you
+switch to prod** — it is the one thing that repoints all of them at once:
+
+```bash
+eval "$(make -s env-exports ENV=dev)"
+echo "$ENV $PROJECT $PREFIX $REGION"     # confirm before continuing
+```
+
+```text
+dev owc-dpar-d owc-dpar-d us-central1
+```
+
+The values come from that environment's `terraform.tfvars`, so they cannot
+drift from what Terraform built. Confirm the echo before continuing: an
+**empty** variable does not error, it silently builds names like
+`gcs--raw-1` that 404 with nothing pointing at the cause.
+
+`make` targets read the project themselves and need none of this.
 
 ## 1. Bootstrap the two things Terraform cannot create
 
@@ -212,7 +233,7 @@ password stays out of Terraform state:
 
 ```bash
 printf '%s' 'THE_PASSWORD' | \
-  gcloud secrets versions add sm-owc-dpar-d-snowflake-password-1 --data-file=- --project owc-dpar-d
+  gcloud secrets versions add sm-$PREFIX-snowflake-password-1 --data-file=- --project $PROJECT
 ```
 
 `make tf-apply` preflights this and refuses to start if the version is
@@ -465,11 +486,11 @@ between.
 
 ```bash
 gcloud run jobs execute $(make -s tf-output ENV=dev NAME=lightcast_job) \
-  --region us-central1 --project owc-dpar-d \
+  --region us-central1 --project $PROJECT \
   --args="run,lightcast,--dataset,dim_area" --tasks=1 --wait
 
 gcloud run jobs execute $(make -s tf-output ENV=dev NAME=enrollment_job) \
-  --region us-central1 --project owc-dpar-d --wait
+  --region us-central1 --project $PROJECT --wait
 ```
 
 `make tf-output ENV=dev` with no `NAME` lists everything, including the job
@@ -496,7 +517,7 @@ become the baseline the next real run is compared against.
 Confirm it succeeded from the manifest rather than from marts:
 
 ```bash
-bq query --project_id=owc-dpar-d --use_legacy_sql=false \
+bq query --project_id=$PROJECT --use_legacy_sql=false \
 'SELECT pipeline, dataset, status, row_count, duration_seconds
  FROM `owc_ops.pipeline_runs` ORDER BY started_at DESC LIMIT 5'
 ```
@@ -508,21 +529,21 @@ To exercise snapshot → table copy, run one **small dimension with no limit**.
 
 ```bash
 gcloud run jobs execute cr-owc-dpar-d-lightcast-1 --region us-central1 \
-  --project owc-dpar-d --args="run,lightcast,--dataset,dim_area" \
+  --project $PROJECT --args="run,lightcast,--dataset,dim_area" \
   --tasks=1 --wait
 ```
 
 Then check all three landed:
 
 ```bash
-bq ls --project_id=owc-dpar-d owc_marts   # dim_area TABLE
-bq ls --project_id=owc-dpar-d owc_ops     # a dim_area__<run_id> snapshot
+bq ls --project_id=$PROJECT owc_marts   # dim_area TABLE
+bq ls --project_id=$PROJECT owc_ops     # a dim_area__<run_id> snapshot
 ```
 
 Then confirm the manifest recorded both:
 
 ```bash
-bq query --use_legacy_sql=false --project_id=owc-dpar-d \
+bq query --use_legacy_sql=false --project_id=$PROJECT \
 'SELECT pipeline, dataset, status, row_count FROM `owc_ops.pipeline_runs` ORDER BY started_at DESC LIMIT 10'
 ```
 
