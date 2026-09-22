@@ -1,21 +1,38 @@
 # GCP setup
 
-One-time bootstrap per environment. About 30 minutes.
+**Run this document twice — once per environment.** Everywhere it says
+`owc-dpar-d`, substitute the environment you are setting up. Finish dev
+end to end before starting prod; the only differences for prod are listed
+in [Repeat for prod](#repeat-for-prod).
+
+About 30 minutes per environment.
 
 ## What you need first
 
-- A GCP project with billing linked, one per environment
-  (`owc-dpar-d`, `owc-dpar-p`)
+- **A GCP project with billing linked, one per environment**
+  (`owc-dpar-d`, `owc-dpar-p`). **This repo does not create it.** At OMES the
+  project and its spoke network — VPC, subnet, Cloud NAT, and the router back
+  to the state transit hub — are provisioned separately from
+  `omes-net-gcp-tf-owc-dpar-<env>`, per the Phase Two infrastructure
+  architecture. This repo deploys the data platform *into* a project that
+  already exists.
 - `roles/owner` on it, or enough to create service accounts and set IAM
 - `gcloud` and `terraform` locally
 - The Snowflake reader-account password
 - A distribution list for alerts — **not** an individual's address, so people
   can join and leave without a Terraform change
+- The Cloud Run jobs use **default egress**, not the spoke VPC: reaching
+  Snowflake and the OSDE site needs no special network path, so nothing here
+  coordinates with the network layer.
 
-### Authenticate twice
+### Authenticate twice — and re-point it per environment
 
 gcloud and Terraform use **different** credentials, and having one without the
-other is the most common way this setup fails on a fresh machine:
+other is the most common way this setup fails on a fresh machine.
+
+The last two lines are **per environment**: run them again with the prod
+project when you come back to do prod, or every Terraform call will be billed
+to — and resolved against — the wrong project:
 
 ```bash
 gcloud auth login                                    # the gcloud CLI itself
@@ -31,18 +48,6 @@ Credentials; if that project is deleted or inactive, **every** call returns
 `storage: bucket doesn't exist` — pointing at the wrong thing entirely.
 `bootstrap.sh` checks for this in step 1 and tells you the fix. Diagnosis is in
 [the runbook](02-runbook.md#first-deploy-failures).
-
-## 0. The project itself
-
-This repo does **not** create the GCP project. At OMES the project and its
-network — VPC, subnet, Cloud NAT, the router back to the state transit hub —
-are provisioned separately from `omes-net-gcp-tf-owc-dpar-<env>`, per the
-Phase Two infrastructure architecture. This repo deploys the data platform
-*into* a project that already exists and has billing linked.
-
-The Cloud Run jobs use default egress, not the spoke VPC: reaching Snowflake
-and the OSDE site needs no special network path, so nothing here has to
-coordinate with the network layer.
 
 ## 1. Bootstrap the two things Terraform cannot create
 
