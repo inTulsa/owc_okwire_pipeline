@@ -1096,6 +1096,36 @@ the run changes nothing. Re-running after the fix is safe.
 **Why it never failed locally:** `make tf-apply` on your laptop runs as you,
 and you are project owner. Only CI runs as the deployer.
 
+#### The other shape: `lacks IAM permission "iam.serviceAccounts.actAs"`
+
+```text
+Error 403: The principal (user or service account) lacks IAM permission
+"iam.serviceAccounts.actAs" for the resource
+"sa-<prefix>-scheduler-1@<project>.iam.gserviceaccount.com"
+```
+
+Same cause, different permission. Attaching a service account to a
+resource requires `actAs` **on that account** — a per-service-account
+binding, not a project role — so the project-role list can be complete and
+this still fails. Terraform attaches one in three places:
+
+| File | Field | Identity |
+|---|---|---|
+| `modules/pipeline/job.tf` | `service_account` | lightcast, enrollment |
+| `modules/pipeline/scheduler.tf` | `service_account_email` | scheduler |
+| `modules/platform/monitoring.tf` | `service_account_name` | freshness |
+
+plus the build identity, which `gcloud builds submit` runs as. All five must
+appear in `impersonatable_service_accounts` in the environment's `main.tf`.
+
+`make deployer-check` verifies both halves — the project roles and the
+actAs bindings — and parses the expected accounts out of that list, so
+adding one cannot leave the check behind.
+
+Note the freshness grant is **prod-only in practice**: dev sets
+`freshness_check_enabled = false`, so the resource is never created there
+and a missing grant cannot surface until prod.
+
 ## Common procedures
 
 ### Roll back a published table

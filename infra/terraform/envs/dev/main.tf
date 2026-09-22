@@ -355,9 +355,27 @@ module "wif" {
   artifact_registry_repository_id = module.platform.image_repository_id
   artifact_registry_location      = var.region
 
+  # Every identity this repo ATTACHES to a resource. Setting a service
+  # account on something requires iam.serviceAccounts.actAs on it, so an
+  # identity missing here is a CI-only 403 — a human applying as project
+  # owner already has actAs on everything and never sees it.
+  #
+  # The list must stay in step with these three places, and nothing enforces
+  # that but `make deployer-check`:
+  #   modules/pipeline/job.tf        service_account        (lightcast, enrollment)
+  #   modules/pipeline/scheduler.tf  service_account_email  (scheduler)
+  #   modules/platform/monitoring.tf service_account_name   (freshness)
+  # plus the build identity, which `gcloud builds submit` runs as.
   impersonatable_service_accounts = [
     module.platform.service_account_emails.lightcast,
     module.platform.service_account_emails.enrollment,
+    # Setting oauth_token.service_account_email on a Cloud Scheduler job
+    # needs actAs on it, exactly as setting a Cloud Run job's does.
+    module.platform.service_account_emails.scheduler,
+    # The freshness scheduled query runs as this. Only created when
+    # freshness_check_enabled is true — so dev, which disables it, cannot
+    # surface a missing grant here and PROD is the first place it would.
+    module.platform.service_account_emails.freshness,
     # Submitting a build requires actAs on the identity the build runs as.
     module.platform.service_account_emails.build,
   ]

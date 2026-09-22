@@ -463,6 +463,13 @@ deployer-check: auth-check ## Verify the deployer SA has every role GitHub Actio
 	    echo ""; exit 1; \
 	  fi; \
 	  echo ">> deployer-check OK: $(DEPLOYER_SA) has all $$(echo "$$expected" | wc -l | tr -d ' ') project roles"
+	@# Project roles are only half of it. Attaching a service account to a
+	@# resource needs iam.serviceAccounts.actAs ON THAT ACCOUNT, which is a
+	@# per-SA binding and invisible to the project-role check above. A human
+	@# applying as owner has actAs on everything, so a missing grant here is
+	@# a CI-only 403 — and for the freshness SA, a PROD-only one, since dev
+	@# does not create that resource at all.
+	@wanted=$$(awk '/impersonatable_service_accounts = \[/,/^  \]/' $(TF_DIR)/main.tf 	    | grep -oE 'service_account_emails\.[a-z]+' | cut -d. -f2 | sort -u); 	  test -n "$$wanted" || { echo "could not parse impersonatable_service_accounts from $(TF_DIR)/main.tf" >&2; exit 1; }; 	  missing=""; 	  for n in $$wanted; do 	    email="sa-$(NAME_PREFIX)-$$n-1@$(PROJECT).iam.gserviceaccount.com"; 	    if ! gcloud iam service-accounts get-iam-policy "$$email" --project $(PROJECT) 	         --flatten='bindings[].members' 	         --filter="bindings.members:$(DEPLOYER_SA) AND bindings.role:roles/iam.serviceAccountUser" 	         --format='value(bindings.role)' 2>/dev/null | grep -q serviceAccountUser; then 	      missing="$$missing $$n"; 	    fi; 	  done; 	  if [ -n "$$missing" ]; then 	    echo ""; 	    echo "  $(DEPLOYER_SA) cannot actAs:$$missing"; 	    echo ""; 	    echo "  Terraform attaches these service accounts to resources, which needs"; 	    echo "  iam.serviceAccountUser on each. CI fails with:"; 	    echo "    Error 403: The principal ... lacks IAM permission \"iam.serviceAccounts.actAs\""; 	    echo "  Your own applies keep working — as owner you have actAs on everything."; 	    echo ""; 	    echo "  Fix — apply as a project owner:  make tf-apply ENV=$(ENV)"; 	    echo ""; exit 1; 	  fi; 	  echo ">> deployer-check OK: and can actAs $$(echo $$wanted | wc -w | tr -d ' ') service account(s):$$(echo $$wanted | tr '\n' ' ' | sed 's/^/ /')"
 
 # Sets the three per-environment GitHub repository variables in one step.
 #
