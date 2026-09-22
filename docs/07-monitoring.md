@@ -3,6 +3,19 @@
 Nine alerts. Every one exists because of a specific way this system can fail
 quietly.
 
+> **Shell setup.** The raw `gcloud` and `bq` commands here read `$PROJECT`
+> and `$PREFIX`. Set them from the environment you mean, so nothing ends up
+> pointed at the wrong project:
+>
+> ```bash
+> eval "$(make -s env-exports ENV=dev)"    # or ENV=prod
+> echo "$ENV $PROJECT $PREFIX $REGION"
+> ```
+>
+> Values come from that environment's `terraform.tfvars`. `make` targets read
+> the project themselves and need none of this. See
+> [03-gcp-setup.md](03-gcp-setup.md#set-your-shell-up-first).
+
 ## The alerts
 
 | # | Alert | Mechanism | Applies to | Where defined |

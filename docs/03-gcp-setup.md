@@ -1,9 +1,15 @@
 # GCP setup
 
-**Run this document twice — once per environment.** Everywhere it says
-`owc-dpar-d`, substitute the environment you are setting up. Finish dev
-end to end before starting prod; the only differences for prod are listed
-in [Repeat for prod](#repeat-for-prod).
+**Run this document twice — once per environment.**
+
+Start with [Set your shell up first](#set-your-shell-up-first), immediately
+below. The commands here read `$PROJECT` and `$PREFIX` from that
+environment's `terraform.tfvars`, so moving from dev to prod is one command
+rather than a substitution in every line — and nothing can end up pointed at
+the wrong project because you missed one.
+
+Finish dev end to end before starting prod; the only differences for prod
+are in [Repeat for prod](#repeat-for-prod).
 
 About 30 minutes per environment.
 
@@ -24,6 +30,27 @@ About 30 minutes per environment.
 - The Cloud Run jobs use **default egress**, not the spoke VPC: reaching
   Snowflake and the OSDE site needs no special network path, so nothing here
   coordinates with the network layer.
+
+### Set your shell up first
+
+Every raw `gcloud` and `bq` command below uses these. **Re-run this when you
+switch to prod** — it is the one thing that repoints all of them at once:
+
+```bash
+eval "$(make -s env-exports ENV=dev)"
+echo "$ENV $PROJECT $PREFIX $REGION"     # confirm before continuing
+```
+
+```text
+dev owc-dpar-d owc-dpar-d us-central1
+```
+
+The values come from that environment's `terraform.tfvars`, so they cannot
+drift from what Terraform built. Confirm the echo before continuing: an
+**empty** variable does not error, it silently builds names like
+`gcs--raw-1` that 404 with nothing pointing at the cause.
+
+`make` targets read the project themselves and need none of this.
 
 ### Authenticate twice — and re-point it per environment
 
@@ -48,27 +75,6 @@ Credentials; if that project is deleted or inactive, **every** call returns
 `storage: bucket doesn't exist` — pointing at the wrong thing entirely.
 `bootstrap.sh` checks for this in step 1 and tells you the fix. Diagnosis is in
 [the runbook](02-runbook.md#first-deploy-failures).
-
-### Set your shell up first
-
-Every raw `gcloud` and `bq` command below uses these. **Re-run this when you
-switch to prod** — it is the one thing that repoints all of them at once:
-
-```bash
-eval "$(make -s env-exports ENV=dev)"
-echo "$ENV $PROJECT $PREFIX $REGION"     # confirm before continuing
-```
-
-```text
-dev owc-dpar-d owc-dpar-d us-central1
-```
-
-The values come from that environment's `terraform.tfvars`, so they cannot
-drift from what Terraform built. Confirm the echo before continuing: an
-**empty** variable does not error, it silently builds names like
-`gcs--raw-1` that 404 with nothing pointing at the cause.
-
-`make` targets read the project themselves and need none of this.
 
 ## 1. Bootstrap the two things Terraform cannot create
 

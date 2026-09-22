@@ -71,6 +71,30 @@ for doc in DOCS:
             f"{doc.relative_to(ROOT)}:{line_no}: {m.group(0)} — hardcoded project; use $PROJECT"
         )
 
+    # $PROJECT used before anything sets it. Made exactly this mistake:
+    # substituting the literals put $PROJECT into the FIRST commands in the
+    # document while the block that sets it sat further down. An undefined
+    # shell variable does not error, so the reader gets "--project " with
+    # nothing after it, or a name like "gcs--raw-1".
+    #
+    # Only inside fenced blocks: prose that mentions $PROJECT is explaining
+    # it, not running it.
+    first_use = first_set = None
+    in_fence = False
+    for i, line in enumerate(lines, 1):
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if first_set is None and re.search(r"env-exports|export\s+(?:PROJECT|PREFIX)=", line):
+            first_set = i
+        if in_fence and first_use is None and re.search(r"\$(?:PROJECT|PREFIX)\b", line):
+            first_use = i
+    if first_use is not None and (first_set is None or first_set > first_use):
+        problems.append(
+            f"{doc.relative_to(ROOT)}:{first_use}: $PROJECT/$PREFIX used in a command "
+            f"before anything sets it — add or move the `make env-exports` block above it"
+        )
+
     # The old names must not creep back via a copy-paste from an older doc.
     for m in re.finditer(r"\bokw-[a-z]+", text):
         line_no = text[: m.start()].count("\n") + 1
