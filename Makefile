@@ -54,7 +54,7 @@ ifdef LIMIT
 RUN_ARGS += --limit $(LIMIT)
 endif
 
-.PHONY: help setup run validate test test-all lint fmt typecheck check auth-check \
+.PHONY: help setup run validate test test-all lint fmt typecheck check auth-check doctor \
         diff-enrollment derive-scrape derive-check lock lock-check docs-check base-digest build deploy set-image which-image image-digest tf-init tf-reinit tf-bootstrap preflight wif-check deployer-check verify-separation env-exports tf-output gh-vars tf-plan tf-apply tf-fmt tf-validate clean
 
 help: ## Show this help
@@ -67,6 +67,13 @@ help: ## Show this help
 	@echo "  Examples:"
 	@echo "    make run PIPELINE=lightcast DATASET=dim_area LIMIT=1000"
 	@echo "    make run PIPELINE=enrollment TARGET=local"
+
+# Run this BEFORE anything else on a new machine. A toolchain problem hit in
+# the middle of a GCP setup does not look like a toolchain problem: a missing
+# bq component surfaces as a failed query, and Application Default
+# Credentials pointed at the wrong project surface as "bucket doesn't exist".
+doctor: ## Check this machine has the tools and credentials the repo needs
+	@scripts/doctor.sh
 
 setup: ## Create the venv and install everything, including dev tools
 	uv venv --python 3.12

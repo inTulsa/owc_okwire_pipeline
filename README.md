@@ -37,6 +37,7 @@ make run PIPELINE=enrollment TARGET=local
 | [`05-local-development.md`](docs/05-local-development.md) | Laptop to first run |
 | [`06-adding-a-pipeline.md`](docs/06-adding-a-pipeline.md) | Adding a dataset vs. adding a whole pipeline |
 | [`07-monitoring.md`](docs/07-monitoring.md) | Every alert, its threshold, and why |
+| [`08-developer-setup.md`](docs/08-developer-setup.md) | **Start here on a new machine** — required CLIs, versions, access to request |
 | [`OPEN-ITEMS.md`](docs/OPEN-ITEMS.md) | **Decisions still needing a human** — read this before go-live |
 
 The enrollment pipeline's original business-process documentation is preserved
