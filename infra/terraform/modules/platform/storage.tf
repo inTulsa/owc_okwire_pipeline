@@ -4,7 +4,7 @@
 # account can be scoped to its own prefix and cannot touch the other's.
 # ---------------------------------------------------------------------------
 resource "google_storage_bucket" "raw" {
-  name     = "okw-raw-${var.env}"
+  name     = local.name.raw_bucket
   project  = var.project_id
   location = var.location
   labels   = var.labels
@@ -70,7 +70,7 @@ resource "google_storage_bucket" "raw" {
 # catalogue. No lifecycle deletion here, ever.
 # ---------------------------------------------------------------------------
 resource "google_storage_bucket" "enrollment_state" {
-  name     = "okw-enrollment-state-${var.env}"
+  name     = local.name.enrollment_state_bucket
   project  = var.project_id
   location = var.location
   labels   = var.labels

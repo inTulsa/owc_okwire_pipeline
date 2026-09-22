@@ -1,5 +1,5 @@
 resource "google_artifact_registry_repository" "images" {
-  repository_id = "okw-images"
+  repository_id = local.name.registry_images
   project       = var.project_id
   location      = var.region
   format        = "DOCKER"

@@ -133,7 +133,7 @@ jobs:
         id: img
         run: |
           set -euo pipefail
-          REPO="${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID_DEV }}/okw-images/owcdata"
+          REPO="${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID_DEV }}/ar-${{ vars.NAME_PREFIX_DEV }}-images-1/owcdata"
           DIGEST=$(gcloud artifacts docker images describe "$REPO:latest" \
             --project "${{ vars.PROJECT_ID_DEV }}" \
             --format='value(image_summary.digest)' 2>/dev/null || true)

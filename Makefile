@@ -19,16 +19,25 @@ tfvar      = $(shell awk -F= '/^[[:space:]]*$(1)[[:space:]]*=/ {gsub(/[" \t]/,""
 PROJECT    ?= $(call tfvar,project_id)
 REGION     ?= $(or $(call tfvar,region),us-central1)
 IMAGE_TAG  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo untracked)
-IMAGE_REPO  = $(REGION)-docker.pkg.dev/$(PROJECT)/okw-images/owcdata
+# Every name below mirrors the OMES convention in
+# infra/terraform/modules/*/naming.tf: <type>-<name_prefix>-<qualifier>-<seq>.
+# They are derived from the one name_prefix in that environment's tfvars
+# rather than spelled out, so correcting an abbreviation in Terraform does
+# not leave the Makefile pointing at resources that no longer exist.
+NAME_PREFIX ?= $(call tfvar,name_prefix)
+IMAGE_REPO  = $(REGION)-docker.pkg.dev/$(PROJECT)/ar-$(NAME_PREFIX)-images-1/owcdata
+REGISTRY_ID = ar-$(NAME_PREFIX)-images-1
+LIGHTCAST_JOB  = cr-$(NAME_PREFIX)-lightcast-1
+ENROLLMENT_JOB = cr-$(NAME_PREFIX)-enrollment-1
 # Mirrors modules/platform/secrets.tf. Terraform owns the container; the value
 # is added out of band and never enters Terraform state.
-SECRET_NAME = okw-snowflake-password-$(ENV)
+SECRET_NAME = sm-$(NAME_PREFIX)-snowflake-password-1
 # Cloud Build runs as this rather than the Compute Engine default SA. Mirrors
 # modules/platform/iam.tf.
-BUILD_SA    = okw-build-$(ENV)@$(PROJECT).iam.gserviceaccount.com
+BUILD_SA    = sa-$(NAME_PREFIX)-build-1@$(PROJECT).iam.gserviceaccount.com
 # The identity GitHub Actions assumes via WIF. Mirrors modules/wif/main.tf,
 # which is also the source `deployer-check` reads the expected roles from.
-DEPLOYER_SA = okw-deployer-$(ENV)@$(PROJECT).iam.gserviceaccount.com
+DEPLOYER_SA = sa-$(NAME_PREFIX)-deployer-1@$(PROJECT).iam.gserviceaccount.com
 WIF_TF     := infra/terraform/modules/wif/main.tf
 ORIGINAL   := tests/fixtures/primary_enrollment_data_script.original.py
 SCRAPE     := src/owcdata/pipelines/enrollment/scrape.py
@@ -103,7 +112,7 @@ build: auth-check ## Build and push the image with Cloud Build, then print its d
 	@echo ">> building $(IMAGE_REPO):$(IMAGE_TAG)"
 	gcloud builds submit --config docker/cloudbuild.yaml \
 	  --project $(PROJECT) \
-	  --substitutions=_REGION=$(REGION),_TAG=$(IMAGE_TAG),_BUILD_SA=$(BUILD_SA) \
+	  --substitutions=_REGION=$(REGION),_TAG=$(IMAGE_TAG),_BUILD_SA=$(BUILD_SA),_REPOSITORY=$(REGISTRY_ID) \
 	  .
 	@image=$$($(MAKE) -s --no-print-directory image-digest ENV=$(ENV)) && \
 	  echo "" && \
@@ -134,7 +143,7 @@ set-image: auth-check ## Point both Cloud Run jobs at a digest (default: the new
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@image="$(if $(IMAGE),$(IMAGE),$$($(MAKE) -s --no-print-directory image-digest ENV=$(ENV)))"; \
 	  case "$$image" in *@sha256:*) ;; *) echo "refusing a non-digest image: $$image" >&2; exit 1;; esac; \
-	  for job in okw-lightcast-$(ENV) okw-enrollment-$(ENV); do \
+	  for job in $(LIGHTCAST_JOB) $(ENROLLMENT_JOB); do \
 	    echo ">> $$job -> $$image"; \
 	    gcloud run jobs update "$$job" --image "$$image" \
 	      --region $(REGION) --project $(PROJECT) --quiet >/dev/null; \
@@ -144,12 +153,12 @@ set-image: auth-check ## Point both Cloud Run jobs at a digest (default: the new
 deploy: build set-image ## Build the image AND point both jobs at it (the dev loop)
 	@echo ""
 	@echo ">> deployed. Smoke test:"
-	@echo "   gcloud run jobs execute okw-lightcast-$(ENV) --region $(REGION) --project $(PROJECT) \\"
+	@echo "   gcloud run jobs execute $(LIGHTCAST_JOB) --region $(REGION) --project $(PROJECT) \\"
 	@echo "     --args=\"run,lightcast,--dataset,dim_area,--limit,1000\" --tasks=1 --wait"
 
 which-image: auth-check ## Show the digest each job is currently running vs the newest build
 	@printf '  newest build      : %s\n' "$$($(MAKE) -s --no-print-directory image-digest ENV=$(ENV) 2>/dev/null || echo '<none>')"
-	@for job in okw-lightcast-$(ENV) okw-enrollment-$(ENV); do \
+	@for job in $(LIGHTCAST_JOB) $(ENROLLMENT_JOB); do \
 	  img=$$(gcloud run jobs describe "$$job" --region $(REGION) --project $(PROJECT) \
 	    --format='value(spec.template.spec.template.spec.containers[0].image)' 2>/dev/null); \
 	  printf '  %-18s: %s\n' "$$job" "$${img:-<not deployed>}"; \
@@ -362,8 +371,10 @@ gh-vars: deployer-check ## Set the GitHub repo variables for $(ENV) from its ter
 	  wif=$$($(MAKE) -s --no-print-directory tf-output ENV=$(ENV) NAME=workload_identity_provider) || exit 1; \
 	  sa=$$($(MAKE)  -s --no-print-directory tf-output ENV=$(ENV) NAME=deployer_service_account)  || exit 1; \
 	  test -n "$$wif" && test -n "$$sa" || { echo "refusing to set an empty variable" >&2; exit 1; }; \
+	  test -n "$(NAME_PREFIX)" || { echo "could not read name_prefix from $(TFVARS)" >&2; exit 1; }; \
 	  gh variable set REGION              --body "$(REGION)"; \
 	  gh variable set PROJECT_ID_$$up     --body "$(PROJECT)"; \
+	  gh variable set NAME_PREFIX_$$up    --body "$(NAME_PREFIX)"; \
 	  gh variable set WIF_PROVIDER_$$up   --body "$$wif"; \
 	  gh variable set DEPLOYER_SA_$$up    --body "$$sa"; \
 	  echo ""; gh variable list

@@ -47,3 +47,8 @@ output "location" {
   value       = var.location
   description = "Region co-location is mandatory — pipelines must use this same value."
 }
+
+output "image_repository_id" {
+  value       = google_artifact_registry_repository.images.repository_id
+  description = "Artifact Registry repository name alone. The wif module grants the deployer writer on it, so it must not be hardcoded alongside the naming convention."
+}

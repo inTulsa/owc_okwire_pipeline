@@ -14,12 +14,20 @@
 set -euo pipefail
 
 PROJECT_ID="${1:-}"
-STATE_BUCKET="${STATE_BUCKET:-okw-tfstate}"
+# One state bucket per environment, in that environment's OWN project,
+# following the same OMES convention Terraform uses for everything else.
+#
+# Bucket names are GLOBALLY unique, so a shared default does not give you one
+# bucket per project — it gives you one bucket, in whichever project ran this
+# script first, silently holding every environment's state. Deriving it from
+# the project id makes that collision impossible. See the ownership check
+# below for the case where someone overrides it back to a shared name.
+STATE_BUCKET="${STATE_BUCKET:-gcs-${PROJECT_ID}-tfstate-1}"
 LOCATION="${LOCATION:-US}"
 
 if [[ -z "$PROJECT_ID" ]]; then
   echo "usage: $0 <project-id>" >&2
-  echo "  env: STATE_BUCKET (default okw-tfstate)  LOCATION (default US)" >&2
+  echo "  env: STATE_BUCKET (default gcs-<project>-tfstate-1)  LOCATION (default US)" >&2
   exit 64
 fi
 
@@ -45,6 +53,32 @@ gcloud services enable \
 # Terraform cannot create the bucket that holds its own state.
 say "Creating state bucket gs://$STATE_BUCKET"
 if gcloud storage buckets describe "gs://$STATE_BUCKET" --project "$PROJECT_ID" >/dev/null 2>&1; then
+  # `describe --project X` sets the billing/quota project for the CALL; it
+  # does not assert ownership. A bucket you can read in another project
+  # answers here quite happily, and the script would then cheerfully put this
+  # environment's state in someone else's project. Prod state living in the
+  # dev project inverts the trust relationship, and nothing downstream would
+  # ever surface it. So check who actually owns it.
+  OWNER_NUM=$(gcloud storage buckets describe "gs://$STATE_BUCKET" \
+    --format='value(project_number)' 2>/dev/null || true)
+  THIS_NUM=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)' 2>/dev/null || true)
+  if [[ -n "$OWNER_NUM" && -n "$THIS_NUM" && "$OWNER_NUM" != "$THIS_NUM" ]]; then
+    {
+      echo ""
+      echo "gs://$STATE_BUCKET already exists, but in a DIFFERENT project."
+      echo "  bucket's project number : $OWNER_NUM"
+      echo "  $PROJECT_ID : $THIS_NUM"
+      echo ""
+      echo "Terraform state for this environment would be written into that"
+      echo "other project. Use a bucket in this project instead:"
+      echo "    STATE_BUCKET=gcs-${PROJECT_ID}-tfstate-1 $0 $PROJECT_ID"
+      echo ""
+      echo "and make sure envs/<env>/backend.tf and terraform.tfvars name the"
+      echo "same bucket."
+      echo ""
+    } >&2
+    exit 1
+  fi
   echo "already exists"
 else
   gcloud storage buckets create "gs://$STATE_BUCKET" \
@@ -153,14 +187,14 @@ cat <<NEXT
        project_id, github_repository, alert_emails, snowflake_user
 
   3. Create Artifact Registry + the secret container. Building before this
-     fails with: name unknown: Repository "okw-images" not found
+     fails with: name unknown: Repository "ar-<name_prefix>-images-1" not found
        make tf-bootstrap ENV=<env>
 
   4. Store the Snowflake password. Do this BEFORE step 6 -- the lightcast job
      reads versions/latest at creation time, and "latest" cannot resolve to
      nothing. The value never enters Terraform state.
        printf '%s' 'THE_PASSWORD' | \\
-         gcloud secrets versions add okw-snowflake-password-<env> \\
+         gcloud secrets versions add sm-<name_prefix>-snowflake-password-1 \\
            --data-file=- --project $PROJECT_ID
 
   5. Build an image. Terraform requires a digest, not a tag; this prints it:

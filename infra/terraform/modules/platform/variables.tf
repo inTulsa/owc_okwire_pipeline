@@ -119,3 +119,31 @@ variable "metric_propagation_wait" {
   description = "Wait after creating a log-based metric before an alert policy references it. See the pipeline module's variable of the same name."
   default     = "90s"
 }
+
+variable "name_prefix" {
+  type        = string
+  description = <<-EOT
+    The project prefix that every resource name is built around, following the
+    OMES convention `<type>-<project-prefix>-<qualifier>-<seq>` — so
+    `owc-dpar-d` yields `gcs-owc-dpar-d-raw-1`. Normally the project id.
+
+    Kept separate from `env` on purpose. `env` stays `dev`/`prod` because it
+    namespaces the log-based metrics and prints in alert titles, where `d`
+    would read badly and a change would orphan the existing metrics. This
+    variable only ever affects resource names.
+  EOT
+
+  validation {
+    # Service account account_id is capped at 30 characters, and the longest
+    # one here is `sa-<prefix>-enrollment-1` — 16 characters of fixed parts.
+    # Failing at plan time with this sentence beats a 400 from the IAM API
+    # partway through an apply.
+    condition     = length(var.name_prefix) <= 14
+    error_message = "name_prefix must be 14 characters or fewer: it is embedded in service account ids, which GCP caps at 30, and 'sa-<prefix>-enrollment-1' already spends 16."
+  }
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]*[a-z0-9]$", var.name_prefix))
+    error_message = "name_prefix must be lowercase letters, digits and hyphens, starting with a letter and not ending in a hyphen."
+  }
+}

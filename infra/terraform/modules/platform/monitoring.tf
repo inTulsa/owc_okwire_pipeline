@@ -34,7 +34,7 @@ locals {
 # route it to the distribution list.
 # ---------------------------------------------------------------------------
 resource "google_service_account" "freshness" {
-  account_id   = "okw-freshness-${var.env}"
+  account_id   = local.name.sa_freshness
   project      = var.project_id
   display_name = "OWC freshness check (${var.env})"
   description  = "Runs the owc_ops.pipeline_runs freshness scheduled query. Read-only."

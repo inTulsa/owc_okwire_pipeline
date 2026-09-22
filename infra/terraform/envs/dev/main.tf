@@ -81,6 +81,7 @@ module "platform" {
 
   project_id      = var.project_id
   env             = var.env_name
+  name_prefix     = var.name_prefix
   region          = var.region
   location        = var.location
   alert_emails    = var.alert_emails
@@ -118,12 +119,13 @@ module "platform" {
 module "lightcast" {
   source = "../../modules/pipeline"
 
-  name       = "lightcast"
-  project_id = var.project_id
-  env        = var.env_name
-  region     = var.region
-  image      = var.image_digest
-  labels     = local.labels
+  name        = "lightcast"
+  project_id  = var.project_id
+  env         = var.env_name
+  name_prefix = var.name_prefix
+  region      = var.region
+  image       = var.image_digest
+  labels      = local.labels
 
   service_account_email           = module.platform.service_account_emails.lightcast
   scheduler_service_account_email = module.platform.service_account_emails.scheduler
@@ -208,12 +210,13 @@ module "lightcast" {
 module "enrollment" {
   source = "../../modules/pipeline"
 
-  name       = "enrollment"
-  project_id = var.project_id
-  env        = var.env_name
-  region     = var.region
-  image      = var.image_digest
-  labels     = local.labels
+  name        = "enrollment"
+  project_id  = var.project_id
+  env         = var.env_name
+  name_prefix = var.name_prefix
+  region      = var.region
+  image       = var.image_digest
+  labels      = local.labels
 
   service_account_email           = module.platform.service_account_emails.enrollment
   scheduler_service_account_email = module.platform.service_account_emails.scheduler
@@ -325,11 +328,12 @@ module "wif" {
 
   project_id        = var.project_id
   env               = var.env_name
+  name_prefix       = var.name_prefix
   github_repository = var.github_repository
   allowed_refs      = var.allowed_refs
   state_bucket      = var.state_bucket
 
-  artifact_registry_repository_id = "okw-images"
+  artifact_registry_repository_id = module.platform.image_repository_id
   artifact_registry_location      = var.region
 
   impersonatable_service_accounts = [

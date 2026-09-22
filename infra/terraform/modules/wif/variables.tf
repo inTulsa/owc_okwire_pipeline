@@ -48,3 +48,8 @@ variable "impersonatable_service_accounts" {
   description = "Runtime SA emails the deployer may set on a Cloud Run job (iam.serviceAccountUser)."
   default     = []
 }
+
+variable "name_prefix" {
+  type        = string
+  description = "Project prefix for the OMES naming convention. See modules/platform/naming.tf."
+}

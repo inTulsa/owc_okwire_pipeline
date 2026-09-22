@@ -1,7 +1,3 @@
-locals {
-  job_name = "okw-${var.name}-${var.env}"
-}
-
 resource "google_cloud_run_v2_job" "this" {
   name     = local.job_name
   project  = var.project_id

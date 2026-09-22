@@ -23,7 +23,10 @@
 
 substitutions:
   _REGION: us-central1
-  _REPOSITORY: okw-images
+  # Artifact Registry repo, per the OMES naming convention
+  # (ar-<name_prefix>-images-1). Supplied by `make build` and the deploy
+  # workflow; this default only keeps a bare `gcloud builds submit` parseable.
+  _REPOSITORY: images
   _IMAGE: owcdata
   _TAG: latest
   # Full email of the build identity. Supplied by `make build` and by the

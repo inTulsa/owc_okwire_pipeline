@@ -9,7 +9,7 @@
 # ---------------------------------------------------------------------------
 
 resource "google_service_account" "lightcast" {
-  account_id   = "okw-lightcast-${var.env}"
+  account_id   = local.name.sa_lightcast
   project      = var.project_id
   display_name = "OWC lightcast pipeline (${var.env})"
   description  = "Runs the lightcast Cloud Run job. Holds the Snowflake secret."
@@ -17,7 +17,7 @@ resource "google_service_account" "lightcast" {
 }
 
 resource "google_service_account" "enrollment" {
-  account_id   = "okw-enrollment-${var.env}"
+  account_id   = local.name.sa_enrollment
   project      = var.project_id
   display_name = "OWC enrollment pipeline (${var.env})"
   description  = "Runs the enrollment Cloud Run job. No secret access: the source is a public webpage."
@@ -25,7 +25,7 @@ resource "google_service_account" "enrollment" {
 }
 
 resource "google_service_account" "scheduler" {
-  account_id   = "okw-scheduler-${var.env}"
+  account_id   = local.name.sa_scheduler
   project      = var.project_id
   display_name = "OWC Cloud Scheduler invoker (${var.env})"
   description  = "Invokes the Cloud Run jobs. run.invoker on the specific jobs only."
@@ -50,7 +50,7 @@ resource "google_service_account" "scheduler" {
 # file already sets.
 # ---------------------------------------------------------------------------
 resource "google_service_account" "build" {
-  account_id   = "okw-build-${var.env}"
+  account_id   = local.name.sa_build
   project      = var.project_id
   display_name = "OWC Cloud Build (${var.env})"
   description  = "Runs container builds. Reads build source, writes the image and logs. Nothing else."
@@ -86,7 +86,7 @@ resource "google_artifact_registry_repository_iam_member" "build_writer" {
 }
 
 resource "google_service_account" "powerbi" {
-  account_id   = "okw-powerbi-${var.env}"
+  account_id   = local.name.sa_powerbi
   project      = var.project_id
   display_name = "OWC PowerBI reader (${var.env})"
   description  = "Read-only on owc_marts. See docs/01-architecture.md ADR-006 for the JSON-key exception."

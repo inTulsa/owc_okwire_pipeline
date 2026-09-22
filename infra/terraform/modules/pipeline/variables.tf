@@ -231,3 +231,8 @@ variable "metric_propagation_wait" {
   EOT
   default     = "90s"
 }
+
+variable "name_prefix" {
+  type        = string
+  description = "Project prefix for the OMES naming convention. See modules/platform/naming.tf."
+}

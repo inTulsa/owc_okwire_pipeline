@@ -2,7 +2,7 @@
 # Workload Identity Federation for GitHub Actions. No JSON keys.
 # ---------------------------------------------------------------------------
 resource "google_iam_workload_identity_pool" "github" {
-  workload_identity_pool_id = "okw-github-${var.env}"
+  workload_identity_pool_id = local.name.wif_pool
   project                   = var.project_id
   display_name              = "OWC GitHub Actions (${var.env})"
   description               = "Keyless deploys from ${var.github_repository}."
@@ -46,7 +46,7 @@ resource "google_iam_workload_identity_pool_provider" "github" {
 # The deployer.
 # ---------------------------------------------------------------------------
 resource "google_service_account" "deployer" {
-  account_id   = "okw-deployer-${var.env}"
+  account_id   = local.name.sa_deployer
   project      = var.project_id
   display_name = "OWC GitHub Actions deployer (${var.env})"
   description  = "Assumed via WIF from ${var.github_repository}. No keys."
@@ -109,7 +109,7 @@ resource "google_storage_bucket_iam_member" "deployer_state" {
 #
 #   workloadIdentityPoolAdmin missing:
 #     Permission 'iam.workloadIdentityPools.get' denied on resource
-#     '//iam.googleapis.com/projects/.../workloadIdentityPools/okw-github-<env>'
+#     '//iam.googleapis.com/projects/.../workloadIdentityPools/wip-<prefix>-github-1'
 #
 # Every google_project_iam_member does a read-modify-write on the project IAM
 # policy, so all 22 of them — here and in modules/platform — need

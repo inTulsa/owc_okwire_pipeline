@@ -18,7 +18,7 @@ variable "image_digest" {
   type        = string
   description = <<-EOT
     Full image reference pinned by digest, e.g.
-    us-central1-docker.pkg.dev/PROJECT/okw-images/owcdata@sha256:abc...
+    us-central1-docker.pkg.dev/PROJECT/ar-<name_prefix>-images-1/owcdata@sha256:abc...
 
     Required, with no default, on purpose: the pipeline module refuses a tag,
     and a forgotten image is better as a plan error than as a job that cannot
@@ -45,8 +45,21 @@ variable "allowed_refs" {
 }
 
 variable "state_bucket" {
-  type    = string
-  default = "okw-tfstate"
+  type        = string
+  description = <<-EOT
+    The GCS bucket holding this environment's Terraform state, which the
+    deployer is granted objectAdmin on.
+
+    Deliberately has NO default. Bucket names are globally unique, so a
+    shared default silently puts every environment's state in whichever
+    project bootstrapped first — and `bootstrap.sh` cannot detect it,
+    because `describe` succeeds for a bucket you can read in another
+    project. Prod state living in the dev project inverts the trust
+    relationship: dev is where people feel free to break things.
+
+    One bucket per environment, in that environment's own project. The
+    literal must also be set in backend.tf, which cannot read a variable.
+  EOT
 }
 
 variable "billing_account" {
@@ -68,4 +81,17 @@ variable "snowflake_user" {
   type        = string
   description = "Snowflake login. Not a secret; the password is in Secret Manager."
   default     = ""
+}
+
+variable "name_prefix" {
+  type        = string
+  description = <<-EOT
+    Project prefix for the OMES resource naming convention
+    `<type>-<project-prefix>-<qualifier>-<seq>`, so `owc-dpar-d` produces
+    `gcs-owc-dpar-d-raw-1`. Normally identical to project_id.
+
+    Separate from project_id because they are allowed to diverge: a sandbox
+    project with a long id still needs a prefix short enough for a service
+    account id. Capped at 14 characters — see modules/platform/variables.tf.
+  EOT
 }

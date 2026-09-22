@@ -8,10 +8,10 @@
 #
 # The secret VALUE is set out of band (gcloud, or the console) and is not in
 # Terraform state:
-#   printf '%s' "$PASSWORD" | gcloud secrets versions add okw-snowflake-password-dev --data-file=-
+#   printf '%s' "$PASSWORD" | gcloud secrets versions add "$(terraform output -raw snowflake_secret_id)" --data-file=-
 # ---------------------------------------------------------------------------
 resource "google_secret_manager_secret" "snowflake_password" {
-  secret_id = "okw-snowflake-password-${var.env}"
+  secret_id = local.name.secret_snowflake
   project   = var.project_id
   labels    = var.labels
 

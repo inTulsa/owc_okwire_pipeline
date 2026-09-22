@@ -14,7 +14,7 @@
 resource "google_cloud_scheduler_job" "this" {
   for_each = { for s in var.schedules : s.name => s }
 
-  name        = "okw-${var.name}-${each.value.name}-${var.env}"
+  name        = local.scheduler_name[each.key]
   project     = var.project_id
   region      = var.region
   schedule    = each.value.cron
