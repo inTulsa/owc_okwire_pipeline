@@ -16,14 +16,29 @@
 set -euo pipefail
 
 PROJECT=""; PREFIX=""; PRINCIPAL=""; LOCATION="US"
+# Which half to emit.
+#
+#   operator  APIs, the Data Transfer agent, the two buckets. Everything the
+#             deploy account can already do, so it does not belong in a
+#             request to somebody else.
+#   admin     the six identities and their IAM. The only part that needs
+#             serviceAccountAdmin and projectIamAdmin.
+#   all       both, for a project where one person holds everything.
+#
+# Splitting matters because the admin's file should contain nothing they
+# have to wonder about. A bucket creation sitting in the middle of an IAM
+# request is a question, and questions cost days.
+PART="all"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --prefix)    PREFIX="${2:?}"; shift 2 ;;
     --principal) PRINCIPAL="${2:?}"; shift 2 ;;
     --location)  LOCATION="${2:?}"; shift 2 ;;
+    --part)      PART="${2:?}"; shift 2 ;;
     *)           PROJECT="$1"; shift ;;
   esac
 done
+case "$PART" in operator|admin|all) ;; *) echo "--part must be operator, admin or all" >&2; exit 64 ;; esac
 [[ -n "$PROJECT" ]] || { echo "usage: $0 <project-id> [--prefix P] --principal MEMBER" >&2; exit 64; }
 PREFIX="${PREFIX:-$PROJECT}"
 [[ -n "$PRINCIPAL" ]] || PRINCIPAL="user:$(gcloud config get-value account 2>/dev/null)"
@@ -37,18 +52,27 @@ emit "#!/usr/bin/env bash"
 emit "# ============================================================================"
 emit "# OWC data platform — one-time setup for $PROJECT"
 emit "#"
-emit "# FOR THE PROJECT ADMIN. The OWC deploy account cannot run this — it"
-emit "# fails at step 4 with a 403, which is the point: that account is not"
-emit "# allowed to create identities or write the project IAM policy."
+if [[ "$PART" == "operator" ]]; then
+  emit "# Run by the OWC deploy account. Needs no elevated rights: enabling APIs"
+  emit "# and creating buckets are things that account already does."
+else
+  emit "# FOR THE PROJECT ADMIN. The OWC deploy account cannot run this — it"
+  emit "# fails on the first command with a 403, which is the point: that"
+  emit "# account is not allowed to create identities or write project IAM."
+  emit "#"
+  emit "# Run once, by someone holding on $PROJECT:"
+  emit "#     roles/iam.serviceAccountAdmin"
+  emit "#     roles/resourcemanager.projectIamAdmin"
+fi
 emit "#"
-emit "# Run once, by someone holding on $PROJECT:"
-emit "#     roles/iam.serviceAccountAdmin"
-emit "#     roles/resourcemanager.projectIamAdmin"
-emit "#     roles/serviceusage.serviceUsageAdmin"
-emit "#"
-emit "# Creates 6 service accounts and their IAM. After this, the deploy runs"
-emit "# with resource-admin roles only and never touches the project IAM policy"
-emit "# again — which is the point of doing it here rather than in Terraform."
+if [[ "$PART" == "operator" ]]; then
+  emit "# Prepares the project so the identity setup, and then Terraform, can"
+  emit "# run. Nothing here creates an identity or grants a role."
+else
+  emit "# Creates ${#ALL_SAS[@]} service accounts and their IAM. After this, the deploy"
+  emit "# runs with resource-admin roles only and never touches the project IAM"
+  emit "# policy again — the point of doing it here rather than in Terraform."
+fi
 emit "#"
 emit "#"
 emit "# HOW TO RUN IT"
@@ -85,13 +109,18 @@ emit ''
 emit 'step() { printf "\n==> %s\n" "$*"; }'
 emit ''
 
-emit "step \"1/6  Enabling APIs (${#REQUIRED_APIS[@]})\""
+if [[ "$PART" == "all" ]]; then TOTAL=6; else TOTAL=3; fi
+n=0
+next_step() { n=$((n+1)); emit "step \"$n/$TOTAL  $1\""; }
+
+if [[ "$PART" != "admin" ]]; then
+next_step "Enabling APIs (${#REQUIRED_APIS[@]})"
 emit "gcloud services enable \\"
 for a in "${REQUIRED_APIS[@]}"; do emit "  $a \\"; done
 emit "  --project \"\$PROJECT\""
 emit ""
 
-emit 'step "2/6  Provisioning the BigQuery Data Transfer service agent"'
+next_step "Provisioning the BigQuery Data Transfer service agent"
 emit '# Enabling an API does not create its service agent; the agent appears'
 emit '# the first time the service is used. Forcing it now means the grant in'
 emit '# step 5 has something to attach to.'
@@ -101,7 +130,7 @@ emit 'PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format="value(proje
 emit 'DTS_AGENT="service-${PROJECT_NUMBER}@gcp-sa-bigquerydatatransfer.iam.gserviceaccount.com"'
 emit ""
 
-emit 'step "3/6  Creating the two GCS buckets"'
+next_step "Creating the two GCS buckets"
 emit '# Terraform cannot create the bucket that holds its own state, and the'
 emit '# source bucket is a mirror of the repo for anyone without GitHub access.'
 for b in "$BUCKET_STATE" "$BUCKET_SOURCE"; do
@@ -116,7 +145,10 @@ done
 emit "gcloud storage buckets update gs://$BUCKET_STATE --clear-soft-delete --project \"\$PROJECT\""
 emit ""
 
-emit "step \"4/6  Creating ${#ALL_SAS[@]} service accounts\""
+fi   # end operator part
+
+if [[ "$PART" != "operator" ]]; then
+next_step "Creating ${#ALL_SAS[@]} service accounts"
 emit '# One per job, so each holds only what it needs: the web scraper cannot'
 emit '# read the Snowflake password, and the Snowflake job cannot write the'
 emit "# scraper's cache."
@@ -138,7 +170,15 @@ add_sa powerbi    "OWC PowerBI reader"          "Read-only on owc_marts."
 add_sa freshness  "OWC freshness check"         "Runs the owc_ops.pipeline_runs freshness scheduled query. Read-only."
 emit ""
 
-emit "step \"5/6  Project-level roles for those accounts (${#RUNTIME_PROJECT_GRANTS[@]})\""
+if [[ "$PART" == "admin" ]]; then
+  emit '# Resolve the Data Transfer agent address for the grant below. The'
+  emit '# agent is created when the API is first used, which the OWC team has'
+  emit '# already done.'
+  emit 'PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format="value(projectNumber)")'
+  emit 'DTS_AGENT="service-${PROJECT_NUMBER}@gcp-sa-bigquerydatatransfer.iam.gserviceaccount.com"'
+  emit ""
+fi
+next_step "Project-level roles for those accounts (${#RUNTIME_PROJECT_GRANTS[@]})"
 emit '# Narrow on purpose: writing logs, writing metrics, and running a'
 emit '# BigQuery job. Nothing broader.'
 for g in "${RUNTIME_PROJECT_GRANTS[@]}"; do
@@ -155,7 +195,7 @@ emit '  --project "$PROJECT" --member "serviceAccount:$DTS_AGENT" \'
 emit '  --role roles/iam.serviceAccountTokenCreator --quiet >/dev/null'
 emit ""
 
-emit "step \"6/6  Letting the deploy account attach those identities (${#ATTACHED_SAS[@]})\""
+next_step "Letting the deploy account attach those identities (${#ATTACHED_SAS[@]})"
 emit '# Setting a service account on a Cloud Run job, a Scheduler job, a build'
 emit '# or a scheduled query requires actAs ON THAT ACCOUNT. Granted per'
 emit '# account, never project-wide.'
@@ -172,6 +212,13 @@ for r in "${TF_PRINCIPAL_ROLES[@]}"; do
   emit "  --member \"\$DEPLOYER\" --role $r --condition=None --quiet >/dev/null"
 done
 emit ""
-emit 'printf "\n==> Done. Nothing else needs these permissions again.\n"'
-emit 'printf "    Tell the OWC team; they verify from their side and can show you\n"'
-emit 'printf "    the result.\n\n"'
+fi   # end admin part
+
+emit ""
+if [[ "$PART" == "operator" ]]; then
+  emit 'printf "\n==> Done. Next: the project admin runs the identity setup.\n\n"'
+else
+  emit 'printf "\n==> Done. Nothing else needs these permissions again.\n"'
+  emit 'printf "    Tell the OWC team; they verify from their side and can show\n"'
+  emit 'printf "    you the result.\n\n"'
+fi
