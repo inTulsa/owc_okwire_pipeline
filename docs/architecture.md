@@ -301,8 +301,8 @@ this build and turned a 9-line change set into a 43-line one.
 original at
 [`tests/fixtures/primary_enrollment_data_script.original.py`](../tests/fixtures/primary_enrollment_data_script.original.py),
 via an explicit ordered list of substitutions that must each match exactly
-once. It is excluded from `ruff format`, and CI runs
+once. It is excluded from `ruff format`, and `make check` runs
 `derive_scrape.py --check`.
 
 The result: `make diff-enrollment` shows exactly 9 removed lines, forever, and
-any drift is a build failure rather than a slow erosion of the claim.
+any drift fails `make check` rather than slowly eroding the claim.

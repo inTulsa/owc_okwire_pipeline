@@ -44,15 +44,28 @@ project.
 
 ### `terraform.tfvars`
 
+Six values, and this is the whole file:
+
 | Variable | Notes |
 |---|---|
-| `project_id` | This environment's project |
-| `name_prefix` | Drives every resource name via the OMES convention `<type>-<name_prefix>-<qualifier>-<seq>`, so `owc-dpar-d` gives `gcs-owc-dpar-d-raw-1`. Normally identical to `project_id`. Capped at 14 characters, because it is embedded in service account ids and GCP caps those at 30 — the plan fails with that sentence if you exceed it. |
-| `state_bucket` | This environment's Terraform state bucket. Must match `backend.tf` — see below. |
-| `alert_emails` | The distribution list |
-| `snowflake_user` | The login. Not a secret; the password goes to Secret Manager. Rejected at plan time if left as the `REPLACE_ME` placeholder. |
-| `billing_budget_amount` | `0` disables the budget alert entirely. |
-| `billing_account` | Only if you want the budget alert. Off by default (`billing_budget_amount = 0`). |
+| `project_id` | This environment's project. The Makefile reads it to default `PROJECT`, which then feeds the gcloud steps, Terraform's `-var`s, and the state bucket. Override with `PROJECT=` rather than editing this. |
+| `region` | `us-central1`. Cloud Run, Artifact Registry, Cloud Scheduler. |
+| `location` | `US`. GCS **and** all three BigQuery datasets — see [region co-location](#region-co-location-is-mandatory). |
+| `alert_emails` | A distribution list, not an individual. |
+| `snowflake_user` | The login. Not a secret; the password goes to Secret Manager. Rejected at plan time if left as the `REPLACE_ME` placeholder, which prod still carries. |
+| `billing_budget_amount` | `0` disables the budget alert entirely, which is the default in both environments. Set an amount *and* `billing_account` to turn it on. |
+
+Two things are deliberately **not** here:
+
+- **`name_prefix`** is a Terraform variable, but the Makefile supplies it —
+  defaulting to `PROJECT`, so the two cannot drift. Override with
+  `NAME_PREFIX=` only if a project id exceeds 14 characters, which is the cap
+  imposed by service account ids (GCP allows 30, and
+  `sa-<prefix>-enrollment-1` already spends 16).
+- **The state bucket** is derived as `gcs-<project>-tfstate-1` and passed to
+  `terraform init` with `-backend-config`. It used to be written here *and*
+  in `backend.tf`, which is one value in two files and the reason aiming at
+  another project meant editing both.
 
 ### Testing against your own project
 
