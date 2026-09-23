@@ -23,19 +23,9 @@
 # Use envs/dev, not envs/prod: prod sets schedulers_paused = false, so a test
 # apply there creates LIVE schedulers that fire prod's monthly schedule at
 # Lightcast's warehouse.
-project_id   = "owc-dpar-d"
-name_prefix  = "owc-dpar-d"
-state_bucket = "gcs-owc-dpar-d-tfstate-1"
-region       = "us-central1"
-location     = "US"
-# Read only when enable_wif = true, which it is not. Kept so the value
-# does not have to be rediscovered when OMES federates their own instance.
-github_repository = "inTulsa/owc_okwire_pipeline"
-
-# Inert while enable_wif = false. Kept for when OMES federates their own
-# instance: dev must accept ANY ref, because a pull-request plan runs from an
-# arbitrary head, and pinning dev to refs/heads/dev would fail every one.
-allowed_refs = []
+project_id = "owc-dpar-d"
+region     = "us-central1"
+location   = "US"
 
 # A distribution list, so people join and leave without a Terraform change.
 alert_emails = ["gabriel.torianyk@tulsaforyou.com"]
@@ -48,28 +38,3 @@ snowflake_user = "analytics@tulsaforyou.com"
 
 billing_budget_amount = 0
 # billing_account     = "0X0X0X-0X0X0X-0X0X0X"
-
-# ---------------------------------------------------------------------------
-# The OMES split. Terraform creates RESOURCES; it does not create identities
-# and it never touches the project IAM policy.
-#
-#   "your terraform should not write IAM on each run ... projectIamAdmin and
-#    serviceAccountAdmin is too much for terraform process, we should be able
-#    to manual create the resources needed, and then use lower permissions on
-#    the additional runs"          -- Stephen Jones, OMES
-#
-# Run infra/gcloud/01-admin-identities.sh once, with an account that holds
-# serviceAccountAdmin and projectIamAdmin. It creates the six service
-# accounts, their project-level roles, the sixteen API enables, and the state
-# bucket. Everything after it runs with the ten resource-admin roles in
-# infra/gcloud/names.sh and nothing else.
-#
-# Flip any of these to true only alongside re-granting the matching role —
-# `make iam-check ENV=dev` prints exactly which one.
-# ---------------------------------------------------------------------------
-# no google_service_account, no google_project_iam_member
-manage_identities = false
-# no google_project_service
-manage_apis = false
-# no GitHub WIF pool, no deployer service account, no thirteen-role grant
-enable_wif = false

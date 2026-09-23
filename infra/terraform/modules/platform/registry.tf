@@ -24,7 +24,6 @@ resource "google_artifact_registry_repository" "images" {
     }
   }
 
-  depends_on = [google_project_service.enabled]
 }
 
 # Both jobs pull the same image.

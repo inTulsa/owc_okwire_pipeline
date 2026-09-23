@@ -6,7 +6,7 @@ Cloud Shell, either works.
 
 This is the only part of the repo that needs a Python toolchain. Deploying and
 operating need none of it; see
-[`09-gcloud-deploy.md`](09-gcloud-deploy.md).
+[`08-deploy.md`](08-deploy.md).
 
 ## Setup
 

@@ -113,27 +113,6 @@ for email in "${ALL_SAS[@]}"; do
   fi
 done
 
-# There must be NO deployer and NO WIF pool: GitHub Actions is not in this
-# path, and the deployer was the identity that needed the 13-role grant.
-head2 "GitHub deploy path is absent (OMES cannot hook up a personal GitHub)"
-if gcloud iam service-accounts describe "sa-${PREFIX}-deployer-1@${PROJECT}.iam.gserviceaccount.com" \
-     --project "$PROJECT" >/dev/null 2>&1; then
-  bad "a deployer service account still exists — left over from the WIF path"
-else
-  pass "no deployer service account"
-fi
-if pools=$(gcloud iam workload-identity-pools list --location=global \
-     --project "$PROJECT" --format='value(name)' 2>&1); then
-  if [[ -n "$pools" ]]; then
-    bad "workload identity pool(s) still exist: $(tr '\n' ' ' <<<"$pools")"
-  else
-    pass "no workload identity pools"
-  fi
-else
-  # Not fatal: listing pools needs a permission the checker may not hold.
-  printf '  \033[2mskip\033[0m     could not list workload identity pools (permission)\n'
-fi
-
 # --- runtime project bindings ----------------------------------------------
 if (( ! REDUCED )); then
 head2 "Project-level roles on the runtime identities"
@@ -374,7 +353,7 @@ if (( ${excess:-0} )); then
 fi
 if (( REDUCED )); then
   echo "Ready to deploy. The IAM role audit was skipped — run this as an admin"
-  echo "account for that, or see docs/09-gcloud-deploy.md."
+  echo "account for that, or see docs/08-deploy.md."
 else
   echo "Admin bootstrap verified. Terraform can now run with no IAM permissions."
 fi

@@ -38,7 +38,7 @@ make smoke ENV=dev              # 6. one real run of each pipeline
 ```
 
 Terraform holds no `projectIamAdmin` and no `serviceAccountAdmin`, and there
-is no GitHub in the path. **[`docs/09-gcloud-deploy.md`](docs/09-gcloud-deploy.md)
+is no GitHub in the path. **[`docs/08-deploy.md`](docs/08-deploy.md)
 is the only deploy procedure** — what each step does, and why it is split that
 way.
 
@@ -54,7 +54,7 @@ make run PIPELINE=enrollment TARGET=local
 ```
 
 `make help` lists every target. Full walkthrough:
-[`docs/05-local-development.md`](docs/05-local-development.md).
+[`docs/04-local-development.md`](docs/04-local-development.md).
 
 ## Documentation
 
@@ -64,12 +64,11 @@ make run PIPELINE=enrollment TARGET=local
 | [`01-architecture.md`](docs/01-architecture.md) | Data flow and the ADRs behind it |
 | [`02-runbook.md`](docs/02-runbook.md) | **On-call** — one entry per alert: symptom → diagnosis → fix |
 | [`03-gcp-setup.md`](docs/03-gcp-setup.md) | Why each resource is shaped the way it is. For the OMES projects, deploy from **09** instead. |
-| [`04-deployment.md`](docs/04-deployment.md) | GitHub Actions setup, deploy, roll back, promote dev → prod. **Not the current path** — see 09. |
-| [`05-local-development.md`](docs/05-local-development.md) | Running the pipelines and changing the code |
-| [`06-adding-a-pipeline.md`](docs/06-adding-a-pipeline.md) | Adding a dataset vs. adding a whole pipeline |
-| [`07-monitoring.md`](docs/07-monitoring.md) | Every alert, its threshold, and why |
-| [`08-developer-setup.md`](docs/08-developer-setup.md) | **Start here** — Cloud Shell vs a workstation, what each needs, access to request |
-| [`09-gcloud-deploy.md`](docs/09-gcloud-deploy.md) | **The OMES path** — deploy from gcloud, with Terraform holding no IAM permissions |
+| [`04-local-development.md`](docs/04-local-development.md) | Running the pipelines and changing the code |
+| [`05-adding-a-pipeline.md`](docs/05-adding-a-pipeline.md) | Adding a dataset vs. adding a whole pipeline |
+| [`06-monitoring.md`](docs/06-monitoring.md) | Every alert, its threshold, and why |
+| [`07-developer-setup.md`](docs/07-developer-setup.md) | **Start here** — Cloud Shell vs a workstation, what each needs, access to request |
+| [`08-deploy.md`](docs/08-deploy.md) | **The OMES path** — deploy from gcloud, with Terraform holding no IAM permissions |
 | [`OPEN-ITEMS.md`](docs/OPEN-ITEMS.md) | **Decisions still needing a human** — read this before go-live |
 
 The enrollment pipeline's original business-process documentation is preserved
@@ -86,10 +85,23 @@ src/owcdata/
     lightcast/    Snowflake → Arrow → Parquet, one dataset per Cloud Run task
     enrollment/   the original scraper, parsing logic unchanged
 sql/owc/          41 .sql files, verbatim from owcpipelines
-infra/terraform/  platform + a reusable `pipeline` module, instantiated twice
+infra/terraform/  platform + a reusable `pipeline` module, instantiated twice.
+                  Creates resources only: no service accounts, no project IAM.
 infra/gcloud/     the one-time privileged setup, in plain gcloud — identities,
                   project IAM, API enables, state and source buckets
 ```
+
+## Testing against another project
+
+Same files, same commands, one variable:
+
+```bash
+make gcloud-admin ENV=dev PROJECT=my-test-project
+make up           ENV=dev PROJECT=my-test-project
+```
+
+`PROJECT` feeds the gcloud steps, the terraform variables, and the state
+bucket at `init`, so nothing is edited and nothing has to be changed back.
 
 ## Repository provenance
 

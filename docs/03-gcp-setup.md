@@ -1,7 +1,7 @@
 # GCP environment reference
 
 **This is not a walkthrough.** The steps to deploy are in
-[`09-gcloud-deploy.md`](09-gcloud-deploy.md), and they are the only ones.
+[`08-deploy.md`](08-deploy.md), and they are the only ones.
 This document explains what those steps create, what you have to fill in
 yourself, and why each thing is shaped the way it is — the questions that come
 up *while* following that walkthrough, or six months later when someone asks
@@ -26,7 +26,7 @@ why a bucket is configured a particular way.
   architecture. This repo deploys the data platform *into* a project that
   already exists.
 - **Someone who can run the one privileged step once** — see
-  [the access table](08-developer-setup.md#access-you-need-granted). After
+  [the access table](07-developer-setup.md#access-you-need-granted). After
   that, nobody needs `projectIamAdmin` or `serviceAccountAdmin` again.
 - **The Snowflake reader-account password.**
 - **A distribution list for alerts** — not an individual's address, so people
@@ -51,58 +51,52 @@ project.
 | `state_bucket` | This environment's Terraform state bucket. Must match `backend.tf` — see below. |
 | `alert_emails` | The distribution list |
 | `snowflake_user` | The login. Not a secret; the password goes to Secret Manager. Rejected at plan time if left as the `REPLACE_ME` placeholder. |
-| `manage_identities`, `manage_apis`, `enable_wif` | All `false`. See [09](09-gcloud-deploy.md#where-the-line-is-drawn). Changing one means re-granting a role you deliberately gave up. |
-| `github_repository`, `allowed_refs` | Read only when `enable_wif = true`, which it is not. |
+| `billing_budget_amount` | `0` disables the budget alert entirely. |
 | `billing_account` | Only if you want the budget alert. Off by default (`billing_budget_amount = 0`). |
 
 ### Testing against your own project
 
-Change the first three values here **and** the bucket literal in `backend.tf`
-— four values, two files. `-var` overrides are not enough: `make up` drives
-`gcloud-admin`, `source-push`, `iam-check`, `build`, `set-image` and `smoke`,
-and all of them read `project_id` and `name_prefix` from this file, while
-`-var` reaches only Terraform.
-
-Do it on a throwaway branch so `dev` never carries a test project's values and
-cleanup is deleting the branch:
+Override `PROJECT`. Nothing is edited, nothing is committed, nothing has to be
+changed back:
 
 ```bash
-git switch -c test/my-project      # edit both files, commit, push
+make gcloud-admin ENV=dev PROJECT=my-test-project
+make up           ENV=dev PROJECT=my-test-project
+make smoke        ENV=dev PROJECT=my-test-project
 ```
 
-Use **`envs/dev`**, never `envs/prod`. Prod sets `schedulers_paused = false`,
-so an apply there creates live schedulers that fire the monthly schedule at
+It reaches all three places that matter — the gcloud steps that create the
+identities, the `-var` values Terraform applies with, and the state bucket
+passed to `terraform init`. An earlier version of this repo required editing
+`terraform.tfvars` *and* `backend.tf` on a branch; that is why the bucket is
+no longer a literal.
+
+`NAME_PREFIX` follows `PROJECT` unless you set it, which only matters if a
+project id exceeds the 14-character cap.
+
+Use **`ENV=dev`**, not `ENV=prod`. Prod sets `schedulers_paused = false`, so
+an apply there creates live schedulers that fire the monthly schedule at
 Lightcast's warehouse.
 
-### `backend.tf`, in the same directory
 
-Terraform's backend block **cannot read a variable** — not `state_bucket`, not
-anything. The bucket is a committed literal, so it is the one value you set in
-two places:
+### `backend.tf` holds no bucket
 
-```hcl
-terraform {
-  backend "gcs" {
-    bucket = "gcs-owc-dpar-d-tfstate-1"   # must equal state_bucket above
-    prefix = "env/dev"                     # leave this alone
-  }
-}
+Terraform's backend block cannot read a variable, so the bucket used to be a
+committed literal — the one value that lived in two files, and the reason
+testing against another project meant editing and reverting them.
+
+It is now supplied at `init`, by the Makefile, from `PROJECT` — this is what
+`make tf-init` runs:
+
+```text
+terraform init -reconfigure \
+  -backend-config="bucket=gcs-<project>-tfstate-1" \
+  -backend-config="prefix=env/<env>"
 ```
 
-Leave `prefix` alone. It separates the two environments' state *within* a
-bucket, which matters only if you ever share one — and you should not.
-
-A mismatch does not say "mismatch". It surfaces as:
-
-```
-Error: Failed to get existing workspaces: querying Cloud Storage failed:
-storage: bucket doesn't exist
-```
-
-which reads like the bucket is missing when it is fine and Terraform is simply
-looking for a different one. `make iam-check` catches this before an apply
-does, and distinguishes it from the credentials fault that produces the
-identical message.
+`make tf-init` prints the bucket it adopted, and the resource count in it.
+`0 is correct for a project you have not applied to yet` — a non-zero count
+on a project you believe is fresh means you are pointed at the wrong one.
 
 ### One state bucket per environment, in that environment's own project
 
@@ -120,7 +114,7 @@ so the password stays out of Terraform state. `make up` stops and asks for it
 rather than carrying on:
 
 `$PROJECT` and `$PREFIX` come from `eval "$(make -s env-exports ENV=dev)"`
-— see [09](09-gcloud-deploy.md#shell-setup):
+— see [09](08-deploy.md#shell-setup):
 
 ```bash
 printf '%s' 'THE_PASSWORD' | \
@@ -209,7 +203,7 @@ take either the state or the source code with it.
 
 ## What prod does differently
 
-Run [`09-gcloud-deploy.md`](09-gcloud-deploy.md) again with `ENV=prod`. The
+Run [`08-deploy.md`](08-deploy.md) again with `ENV=prod`. The
 roots are deliberately near-identical so a change verified in dev reaches prod
 verbatim — `diff` them and you should see exactly four differences:
 

@@ -14,33 +14,10 @@ resource "google_monitoring_notification_channel" "email" {
     email_address = each.value
   }
 
-  depends_on = [google_project_service.enabled]
 }
 
 locals {
   notification_channels = [for c in google_monitoring_notification_channel.email : c.id]
-}
-
-# ---------------------------------------------------------------------------
-# ALERT 2: "Didn't run at all" — the freshness dead-man's-switch.
-#
-# A green Cloud Scheduler history means nothing: jobs:run returns a
-# long-running Operation immediately, so Scheduler gets a 200 in milliseconds
-# regardless of what the job then does. And metric absence caps at 23.5h,
-# which does not cover monthly/quarterly/yearly.
-#
-# So: a scheduled query that FAILS when any group is stale. The failure lands
-# in Cloud Logging, where the log metric and alert policy below pick it up and
-# route it to the distribution list.
-# ---------------------------------------------------------------------------
-resource "google_service_account" "freshness" {
-  count = var.manage_identities ? 1 : 0
-
-  account_id   = local.name.sa_freshness
-  project      = var.project_id
-  display_name = "OWC freshness check (${var.env})"
-  description  = "Runs the owc_ops.pipeline_runs freshness scheduled query. Read-only."
-  depends_on   = [google_project_service.enabled]
 }
 
 resource "google_bigquery_dataset_iam_member" "freshness_reader" {
@@ -48,43 +25,6 @@ resource "google_bigquery_dataset_iam_member" "freshness_reader" {
   dataset_id = google_bigquery_dataset.ops.dataset_id
   role       = "roles/bigquery.dataViewer"
   member     = "serviceAccount:${local.sa_email.freshness}"
-}
-
-resource "google_project_iam_member" "freshness_job_user" {
-  count = var.manage_identities ? 1 : 0
-
-  project = var.project_id
-  role    = "roles/bigquery.jobUser"
-  member  = "serviceAccount:${local.sa_email.freshness}"
-}
-
-# Provision the BigQuery Data Transfer Service agent.
-#
-# Enabling an API does not create its service agent — the agent is created the
-# first time the service is actually used. So constructing the address by hand
-# and granting a role to it immediately after enabling the API fails with
-# "service-<num>@gcp-sa-bigquerydatatransfer.iam.gserviceaccount.com does not
-# exist". This forces it into existence and hands back its real email, which
-# is also safer than string-building the address ourselves.
-resource "google_project_service_identity" "bigquerydatatransfer" {
-  count = var.manage_identities ? 1 : 0
-
-  provider = google-beta
-
-  project = var.project_id
-  service = "bigquerydatatransfer.googleapis.com"
-
-  depends_on = [google_project_service.enabled]
-}
-
-# The Data Transfer Service mints tokens for the freshness SA when it runs the
-# scheduled query, so its agent needs tokenCreator on that SA.
-resource "google_service_account_iam_member" "freshness_token_creator" {
-  count = var.manage_identities ? 1 : 0
-
-  service_account_id = "projects/${var.project_id}/serviceAccounts/${local.sa_email.freshness}"
-  role               = "roles/iam.serviceAccountTokenCreator"
-  member             = one(google_project_service_identity.bigquerydatatransfer[*].member)
 }
 
 data "google_project" "this" {
@@ -195,10 +135,11 @@ resource "google_bigquery_data_transfer_config" "freshness_check" {
     enable_failure_email = true
   }
 
+  # The tokenCreator and jobUser grants this used to wait on are now made by
+  # infra/gcloud/01-admin-identities.sh, before Terraform ever runs, and
+  # `make iam-check` verifies them. There is nothing left here to order.
   depends_on = [
     google_bigquery_table.pipeline_runs,
-    google_service_account_iam_member.freshness_token_creator,
-    google_project_iam_member.freshness_job_user,
   ]
 }
 
@@ -217,7 +158,6 @@ resource "google_logging_metric" "freshness_failed" {
     unit        = "1"
   }
 
-  depends_on = [google_project_service.enabled]
 }
 
 # See the pipeline module's time_sleep for why elapsed time is required here.
@@ -303,7 +243,6 @@ resource "google_logging_metric" "scheduler_error" {
     unit        = "1"
   }
 
-  depends_on = [google_project_service.enabled]
 }
 
 resource "google_monitoring_alert_policy" "scheduler_failing" {
