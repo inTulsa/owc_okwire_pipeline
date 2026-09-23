@@ -171,6 +171,13 @@ What it creates
 
   Deploy principal: ${PRINCIPAL:-<not specified — tell us who this should be>}
 
+  ^ That is the identity that will run every deploy after this. It was taken
+    from the gcloud account active where this request was generated
+    ($(gcloud config get-value account 2>/dev/null)). If that is not the
+    account we will be using in $PROJECT, say so and we will resend —
+    granting the wrong identity is a silent failure that only shows up at
+    the first apply.
+
 It is idempotent: safe to re-run, and re-running repairs a partial run.
 
 How to hand it back
