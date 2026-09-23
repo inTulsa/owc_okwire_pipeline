@@ -416,7 +416,7 @@ tf-validate: tf-check ## terraform validate for $(ENV)
 
 verify-separation: auth-check ## Check each identity can reach only what it should
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
-	@scripts/verify-separation.sh $(PROJECT) $(NAME_PREFIX)
+	@scripts/verify-separation.sh $(PROJECT) $(NAME_PREFIX) $(REGION)
 
 preflight: auth-check ## Check the Snowflake secret has a version before applying
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }

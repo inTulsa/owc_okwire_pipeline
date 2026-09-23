@@ -151,6 +151,43 @@ gcloud run jobs execute cr-$PREFIX-lightcast-1 --region=$REGION --project=$PROJE
 
 ## ALERT 3: scheduler failing {#alert-3-scheduler-failing}
 
+### `PERMISSION_DENIED` 403 on `jobs/...:run` {#scheduler-403}
+
+```json
+"status": "PERMISSION_DENIED",
+"debugInfo": "URL_ERROR-ERROR_OTHER. Original HTTP response code number = 403",
+"url": ".../namespaces/<project>/jobs/cr-<prefix>-lightcast-1:run"
+```
+
+The scheduler service account is missing `roles/run.invoker` **on that job**.
+Terraform grants it (`google_cloud_run_v2_job_iam_member.scheduler_invoker`),
+so either the apply did not reach it, or the grant was made moments ago and
+has not propagated — resource-level IAM takes a minute or two, and a
+`gcloud scheduler jobs run` fired immediately after an apply can beat it.
+
+Check it:
+
+```bash
+make verify-separation ENV=$ENV
+```
+
+That now asserts the grant on both jobs. If it is genuinely absent, the
+fastest fix is a re-apply; the direct grant is:
+
+```bash
+gcloud run jobs add-iam-policy-binding cr-$PREFIX-lightcast-1 \
+  --region $REGION --project $PROJECT \
+  --member serviceAccount:sa-$PREFIX-scheduler-1@$PROJECT.iam.gserviceaccount.com \
+  --role roles/run.invoker
+```
+
+Note the **scheduler's own history shows success** regardless: `jobs:run`
+returns a long-running Operation, so a 403 on the call is visible only in
+Cloud Logging under `cloudscheduler.googleapis.com/executions`, which is
+where the JSON above comes from.
+
+
+
 **Symptom.** Cloud Scheduler logged an error invoking a job. Nothing started,
 so no Cloud Run metric exists and alert 1 cannot fire.
 

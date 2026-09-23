@@ -26,8 +26,12 @@ set -uo pipefail
 
 PROJECT="${1:-}"
 PREFIX="${2:-}"
+# Passed in rather than defaulted: the Cloud Run jobs live in one region, and
+# a wrong guess here reports "could not read the policy" for a job that is
+# fine, which is the kind of false alarm this script exists not to produce.
+REGION="${3:-us-central1}"
 if [[ -z "$PROJECT" || -z "$PREFIX" ]]; then
-  echo "usage: $0 <project-id> <name-prefix>" >&2
+  echo "usage: $0 <project-id> <name-prefix> [region]" >&2
   exit 64
 fi
 
@@ -78,6 +82,31 @@ for ds in owc_staging owc_ops; do
     fi
   else
     err "could not read dataset $ds: $(tail -1 <<<"$meta")"
+  fi
+done
+
+# --- the scheduler MUST be able to invoke both jobs ------------------------
+#
+# Every other assertion here is negative — X cannot reach Y. This one is the
+# grant the schedule actually runs on, and nothing checked it. Its absence is
+# silent until Cloud Scheduler fires and Cloud Logging records
+#
+#   PERMISSION_DENIED ... jobs/cr-<prefix>-<pipeline>-1:run   403
+#
+# In prod that is 06:00 on the 1st, unattended, a month after the deploy.
+for job in "cr-${PREFIX}-lightcast-1" "cr-${PREFIX}-enrollment-1"; do
+  if policy=$(gcloud run jobs get-iam-policy "$job" \
+        --region "$REGION" --project "$PROJECT" --format=json 2>&1); then
+    if grep -q "$(sa scheduler)" <<<"$policy" && grep -q 'roles/run.invoker' <<<"$policy"; then
+      pass "scheduler can invoke $job"
+    else
+      bad "scheduler CANNOT invoke $job — the schedule will 403 when it fires"
+      bad "  gcloud run jobs add-iam-policy-binding $job \\"
+      bad "    --region $REGION --project $PROJECT \\"
+      bad "    --member serviceAccount:$(sa scheduler) --role roles/run.invoker"
+    fi
+  else
+    err "could not read $job's IAM policy: $(tail -1 <<<"$policy")"
   fi
 done
 
