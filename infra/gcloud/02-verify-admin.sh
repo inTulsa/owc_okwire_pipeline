@@ -46,6 +46,11 @@ fail=0
 pass() { printf '  \033[32mOK\033[0m       %s\n' "$1"; }
 bad()  { printf '  \033[31mPROBLEM\033[0m  %s\n' "$1"; fail=1; }
 err()  { printf '  \033[33mERROR\033[0m    %s\n' "$1"; fail=1; }
+# Does NOT set fail. Used for excess privilege, which does not block a deploy
+# — see --strict. Defined here because the forbidden-role loop selects
+# between `bad` and `warn` by name; without it those lines printed
+# "warn: command not found" and the explanation they carried was lost.
+warn() { printf '  \033[33mwarn\033[0m     %s\n' "$1"; }
 head2() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 printf '\n\033[1mAdmin bootstrap — %s (prefix %s)\033[0m\n' "$PROJECT" "$PREFIX"
