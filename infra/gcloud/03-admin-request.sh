@@ -43,31 +43,16 @@ done
 cat <<TXT
 
 ================================================================================
-  OWC data platform — one-time setup on $PROJECT
+  FOR THE PROJECT ADMIN — about 2 minutes. You do not need this repo.
 ================================================================================
 
-  Deploy account : $PRINCIPAL
-  Still to create: $missing_sa of ${#ALL_SAS[@]} service accounts, and their IAM
+  Grant these two roles to  $PRINCIPAL  on  $PROJECT :
 
-WHY YOU ARE BEING ASKED
-  Terraform is not allowed to create service accounts or write the project
-  IAM policy. That was your feedback and this is us acting on it. Everything
-  that needs those rights is collected into one script, run ONCE. After
-  today nobody needs serviceAccountAdmin or projectIamAdmin again.
+      Service Account Admin      roles/iam.serviceAccountAdmin
+      Project IAM Admin          roles/resourcemanager.projectIamAdmin
 
-  The deploy account above already holds the ten resource-admin roles
-  Terraform needs. It is missing exactly two:
-
-      roles/iam.serviceAccountAdmin           to create the 6 accounts
-      roles/resourcemanager.projectIamAdmin   to grant them their roles
-
-  Pick either option below. They do the same thing.
-
---------------------------------------------------------------------------------
-  OPTION A  —  grant for the call, we run it, you take it back  (4 commands)
---------------------------------------------------------------------------------
-
-  1. You grant the two roles:
+  Console:  IAM & Admin  >  IAM  >  Grant access
+  Or CLI:
 
     gcloud projects add-iam-policy-binding $PROJECT \\
       --member $PRINCIPAL --role roles/iam.serviceAccountAdmin --condition=None
@@ -75,11 +60,9 @@ WHY YOU ARE BEING ASKED
     gcloud projects add-iam-policy-binding $PROJECT \\
       --member $PRINCIPAL --role roles/resourcemanager.projectIamAdmin --condition=None
 
-  2. We run it (about 60 seconds) and read the output back to you:
+  Tell us. We run one command, takes about a minute, and read it back.
 
-    make gcloud-admin ENV=dev
-
-  3. You take the two roles back, on the same call:
+  Then take both roles away again — same page, or:
 
     gcloud projects remove-iam-policy-binding $PROJECT \\
       --member $PRINCIPAL --role roles/iam.serviceAccountAdmin
@@ -87,49 +70,52 @@ WHY YOU ARE BEING ASKED
     gcloud projects remove-iam-policy-binding $PROJECT \\
       --member $PRINCIPAL --role roles/resourcemanager.projectIamAdmin
 
-  4. We prove the elevation is gone, and you watch it pass:
+  We then run a check, in front of you, that FAILS if either role is still
+  attached. That is your receipt that the elevation is gone.
 
-    make iam-check ENV=dev STRICT=1
+  That is the whole ask. Everything below is detail if you want it.
 
-  STRICT=1 FAILS if either role is still attached, so it is the receipt for
-  step 3 — which is why it runs after the revoke, not before.
+================================================================================
 
---------------------------------------------------------------------------------
-  OPTION B  —  you run it yourself, nothing is granted to us
---------------------------------------------------------------------------------
+WHY
+  Terraform is not allowed to create service accounts or write the project
+  IAM policy — that was your feedback and this is us acting on it. So
+  everything needing those rights is collected into one script, run once.
+  After today nobody needs either role again.
 
-  In your own Cloud Shell, on $PROJECT:
+  $PRINCIPAL already holds the ten resource-admin roles the deploy needs.
+  The two above are the only gap.
+
+WHAT THE ONE COMMAND CREATES
+  6 service accounts   one per job, so each holds only what it needs. The web
+                       scraper cannot read the Snowflake password; the
+                       Snowflake job cannot write the scraper's cache.
+  10 project bindings  bigquery.jobUser / logging.logWriter /
+                       monitoring.metricWriter across those accounts.
+  5 actAs grants       so the deploy account may attach those identities to
+                       Cloud Run and Cloud Scheduler jobs. Per-account, not
+                       project-wide.
+  1 tokenCreator       for Google's BigQuery Data Transfer agent, on one
+                       account.
+  API enables          of the 16 needed.
+  2 GCS buckets        Terraform state, and a source mirror.
+
+  No roles/owner, no roles/editor, no custom roles, nothing outside
+  $PROJECT. Still to create here: $missing_sa of ${#ALL_SAS[@]} service accounts.
+
+IF YOU WOULD RATHER RUN IT YOURSELF
+  Nothing is granted to us at all. In your own Cloud Shell on $PROJECT:
 
     git clone $REPO_URL owc && cd owc
     ./infra/gcloud/01-admin-identities.sh $PROJECT \\
         --prefix $PREFIX --principal $PRINCIPAL --dry-run
 
-  That prints every command and changes nothing. Read it, then drop
-  --dry-run to apply. It is idempotent — anything already correct is skipped.
+  That prints every command and changes nothing. Drop --dry-run to apply.
+  Idempotent: anything already correct is skipped.
 
---------------------------------------------------------------------------------
-  WHAT GETS CREATED, EITHER WAY
---------------------------------------------------------------------------------
-
-  6 service accounts   one per job, so each holds only what it needs. The
-                       web scraper cannot read the Snowflake password; the
-                       Snowflake job cannot write the scraper's cache.
-  10 project bindings  bigquery.jobUser / logging.logWriter /
-                       monitoring.metricWriter across those accounts. Nothing
-                       broader.
-  5 actAs grants       so the deploy account may attach those identities to
-                       Cloud Run and Cloud Scheduler jobs. Per-account, not
-                       project-wide.
-  1 tokenCreator       for Google's BigQuery Data Transfer agent, on one
-                       account, so a scheduled query can run as it.
-  4 API enables        of the 16 needed; 12 are already on.
-  2 GCS buckets        Terraform state, and a source mirror.
-
-  No roles/owner, no roles/editor, no custom roles, nothing outside
-  $PROJECT.
-
-  Hosting Terraform state yourselves instead? Tell us the bucket and we
-  point the config at it; the script then skips creating one.
+HOSTING TERRAFORM STATE YOURSELVES?
+  Tell us the bucket name and we point the config at it; the script then
+  skips creating one.
 
 ================================================================================
 TXT

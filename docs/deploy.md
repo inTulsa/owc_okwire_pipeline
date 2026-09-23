@@ -128,7 +128,7 @@ It reports three things: whether you can run the deploy, whether you can run
 the privileged step, and what already exists in the project. The verdict at
 the bottom tells you which of the two paths below you are on.
 
-## 5a. If you are NOT the project admin — the one thing to ask for
+## 5a. If you are NOT the project admin — the two-command ask
 
 The normal case on an OMES project, and the only step anyone else touches.
 
@@ -136,30 +136,31 @@ The normal case on an OMES project, and the only step anyone else touches.
 make omes-request ENV=dev
 ```
 
-That prints a short brief for whoever holds the admin roles: what is missing
-on *this* project right now, why Terraform is not doing it, and two ways to
-resolve it. It is scoped to the gap — if the deploy account already holds the
-ten roles Terraform needs, the brief does not ask for them again.
+Put that on screen. It opens with the entire ask, and everything after the
+first block is optional detail:
 
-The two options it offers are the same work:
+> Grant these two roles to `<you>` on `<project>`:
+> `roles/iam.serviceAccountAdmin` and `roles/resourcemanager.projectIamAdmin`.
+> Console, or two `gcloud` commands. **They do not need this repo.**
 
-**Option A — grant for the call, you run it, they revoke.** Four commands for
-them, about two minutes. They grant `serviceAccountAdmin` and
-`projectIamAdmin`, you run `make gcloud-admin ENV=dev`, they take both roles
-back, and then you run `make iam-check ENV=dev STRICT=1` in front of them.
-`STRICT=1` fails while either role is still attached, so it is the receipt
-that the elevation is gone.
+Then, on the same call:
 
-**Option B — they run it in their own Cloud Shell.** Nothing is granted to
-you at all. They clone the repo and run
-`./infra/gcloud/01-admin-identities.sh <project> --principal <you> --dry-run`
-to read every command first, then drop `--dry-run`.
+1. They grant the two roles — IAM page or CLI, whichever they prefer.
+2. You run `make gcloud-admin ENV=dev`. About a minute. Read the output back.
+3. They remove both roles.
+4. You run `make iam-check ENV=dev STRICT=1` in front of them. `STRICT=1`
+   **fails** while either role is still attached, so it is the receipt that
+   the elevation is gone — which is why it runs after the revoke, not
+   before.
 
-Either way, continue at step 6 when it is done.
+The request also offers the alternative where they run the script themselves
+and nothing is granted to you. Same result; their choice.
 
-If they would rather host Terraform state themselves, ask in the same
-conversation — they run their half with `--no-state-bucket`, and you pass
-`STATE_BUCKET=their-bucket` on every later command.
+If they would rather host Terraform state, ask for the bucket name in the
+same conversation — they run their half with `--no-state-bucket`, and you
+pass `STATE_BUCKET=their-bucket` on every later command.
+
+Continue at step 6 either way.
 
 ## 5b. If you ARE the project admin — run it yourself
 
