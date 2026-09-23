@@ -504,10 +504,10 @@ access-check: auth-check ## Where do I stand on $(PROJECT), and what must I ask 
 # The artifact you send whoever holds the admin roles. Self-contained: they
 # do not need this repo, make, or terraform — just the commands and the
 # context for why they are being asked.
-omes-request: ## Generate the one-time-setup request to send your project admin
+omes-request: ## What to ask your project admin for, scoped to what is missing
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
-	@infra/gcloud/01-admin-identities.sh $(PROJECT) --prefix $(NAME_PREFIX) \
-	  --principal $(TF_PRINCIPAL) --request
+	@infra/gcloud/03-admin-request.sh $(PROJECT) --prefix $(NAME_PREFIX) \
+	  --principal $(TF_PRINCIPAL)
 
 gcloud-admin-dry-run: ## Print every privileged command the one-time setup would run, and change nothing
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }

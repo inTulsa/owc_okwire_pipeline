@@ -171,14 +171,16 @@ elif (( sa_found == ${#ALL_SAS[@]} && deploy_missing == 0 )); then
   echo ""
   echo "    make up ENV=<env>"
 else
-  echo "  You cannot run step 4 — that is expected on a project you do not"
-  echo "  administer. Someone with serviceAccountAdmin, projectIamAdmin and"
-  echo "  serviceUsageAdmin has to run it once. Generate the request:"
+  if (( deploy_missing == 0 )); then
+    echo "  You already have everything the DEPLOY needs. What is missing is only"
+    echo "  the one-time setup, which needs two roles you do not have."
+  else
+    echo "  You are missing $deploy_missing role(s) the deploy needs, and the two the"
+    echo "  one-time setup needs."
+  fi
+  echo ""
+  echo "  That is step 5a. It is the only thing anyone else has to do:"
   echo ""
   echo "    make omes-request ENV=<env>"
-  echo ""
-  if (( deploy_missing )); then
-    echo "  It also asks for the $deploy_missing deploy role(s) you are missing above."
-  fi
 fi
 echo ""

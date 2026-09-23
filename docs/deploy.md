@@ -124,43 +124,38 @@ It reports three things: whether you can run the deploy, whether you can run
 the privileged step, and what already exists in the project. The verdict at
 the bottom tells you which of the two paths below you are on.
 
-## 5a. If you are NOT the project admin — send the request
+## 5a. If you are NOT the project admin — the one thing to ask for
 
-This is the normal case on an OMES project, and it is the **only** step
-anybody else has to do.
-
-```bash
-make omes-request ENV=dev > owc-setup-request.txt
-```
-
-Send that file. It is self-contained — the recipient needs no repo, no
-`make`, no Terraform. It states which three roles they need, what the
-commands create, why Terraform is not doing it, and every command verbatim
-so they can read before running.
-
-**Generate it from the Cloud Shell of the project it is for.** The deploy
-principal is taken from the active gcloud account, and that is often not the
-account you use elsewhere — an OMES project signs you in as your agency
-identity, not the one on your laptop. The request prints which account it
-used so a mismatch is visible before anyone grants anything.
-
-To name a different one explicitly:
+The normal case on an OMES project, and the only step anyone else touches.
 
 ```bash
-make omes-request ENV=dev TF_PRINCIPAL=serviceAccount:tf@their-project.iam.gserviceaccount.com
+make omes-request ENV=dev
 ```
 
-When they reply that it is done, confirm it from your side and continue at
-step 6:
+That prints a short brief for whoever holds the admin roles: what is missing
+on *this* project right now, why Terraform is not doing it, and two ways to
+resolve it. It is scoped to the gap — if the deploy account already holds the
+ten roles Terraform needs, the brief does not ask for them again.
 
-```bash
-make access-check ENV=dev     # verdict should now say you can deploy
-make iam-check    ENV=dev
-```
+The two options it offers are the same work:
 
-If OMES would rather host Terraform state themselves, ask for the bucket
-name in the same message — they run their half with `--no-state-bucket`, and
-you pass `STATE_BUCKET=their-bucket` on every later command.
+**Option A — grant for the call, you run it, they revoke.** Four commands for
+them, about two minutes. They grant `serviceAccountAdmin` and
+`projectIamAdmin`, you run `make gcloud-admin ENV=dev`, they take both roles
+back, and then you run `make iam-check ENV=dev STRICT=1` in front of them.
+`STRICT=1` fails while either role is still attached, so it is the receipt
+that the elevation is gone.
+
+**Option B — they run it in their own Cloud Shell.** Nothing is granted to
+you at all. They clone the repo and run
+`./infra/gcloud/01-admin-identities.sh <project> --principal <you> --dry-run`
+to read every command first, then drop `--dry-run`.
+
+Either way, continue at step 6 when it is done.
+
+If they would rather host Terraform state themselves, ask in the same
+conversation — they run their half with `--no-state-bucket`, and you pass
+`STATE_BUCKET=their-bucket` on every later command.
 
 ## 5b. If you ARE the project admin — run it yourself
 
