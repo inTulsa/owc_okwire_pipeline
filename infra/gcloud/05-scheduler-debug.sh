@@ -103,10 +103,18 @@ else
     *)
       huh "cannot tell whether $SCHED_AGENT exists"
       note "$(tail -1 <<<"$out")"
-      note "Google-managed agents are often invisible to a project member."
-      note "This is not evidence either way, and forcing it is harmless:"
+      note "Google-managed agents are often invisible to a project member,"
+      note "so this is not evidence either way."
+      note ""
+      note "RUN THIS. You have the rights, it is idempotent, and it prints"
+      note "the agent's real address:"
       note "  gcloud beta services identity create \\"
-      note "    --service=cloudscheduler.googleapis.com --project $PROJECT" ;;
+      note "    --service=cloudscheduler.googleapis.com --project $PROJECT"
+      note ""
+      note "Order matters. IAM accepts a binding for a principal that does"
+      note "not exist yet — it is recorded and does nothing. A tokenCreator"
+      note "grant made before the agent existed looks successful and is not."
+      note "Create the agent first, THEN have the grant re-applied." ;;
   esac
 fi
 
