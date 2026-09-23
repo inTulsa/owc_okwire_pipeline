@@ -82,7 +82,7 @@ RUN_ARGS += --limit $(LIMIT)
 endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check auth-check doctor \
-        diff-enrollment derive-scrape derive-check lock lock-check docs-check shell-check base-digest build deploy set-image which-image image-digest tf-init tf-bootstrap preflight verify-separation env-exports tf-output tf-plan tf-apply tf-fmt tf-validate clean \
+        diff-enrollment derive-scrape derive-check lock lock-check docs-check shell-check base-digest build deploy set-image which-image image-digest tf-init tf-bootstrap preflight scheduler-debug verify-separation env-exports tf-output tf-plan tf-apply tf-fmt tf-validate clean \
         access-check prep omes-request omes-script gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push \
         tf-check install-terraform
 
@@ -413,6 +413,10 @@ tf-fmt: ## terraform fmt across all modules and envs
 tf-validate: tf-check ## terraform validate for $(ENV)
 	cd $(TF_DIR) && terraform init -backend=false >/dev/null && terraform validate
 
+
+scheduler-debug: auth-check ## Diagnose a Cloud Scheduler 403 against the Cloud Run jobs
+	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@infra/gcloud/05-scheduler-debug.sh $(PROJECT) $(NAME_PREFIX) $(REGION)
 
 verify-separation: auth-check ## Check each identity can reach only what it should
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }

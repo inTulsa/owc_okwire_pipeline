@@ -186,6 +186,16 @@ say "Provisioning the BigQuery Data Transfer service agent"
 run gcloud beta services identity create \
   --service=bigquerydatatransfer.googleapis.com --project "$PROJECT"
 
+# Same reasoning, different service. Cloud Scheduler does not call Cloud Run
+# as the scheduler account directly — its SERVICE AGENT impersonates that
+# account to mint the OAuth token. The agent normally appears the first time
+# the API is used and is granted roles/cloudscheduler.serviceAgent
+# automatically, but forcing it is one call and the failure it prevents is a
+# 403 on every scheduled fire, visible only in Cloud Logging because
+# jobs:run returns an Operation and the scheduler records success anyway.
+run gcloud beta services identity create \
+  --service=cloudscheduler.googleapis.com --project "$PROJECT"
+
 DTS_AGENT=""
 if (( ! DRY_RUN )); then
   PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
