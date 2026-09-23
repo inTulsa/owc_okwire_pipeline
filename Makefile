@@ -166,7 +166,12 @@ build: auth-check ## Build and push the image with Cloud Build, then print its d
 	  echo "image: $$image" && \
 	  echo "" && \
 	  echo "This pushed the image but did NOT point the jobs at it — a Cloud Run" && \
-	  echo "job pins a digest, and terraform ignores changes to it. Next:" && \
+	  echo "job pins a digest, and terraform ignores changes to it." && \
+	  echo "" && \
+	  echo "If this environment has never been stood up, the jobs do not exist" && \
+	  echo "yet and the command is:  make up ENV=$(ENV)" && \
+	  echo "" && \
+	  echo "Otherwise:" && \
 	  echo "" && \
 	  echo "  make set-image ENV=$(ENV)            # move both jobs onto it" && \
 	  echo "  make tf-apply  ENV=$(ENV) TF_ARGS=\"-var=image_digest=$$image\"" && \
@@ -190,11 +195,41 @@ set-image: auth-check ## Point both Cloud Run jobs at a digest (default: the new
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@image="$(if $(IMAGE),$(IMAGE),$$($(MAKE) -s --no-print-directory image-digest ENV=$(ENV)))"; \
 	  case "$$image" in *@sha256:*) ;; *) echo "refusing a non-digest image: $$image" >&2; exit 1;; esac; \
+	  failed=""; \
 	  for job in $(LIGHTCAST_JOB) $(ENROLLMENT_JOB); do \
 	    echo ">> $$job -> $$image"; \
-	    gcloud run jobs update "$$job" --image "$$image" \
-	      --region $(REGION) --project $(PROJECT) --quiet >/dev/null; \
+	    if ! gcloud run jobs update "$$job" --image "$$image" \
+	         --region $(REGION) --project $(PROJECT) --quiet >/dev/null 2>&1; then \
+	      failed="$$failed $$job"; \
+	    fi; \
 	  done; \
+	  if [ -n "$$failed" ]; then \
+	    echo "" >&2; \
+	    echo "  Could not update:$$failed" >&2; \
+	    echo "" >&2; \
+	    if ! gcloud run jobs describe $(LIGHTCAST_JOB) --region $(REGION) \
+	         --project $(PROJECT) >/dev/null 2>&1; then \
+	      echo "  The Cloud Run jobs do not exist in $(PROJECT) yet." >&2; \
+	      echo "" >&2; \
+	      echo "  Terraform creates them, and 'make deploy' does not run Terraform —" >&2; \
+	      echo "  it only builds an image and points existing jobs at it. On an" >&2; \
+	      echo "  environment that has not been stood up yet, the command is:" >&2; \
+	      echo "" >&2; \
+	      echo "    make up ENV=$(ENV)" >&2; \
+	      echo "" >&2; \
+	      echo "  That runs tf-bootstrap, build, tf-apply, set-image and the" >&2; \
+	      echo "  separation check, in that order. The image you just built is" >&2; \
+	      echo "  reused, so nothing is wasted." >&2; \
+	    else \
+	      echo "  The jobs exist, so this is not a missing-environment problem." >&2; \
+	      echo "  Re-run without the output suppressed to see why:" >&2; \
+	      echo "" >&2; \
+	      echo "    gcloud run jobs update $(LIGHTCAST_JOB) --image $$image \\" >&2; \
+	      echo "      --region $(REGION) --project $(PROJECT)" >&2; \
+	    fi; \
+	    echo "" >&2; \
+	    exit 1; \
+	  fi; \
 	  echo ">> both jobs updated"
 
 deploy: build set-image ## Build the image AND point both jobs at it (the dev loop)
