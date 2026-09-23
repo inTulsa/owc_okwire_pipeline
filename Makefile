@@ -624,9 +624,13 @@ smoke: auth-check ## One real end-to-end run of each pipeline, then show the man
 	gcloud run jobs execute $(ENROLLMENT_JOB) --region $(REGION) --project $(PROJECT) --wait
 	@echo ""
 	@echo ">> run manifest"
+	@# The query is ONE line on purpose. A backslash continuation inside a
+	@# single-quoted string is not a continuation to the shell — the quotes
+	@# make it literal — and GNU make 3.81 and 4.3 disagree about whether they
+	@# collapse it first. It worked on macOS (3.81) and failed in Cloud Shell
+	@# (4.3) with: Syntax error: Expected end of input but got "\" at [1:80].
 	@bq query --project_id=$(PROJECT) --use_legacy_sql=false --format=pretty \
-	  'SELECT pipeline, dataset, status, row_count, ROUND(duration_seconds,1) AS secs \
-	   FROM `owc_ops.pipeline_runs` ORDER BY started_at DESC LIMIT 10'
+	  'SELECT pipeline, dataset, status, row_count, ROUND(duration_seconds,1) AS secs FROM `owc_ops.pipeline_runs` ORDER BY started_at DESC LIMIT 10'
 
 # The whole unprivileged half, in order, from a fresh clone.
 #
