@@ -65,7 +65,7 @@ workstation does not.
 ```bash
 make doctor      # tools and credentials
 make setup       # venv + dependencies
-make check       # lint, types, tests, lockfile, docs — everything CI runs
+make check       # lint, types, tests, lockfile, docs — the full gate
 ```
 
 `make check` needs no cloud credentials and touches no network. If it passes,
@@ -94,7 +94,7 @@ recipes behave identically whatever you use interactively. macOS's bash 3.2 is
 sufficient; nothing here needs bash 4.
 
 **`uv` version and `make lock`.** `requirements.txt` is compiled by `uv pip
-compile`, and `make lock-check` runs in CI. If your `uv` resolves differently
+compile`, and `make lock-check` is part of `make check`. If your `uv` resolves differently
 from whoever last ran `make lock`, the check fails on a diff you did not
 intend. Re-run `make lock` and commit the result rather than hand-editing.
 
@@ -135,7 +135,7 @@ LIMIT N
   (`fact_emp_2`, `fact_emp_lagged_2`, `fact_jobs_qoq`,
   `fact_jobs_lagged_qoq`). The safety scan is comment- and
   string-literal-aware so those are not mistaken for a second statement — a
-  naive scan flags them and blocks CI for nothing.
+  naive scan flags them and fails `make check` for nothing.
 - All 41 files are verified single-statement by
   `test_every_sql_file_is_single_statement_so_limit_is_safe`, and
   `prepare_query` refuses to wrap anything that is not.
@@ -176,7 +176,7 @@ not, which is exactly why the second is the one that gets forgotten.
 ```bash
 make test          # unit only, no network — 128 tests, ~3s
 make test-all      # adds integration: Snowflake, a live scrape, GCS, BigQuery
-make check         # lint + types + derive-check + validate + unit. What CI runs.
+make check         # lint + types + derive-check + validate + unit. The full gate.
 ```
 
 The enrollment parsing tests are the highest-value tests here. They run
@@ -204,7 +204,7 @@ original. Do not edit it directly.
 ```bash
 make diff-enrollment   # the complete change set: 9 removed lines
 make derive-scrape     # regenerate after editing the derivation
-make derive-check      # what CI runs
+make derive-check      # part of `make check`
 ```
 
 Each substitution in the derivation must match exactly once, so if someone

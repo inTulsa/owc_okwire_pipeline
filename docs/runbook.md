@@ -391,7 +391,7 @@ and re-run.
 Note that `scrape.py` is **generated**: edit
 [`scripts/derive_scrape.py`](../scripts/derive_scrape.py) or the pristine
 original, then `make derive-scrape`. Editing `scrape.py` directly will be
-caught by `make derive-check` in CI.
+caught by `make derive-check`, which `make check` runs.
 
 ---
 
@@ -607,21 +607,19 @@ apply. `SKIP_PREFLIGHT=1 make tf-apply ...` bypasses it.
 
 **Enabling an API does not create its service agent.** The agent is
 provisioned the first time the service is actually used, so granting a role to
-a hand-constructed agent address right after `google_project_service` fails.
+a hand-constructed agent address right after enabling the API fails.
 
-Terraform handles this with `google_project_service_identity`, which forces the
-agent into existence and returns its real email. That resource has **no GA
-equivalent**, which is the only reason the `google-beta` provider is declared
-in this repo:
+`infra/gcloud/01-admin-identities.sh` forces it into existence before granting
+anything to it:
 
-```hcl
-resource "google_project_service_identity" "bigquerydatatransfer" {
-  provider   = google-beta
-  project    = var.project_id
-  service    = "bigquerydatatransfer.googleapis.com"
-  depends_on = [google_project_service.enabled]
-}
+```bash
+gcloud beta services identity create \
+  --service=bigquerydatatransfer.googleapis.com --project $PROJECT
 ```
+
+`make iam-check ENV=$ENV` verifies the resulting `tokenCreator` grant, under
+"Data Transfer agent can mint tokens for the freshness identity". If that line
+is a PROBLEM, re-run `make gcloud-admin ENV=$ENV`.
 
 If you add a resource that grants a role to another Google service agent, use
 the same pattern and reference `.member` rather than building the address from
@@ -715,9 +713,9 @@ merely misspelled applies cleanly and then never fires.
 
 ### The first apply wants to create nothing, or errors on a missing API
 
-`google_project_service` needs Service Usage and Cloud Resource Manager to
-already be on — Terraform cannot enable the APIs that let it enable APIs. Run
-`make gcloud-admin ENV=$ENV` first.
+Terraform does not enable APIs — `infra/gcloud/01-admin-identities.sh` does,
+once, along with the identities. Run `make gcloud-admin ENV=$ENV` first, or
+`make iam-check ENV=$ENV` to see which of the 16 are missing.
 
 ## The smoke test "succeeded" but there is no data in owc_marts
 
@@ -1031,9 +1029,10 @@ Attaching a service account to a Cloud Run job, a Scheduler job, a Cloud Build
 submission or a BigQuery scheduled query requires `actAs` **on that account**,
 which is a per-account binding and invisible in the project IAM policy.
 
-This was previously masked: a human applying as owner has `actAs` on
-everything, so the gap only ever appeared in CI. With a reduced principal it
-appears immediately, which is better.
+This used to be masked: an owner has `actAs` on everything, so the gap never
+showed up for whoever applied first. With a reduced principal it appears
+immediately, which is better — you find it on your own apply rather than
+months later on someone else's.
 
 `make iam-check` checks all five accounts and names the ones that fail. The
 fix is `make gcloud-admin ENV=$ENV`.

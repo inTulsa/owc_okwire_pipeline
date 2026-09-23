@@ -140,7 +140,7 @@ typecheck: ## mypy
 docs-check: ## Verify the docs only reference targets, outputs and scripts that exist
 	@python3 scripts/docs-check.py
 
-check: lint typecheck derive-check lock-check docs-check validate test ## Everything CI runs on a PR
+check: lint typecheck derive-check lock-check docs-check validate test ## The full gate. Run before every commit.
 
 diff-enrollment: ## Show every change made to the carried-over enrollment script
 	@diff -u $(ORIGINAL) $(SCRAPE) || true
@@ -148,7 +148,7 @@ diff-enrollment: ## Show every change made to the carried-over enrollment script
 derive-scrape: ## Regenerate scrape.py from the pristine original
 	$(PY) scripts/derive_scrape.py
 
-derive-check: ## Verify scrape.py matches its derivation (CI runs this)
+derive-check: ## Verify scrape.py matches its derivation (part of `make check`)
 	$(PY) scripts/derive_scrape.py --check
 
 build: auth-check ## Build and push the image with Cloud Build, then print its digest
@@ -336,7 +336,7 @@ lock: ## Regenerate requirements.txt from pyproject.toml (run after changing dep
 	  --python-platform x86_64-unknown-linux-gnu -o requirements.txt
 	@echo ">> requirements.txt regenerated — commit it with the pyproject change"
 
-lock-check: ## Verify requirements.txt matches pyproject.toml (CI runs this)
+lock-check: ## Verify requirements.txt matches pyproject.toml (part of `make check`)
 	@uv pip compile pyproject.toml --quiet --python-version 3.12 \
 	  --python-platform x86_64-unknown-linux-gnu -o /tmp/owc-req-check.txt
 	@# Compare the pins only: uv writes the -o path into a header comment, so

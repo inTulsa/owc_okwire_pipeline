@@ -229,7 +229,7 @@ On every later run it goes straight through. What it does, in order:
 | | |
 |---|---|
 | `iam-check` | the identities and buckets are there |
-| `tf-reinit` | adopt the state bucket named in `backend.tf` |
+| `tf-init` | adopt the state bucket for this `PROJECT`, and print it |
 | `tf-bootstrap` | Artifact Registry + the secret container |
 | `build` | Cloud Build → an image pinned by digest |
 | `tf-apply` | everything else, including the Cloud Run jobs |
