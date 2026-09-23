@@ -198,7 +198,7 @@ resource "google_monitoring_alert_policy" "didnt_run" {
       milliseconds whatever the job then does.
 
       Which dataset and how overdue is in the scheduled query's error message.
-      Runbook: `docs/02-runbook.md#alert-2-didnt-run`.
+      Runbook: `docs/runbook.md#alert-2-didnt-run`.
     EOT
   }
 
@@ -264,7 +264,7 @@ resource "google_monitoring_alert_policy" "scheduler_failing" {
       **oauth_token** with scope `cloud-platform`. An `oidc_token` produces a
       401 here and is the classic misconfiguration for this pattern.
 
-      Runbook: `docs/02-runbook.md#alert-3-scheduler-failing`.
+      Runbook: `docs/runbook.md#alert-3-scheduler-failing`.
     EOT
   }
 
@@ -312,7 +312,7 @@ resource "google_monitoring_alert_policy" "bigquery_scanned_bytes" {
       reporting query pattern.
 
       If PowerBI is on DirectQuery, add a custom daily query quota as well.
-      Runbook: `docs/02-runbook.md#alert-9-cost`.
+      Runbook: `docs/runbook.md#alert-9-cost`.
     EOT
   }
 

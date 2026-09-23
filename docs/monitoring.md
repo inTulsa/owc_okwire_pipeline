@@ -14,7 +14,7 @@ quietly.
 >
 > Values come from that environment's `terraform.tfvars`. `make` targets read
 > the project themselves and need none of this. See
-> [03-gcp-setup.md](08-deploy.md#shell-setup).
+> [gcp-reference.md](deploy.md#shell-setup).
 
 ## The alerts
 
@@ -31,7 +31,7 @@ quietly.
 | 8 | Memory pressure | `run.googleapis.com/container/memory/utilizations` > 85% | both | `modules/pipeline/alerts.tf` |
 | 9 | Cost | BigQuery scanned bytes + optional billing budget | platform | `modules/platform/monitoring.tf` |
 
-Runbook entries for each: [`02-runbook.md`](02-runbook.md).
+Runbook entries for each: [`runbook.md`](runbook.md).
 
 ## The thing everything else depends on
 
@@ -108,7 +108,7 @@ schedule those eventually produce wrong-but-plausible numbers, which is the
 worst failure mode available and which no null check would catch.
 
 The alert is a smoke detector. The fix is editing the SQL — see
-[the stale-year procedure](02-runbook.md#stale-year-literals).
+[the stale-year procedure](runbook.md#stale-year-literals).
 
 ## Why alert 6 has its own name
 
@@ -210,7 +210,7 @@ before then fails with a 404. `depends_on` cannot fix that — the metric exists
 it just is not queryable. Both modules therefore insert a `time_sleep`
 (`metric_propagation_wait`, default `90s`) between the two, keyed on the metric
 ids so adding an alert later waits again rather than racing. Details in
-[the runbook](02-runbook.md#first-deploy-failures).
+[the runbook](runbook.md#first-deploy-failures).
 
 ## The notification channel
 
@@ -260,4 +260,4 @@ to republish", not "the table is empty".
 
 It is the first thing to check for any alert, and it is what non-technical
 stakeholders should be pointed at instead of asking someone to check Cloud
-Run. See [`00-overview.md`](00-overview.md).
+Run. See [`overview.md`](overview.md).

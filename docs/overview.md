@@ -96,6 +96,6 @@ from scratch.
 | The Lightcast relationship, license, or their bill | The Lightcast account owner at Tulsa For You |
 | The Oklahoma enrollment data itself | Oklahoma State Department of Education |
 
-Technical documentation starts at [`01-architecture.md`](01-architecture.md).
+Technical documentation starts at [`architecture.md`](architecture.md).
 The enrollment pipeline's original business-process write-ups are preserved in
 [`enrollment/`](enrollment/).

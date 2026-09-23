@@ -47,7 +47,7 @@ a different repository.
 ## 3. Confirm `EMSIBG-READER_TULSA_FOR_YOU` is a true reader account
 
 **Why it matters:** Snowflake's password deprecation explicitly exempts reader
-accounts. [ADR-004](01-architecture.md#adr-004-snowflake-password-auth-is-kept)
+accounts. [ADR-004](architecture.md#adr-004-snowflake-password-auth-is-kept)
 depends on that exemption. If this is a *regular* account holding a share
 rather than a reader account, the exemption lapses and migrating to key-pair
 auth becomes time-sensitive.
@@ -87,7 +87,7 @@ fails fast rather than holding a paid task open.
 ## 5. Decide the PowerBI mode and licensing — before the marts layout is final
 
 **This one has a deadline**, because it determines whether
-[ADR-002](01-architecture.md#adr-002-marts-tables-are-unpartitioned-and-unclustered)
+[ADR-002](architecture.md#adr-002-marts-tables-are-unpartitioned-and-unclustered)
 stays right.
 
 | Mode | Implication |
@@ -125,7 +125,7 @@ authenticates as a Google organizational account or via a service-account JSON
 key. There is no third option, and per-user OAuth breaks scheduled refresh the
 day that person leaves. One tightly-scoped key for `sa-<name_prefix>-powerbi-1` is the
 accepted answer — see
-[ADR-006](01-architecture.md#adr-006-one-tightly-scoped-json-key-for-powerbi).
+[ADR-006](architecture.md#adr-006-one-tightly-scoped-json-key-for-powerbi).
 **Set a rotation reminder.**
 
 **Cloud NAT is not built.** If `oklahoma.gov` ever blocks Cloud Run's shared
@@ -135,4 +135,4 @@ so it is not a mystery at 2am.
 **The hardcoded year literals are still hardcoded.** By design — rewriting
 working queries was out of scope. Alert 5 is the smoke detector; the procedure
 for when it fires is
-[in the runbook](02-runbook.md#stale-year-literals).
+[in the runbook](runbook.md#stale-year-literals).

@@ -12,12 +12,16 @@ Two production data pipelines, one schedule, one warehouse, one runbook.
 Both land in BigQuery (`owc_marts`), which PowerBI reads directly. Schedules
 live in [`pipelines.yml`](pipelines.yml).
 
-## Quick start
+## Start here
 
-**Deploying or operating an environment** — from Google Cloud Shell:
+**Standing an environment up, or deploying a change?**
+→ **[`docs/deploy.md`](docs/deploy.md)**. That is the whole procedure, six
+steps, and it is the only one. Everything else below is reference.
+
+From Google Cloud Shell:
 
 ```bash
-# 1. get the code (or upload a tarball — see the doc)
+# 1. get the code
 cd ~ && git clone https://github.com/inTulsa/owc_okwire_pipeline.git owc && cd owc
 
 # 2. Cloud Shell logs gcloud in for you, but NOT Terraform
@@ -25,51 +29,40 @@ eval "$(make -s env-exports ENV=dev)"
 gcloud auth application-default login
 gcloud auth application-default set-quota-project $PROJECT
 
-make install-terraform          # 3. Cloud Shell ships a stub, not terraform
-make doctor                     #    green light before anything is created
+# 3. Cloud Shell ships a terraform stub, not terraform
+make install-terraform
+make doctor                     # must end "Ready."
 
-make gcloud-admin ENV=dev       # 4. ONE TIME, privileged: identities + project IAM
-make source-push  ENV=dev       #    mirror the repo into the project
-make iam-check    ENV=dev       #    prove it landed
+# 4. ONE TIME, privileged: identities, project IAM, APIs, buckets
+make gcloud-admin ENV=dev
+make source-push  ENV=dev
+make iam-check    ENV=dev
 
-make up    ENV=dev              # 5. stops once for the Snowflake password,
-                                #    then run it again
-make smoke ENV=dev              # 6. one real run of each pipeline
+# 5. stand it up. stops once for the Snowflake password, then run it again
+make up ENV=dev
+
+# 6. one real run of each pipeline
+make smoke ENV=dev
 ```
 
-Terraform holds no `projectIamAdmin` and no `serviceAccountAdmin`, and there
-is no GitHub in the path. **[`docs/08-deploy.md`](docs/08-deploy.md)
-is the only deploy procedure** — what each step does, and why it is split that
-way.
-
-**Changing the code** — needs a Python toolchain, so a workstation or a
-Cloud Shell with `make setup` run:
-
-```bash
-make setup
-cp .env.example .env            # fill in SNOWFLAKE_USER / SNOWFLAKE_PASSWORD
-make validate                   # config + SQL parse, no network
-make run PIPELINE=lightcast DATASET=dim_area LIMIT=1000
-make run PIPELINE=enrollment TARGET=local
-```
-
-`make help` lists every target. Full walkthrough:
-[`docs/04-local-development.md`](docs/04-local-development.md).
+Add `PROJECT=your-project` to every command to aim the same process at a
+different project. Nothing is edited and nothing has to be changed back.
 
 ## Documentation
 
-| Doc | Audience |
+Named for the question they answer, not numbered — read the one you need.
+
+| When | Doc |
 |---|---|
-| [`00-overview.md`](docs/00-overview.md) | **Non-technical** — what each pipeline produces, how fresh it is, what an alert email means |
-| [`01-architecture.md`](docs/01-architecture.md) | Data flow and the ADRs behind it |
-| [`02-runbook.md`](docs/02-runbook.md) | **On-call** — one entry per alert: symptom → diagnosis → fix |
-| [`03-gcp-setup.md`](docs/03-gcp-setup.md) | Why each resource is shaped the way it is. For the OMES projects, deploy from **09** instead. |
-| [`04-local-development.md`](docs/04-local-development.md) | Running the pipelines and changing the code |
-| [`05-adding-a-pipeline.md`](docs/05-adding-a-pipeline.md) | Adding a dataset vs. adding a whole pipeline |
-| [`06-monitoring.md`](docs/06-monitoring.md) | Every alert, its threshold, and why |
-| [`07-developer-setup.md`](docs/07-developer-setup.md) | **Start here** — Cloud Shell vs a workstation, what each needs, access to request |
-| [`08-deploy.md`](docs/08-deploy.md) | **The OMES path** — deploy from gcloud, with Terraform holding no IAM permissions |
-| [`OPEN-ITEMS.md`](docs/OPEN-ITEMS.md) | **Decisions still needing a human** — read this before go-live |
+| **I want to deploy, or change what is deployed** | [`deploy.md`](docs/deploy.md) |
+| **An alert fired / something is broken** | [`runbook.md`](docs/runbook.md) |
+| What does this system actually produce? *(non-technical)* | [`overview.md`](docs/overview.md) |
+| How does it work, and why is it built this way? | [`architecture.md`](docs/architecture.md) |
+| What did the deploy create, and why is that bucket configured like that? | [`gcp-reference.md`](docs/gcp-reference.md) |
+| I want to run a pipeline or change the code | [`local-development.md`](docs/local-development.md) |
+| I want to add a dataset or a new pipeline | [`adding-a-pipeline.md`](docs/adding-a-pipeline.md) |
+| What are the alerts and why does each exist? | [`monitoring.md`](docs/monitoring.md) |
+| What still needs a human decision? **Read before go-live** | [`OPEN-ITEMS.md`](docs/OPEN-ITEMS.md) |
 
 The enrollment pipeline's original business-process documentation is preserved
 verbatim in [`docs/enrollment/`](docs/enrollment/).

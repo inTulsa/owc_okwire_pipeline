@@ -38,7 +38,7 @@ class SnowflakeSettings(BaseSettings):
     Password auth is correct here and is not deprecated: Snowflake's password
     phase-out explicitly exempts reader accounts. The only change from the
     original pipeline is that the password arrives from Secret Manager rather
-    than a .env file. See docs/01-architecture.md, ADR-004.
+    than a .env file. See docs/architecture.md, ADR-004.
     """
 
     model_config = SettingsConfigDict(

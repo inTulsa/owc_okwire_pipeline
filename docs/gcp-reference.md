@@ -1,7 +1,7 @@
 # GCP environment reference
 
 **This is not a walkthrough.** The steps to deploy are in
-[`08-deploy.md`](08-deploy.md), and they are the only ones.
+[`deploy.md`](deploy.md), and they are the only ones.
 This document explains what those steps create, what you have to fill in
 yourself, and why each thing is shaped the way it is — the questions that come
 up *while* following that walkthrough, or six months later when someone asks
@@ -26,7 +26,7 @@ why a bucket is configured a particular way.
   architecture. This repo deploys the data platform *into* a project that
   already exists.
 - **Someone who can run the one privileged step once** — see
-  [the access table](07-developer-setup.md#access-you-need-granted). After
+  [the access table](deploy.md#access-you-need-granted). After
   that, nobody needs `projectIamAdmin` or `serviceAccountAdmin` again.
 - **The Snowflake reader-account password.**
 - **A distribution list for alerts** — not an individual's address, so people
@@ -114,7 +114,7 @@ so the password stays out of Terraform state. `make up` stops and asks for it
 rather than carrying on:
 
 `$PROJECT` and `$PREFIX` come from `eval "$(make -s env-exports ENV=dev)"`
-— see [09](08-deploy.md#shell-setup):
+— see [09](deploy.md#shell-setup):
 
 ```bash
 printf '%s' 'THE_PASSWORD' | \
@@ -136,7 +136,7 @@ than a failed apply.
 
 Password auth is correct here and is **not** deprecated: Snowflake's password
 phase-out explicitly exempts reader accounts. See
-[ADR-004](01-architecture.md#adr-004-snowflake-password-auth-is-kept) and
+[ADR-004](architecture.md#adr-004-snowflake-password-auth-is-kept) and
 [open item 3](OPEN-ITEMS.md).
 
 ## Why the image is pinned by digest
@@ -203,7 +203,7 @@ take either the state or the source code with it.
 
 ## What prod does differently
 
-Run [`08-deploy.md`](08-deploy.md) again with `ENV=prod`. The
+Run [`deploy.md`](deploy.md) again with `ENV=prod`. The
 roots are deliberately near-identical so a change verified in dev reaches prod
 verbatim — `diff` them and you should see exactly four differences:
 

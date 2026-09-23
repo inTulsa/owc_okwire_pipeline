@@ -353,7 +353,7 @@ if (( ${excess:-0} )); then
 fi
 if (( REDUCED )); then
   echo "Ready to deploy. The IAM role audit was skipped — run this as an admin"
-  echo "account for that, or see docs/08-deploy.md."
+  echo "account for that, or see docs/deploy.md."
 else
   echo "Admin bootstrap verified. Terraform can now run with no IAM permissions."
 fi

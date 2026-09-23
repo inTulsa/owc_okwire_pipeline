@@ -230,7 +230,7 @@ bq cp -f $PROJECT:owc_staging.THE_TABLE $PROJECT:owc_marts.THE_TABLE
 `row_count_drift` or `max_year_regressed`.
 
 **This is the smoke detector for the known stale-year-literal risk.** See
-[ADR-005 / accepted risk 1](01-architecture.md#accepted-risks).
+[ADR-005 / accepted risk 1](architecture.md#accepted-risks).
 
 ### Stale year literals {#stale-year-literals}
 
@@ -457,7 +457,7 @@ Import mode on a Pro workspace caps a semantic model at 1 GB compressed.
 ## First-deploy failures
 
 These are ordering problems on a brand-new project, not broken config. Full
-sequence: [`03-gcp-setup.md`](03-gcp-setup.md).
+sequence: [`gcp-reference.md`](gcp-reference.md).
 
 ### `name unknown: Repository "ar-$PREFIX-images-1" not found`
 
@@ -708,7 +708,7 @@ curl -s -H "Authorization: Bearer $TOK" \
 
 The pairing that bit this repo: `query/scanned_bytes_billed` is reported
 against **`global`**, not `bigquery_project`. The verified table is in
-[`06-monitoring.md`](06-monitoring.md#metric-type-strings).
+[`monitoring.md`](monitoring.md#metric-type-strings).
 
 Note this error is the *good* case — it fails at apply. A metric type that is
 merely misspelled applies cleanly and then never fires.
@@ -1054,15 +1054,6 @@ is deliberate — looking them up would need `iam.serviceAccounts.get` on every
 plan, putting an IAM read back into exactly the code path this design removed.
 `iam-check` is where the check lives instead, and `make up` runs it first.
 
-### `terraform plan` wants to DESTROY the service accounts
-
-You flipped `manage_identities` to false in a project where Terraform had
-already created them, without forgetting them first. Terraform is doing what
-it was told: those resources left the configuration, so it wants them gone.
-
-**Do not apply.** Remove them from state — which forgets them, it does not
-delete them — using the exact sequence in
-[`08-deploy.md`](08-deploy.md#migrating).
 
 ### Cloud Shell disconnected during a `terraform apply`
 
