@@ -83,7 +83,7 @@ endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check auth-check doctor \
         diff-enrollment derive-scrape derive-check lock lock-check docs-check shell-check base-digest build deploy set-image which-image image-digest tf-init tf-bootstrap preflight verify-separation env-exports tf-output tf-plan tf-apply tf-fmt tf-validate clean \
-        access-check omes-request gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push \
+        access-check omes-request omes-script gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push \
         tf-check install-terraform
 
 help: ## Show this help
@@ -511,6 +511,14 @@ omes-request: ## What to ask your project admin for, scoped to what is missing
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@infra/gcloud/03-admin-request.sh $(PROJECT) --prefix $(NAME_PREFIX) \
 	  --principal $(TF_PRINCIPAL)
+
+# A single file to hand a project admin who will not grant you the roles and
+# will not clone your repo. Every command written out, no dependencies but
+# gcloud, readable start to finish before they run it.
+omes-script: ## Write a standalone setup script for your project admin to run
+	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@infra/gcloud/04-standalone.sh $(PROJECT) --prefix $(NAME_PREFIX) \
+	  --principal $(TF_PRINCIPAL) --location $(call tfvar,location)
 
 gcloud-admin-dry-run: ## Print every privileged command the one-time setup would run, and change nothing
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }

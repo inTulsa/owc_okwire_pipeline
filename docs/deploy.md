@@ -128,39 +128,60 @@ It reports three things: whether you can run the deploy, whether you can run
 the privileged step, and what already exists in the project. The verdict at
 the bottom tells you which of the two paths below you are on.
 
-## 5a. If you are NOT the project admin — the two-command ask
+## 5a. If you are NOT the project admin
 
-The normal case on an OMES project, and the only step anyone else touches.
+The normal case, and the only step anyone else touches. Pick whichever the
+admin will actually agree to — all three produce the same result.
+
+### They run one file (no repo, no roles granted to you)
+
+The usual answer when an admin will not grant you `serviceAccountAdmin`.
 
 ```bash
-make omes-request ENV=dev
+make omes-script ENV=dev > owc-setup.sh
 ```
 
-Put that on screen. It opens with the entire ask, and everything after the
-first block is optional detail:
+That writes a standalone, self-contained script: every command written out,
+no dependencies but `gcloud`, readable start to finish before they run it.
+Send it, or paste it into their Cloud Shell. They run:
 
-> Grant these two roles to `<you>` on `<project>`:
-> `roles/iam.serviceAccountAdmin` and `roles/resourcemanager.projectIamAdmin`.
-> Console, or two `gcloud` commands. **They do not need this repo.**
+```bash
+bash owc-setup.sh
+```
 
-Then, on the same call:
+It refuses to run against the wrong project, skips anything that already
+exists, and can be re-run safely. It creates the six service accounts, their
+project roles, the two buckets, the API enables, and the `actAs` grants that
+let **you** attach those identities — without granting you anything that can
+administer IAM.
 
-1. They grant the two roles — IAM page or CLI, whichever they prefer.
-2. You run `make gcloud-admin ENV=dev`. About a minute. Read the output back.
-3. They remove both roles.
-4. You run `make iam-check ENV=dev STRICT=1` in front of them. `STRICT=1`
-   **fails** while either role is still attached, so it is the receipt that
-   the elevation is gone — which is why it runs after the revoke, not
-   before.
+### They grant you the two roles for the call
 
-The request also offers the alternative where they run the script themselves
-and nothing is granted to you. Same result; their choice.
+Faster if they are willing. `make omes-request ENV=dev` prints the ask and
+the revoke. You run `make gcloud-admin ENV=dev` in between, then
+`make iam-check ENV=dev STRICT=1` in front of them — it **fails** while
+either role is still attached, so it is the receipt.
+
+### They clone this repo and run it
+
+```bash
+git clone https://github.com/inTulsa/owc_okwire_pipeline.git owc && cd owc
+./infra/gcloud/01-admin-identities.sh <project> --principal <you> --dry-run
+```
+
+Same script the file above is generated from. `--dry-run` first.
+
+---
+
+Whichever they choose, confirm it landed and continue at step 6:
+
+```bash
+make access-check ENV=dev     # verdict should now say you can deploy
+```
 
 If they would rather host Terraform state, ask for the bucket name in the
-same conversation — they run their half with `--no-state-bucket`, and you
-pass `STATE_BUCKET=their-bucket` on every later command.
-
-Continue at step 6 either way.
+same conversation — they skip the state bucket, and you pass
+`STATE_BUCKET=their-bucket` on every later command.
 
 ## 5b. If you ARE the project admin — run it yourself
 
