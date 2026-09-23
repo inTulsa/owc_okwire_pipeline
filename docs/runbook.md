@@ -198,8 +198,14 @@ definitive test**:
 gcloud scheduler jobs run cs-$PREFIX-lightcast-monthly-1 --location $REGION --project $PROJECT
 ```
 
-then read check 5, or Cloud Logging directly. The scheduler's own history
-shows success either way, because `jobs:run` returns an Operation.
+then read checks 5 and 6 together. The scheduler's own history shows success
+either way, because `jobs:run` returns an Operation.
+
+**An execution in check 6 does not prove the scheduler worked.** `make smoke`
+and `gcloud run jobs execute` create executions too. A scheduler fire that
+succeeded has an execution within seconds of its attempt in check 5; if the
+newest execution predates the newest attempt, the scheduler is still
+failing.
 
 Propagation is the other common cause: resource-level IAM takes a minute or
 two, so a forced run fired straight after `tf-apply` can beat it. Retry once

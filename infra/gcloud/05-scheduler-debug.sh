@@ -158,20 +158,28 @@ except Exception:
 if not entries:
     print("        (no scheduler attempts logged yet)")
     raise SystemExit
-entry = entries[0]
-payload = entry.get("jsonPayload", {})
-for key in ("jobName", "targetType", "status", "debugInfo", "url"):
-    if key in payload:
-        print("        %-11s %s" % (key, payload[key]))
-print("        %-11s %s" % ("timestamp", entry.get("timestamp", "")))
+for entry in entries:
+    payload = entry.get("jsonPayload", {})
+    print("        %-11s %s" % ("timestamp", entry.get("timestamp", "")))
+    shown = False
+    for key in ("jobName", "status", "debugInfo", "url"):
+        if key in payload:
+            print("        %-11s %s" % (key, payload[key]))
+            shown = True
+    if not shown:
+        # Never print a bare timestamp and let it read as "fine". If the
+        # payload is not the shape expected, show what it actually is.
+        print("        %-11s %s" % ("payload", json.dumps(payload)[:300] or "(empty)"))
+    print()
 PY
 )
 # stderr captured, not discarded. Swallowing it turned "you cannot read
 # logs" into "(no scheduler attempts logged yet)" — a definite-sounding
 # answer to a question that was never asked successfully, which is the same
 # fault checks 3 and 4 just had.
-if logs=$(gcloud logging read 'resource.type="cloud_scheduler_job"' \
-      --freshness=7d --project "$PROJECT" --limit 1 --format=json 2>&1); then
+if logs=$(gcloud logging read \
+      "logName=\"projects/$PROJECT/logs/cloudscheduler.googleapis.com%2Fexecutions\"" \
+      --freshness=7d --project "$PROJECT" --limit 3 --format=json 2>&1); then
   python3 -c "$LAST_ATTEMPT" <<<"$logs"
 else
   huh "cannot read the scheduler logs"
@@ -191,10 +199,15 @@ fi
 # which the deploy account has — so this works where reading the logs does
 # not.
 head2 "6. Recent executions of each job"
+note "An execution proves the job RAN, not that the SCHEDULER started it —"
+note "make smoke and gcloud run jobs execute create them too. Compare these"
+note "timestamps against the scheduler attempts in check 5: a scheduler fire"
+note "that worked has an execution within seconds of its attempt."
+echo ""
 for job in "$JOB_LIGHTCAST" "$JOB_ENROLLMENT"; do
   if execs=$(gcloud run jobs executions list --job "$job" --region "$REGION" \
-        --project "$PROJECT" --limit 3 \
-        --format='value(metadata.name,status.completionTime)' 2>&1); then
+        --project "$PROJECT" --limit 5 --sort-by=~metadata.creationTimestamp \
+        --format='table[no-heading](metadata.name,metadata.creationTimestamp,status.conditions[0].type)' 2>&1); then
     if [[ -z "$execs" ]]; then
       note "$job: no executions yet"
     else
