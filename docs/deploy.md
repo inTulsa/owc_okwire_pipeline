@@ -1,6 +1,6 @@
 # Deploy
 
-**The whole procedure, and the only one.** Six steps, about 20 minutes, run
+**The whole procedure, and the only one.** Eight steps, about 20 minutes, run
 entirely in Google Cloud Shell — nothing installed on your machine, no CI, and
 no `projectIamAdmin` on Terraform.
 
@@ -109,41 +109,82 @@ nothing — and the first symptom is a `NOT_FOUND` from Secret Manager several
 steps later, pointing at the wrong thing entirely. Every `tf-*` target now
 refuses to run rather than let that happen.
 
-## 4. Create the identities — privileged, once per project
+## 4. Find out what you are allowed to do {#access-check}
 
-The **only** step needing `serviceAccountAdmin` + `projectIamAdmin`. It
-creates the six service accounts, their project IAM, the 16 API enables, and
-the state and source buckets.
+On a project you created, you can do everything. On one you were given
+access to, you probably cannot — and the failure looks like a wall of
+permission errors three steps later. Ask first. This is read-only and needs
+no special rights:
 
-Look at it first — `--dry-run` prints every command, shell-quoted, and
-**creates nothing at all**:
+```bash
+make access-check ENV=dev
+```
+
+It reports three things: whether you can run the deploy, whether you can run
+the privileged step, and what already exists in the project. The verdict at
+the bottom tells you which of the two paths below you are on.
+
+## 5a. If you are NOT the project admin — send the request
+
+This is the normal case on an OMES project, and it is the **only** step
+anybody else has to do.
+
+```bash
+make omes-request ENV=dev > owc-setup-request.txt
+```
+
+Send that file. It is self-contained — the recipient needs no repo, no
+`make`, no Terraform. It states which three roles they need, what the
+commands create, why Terraform is not doing it, and every command verbatim
+so they can read before running.
+
+Name yourself as the deploy principal, which the request already does from
+your active gcloud account. To name a different one:
+
+```bash
+make omes-request ENV=dev TF_PRINCIPAL=serviceAccount:tf@their-project.iam.gserviceaccount.com
+```
+
+When they reply that it is done, confirm it from your side and continue at
+step 6:
+
+```bash
+make access-check ENV=dev     # verdict should now say you can deploy
+make iam-check    ENV=dev
+```
+
+If OMES would rather host Terraform state themselves, ask for the bucket
+name in the same message — they run their half with `--no-state-bucket`, and
+you pass `STATE_BUCKET=their-bucket` on every later command.
+
+## 5b. If you ARE the project admin — run it yourself
+
+Your own test project, or an OMES project where they granted you the three
+roles. Look at it first; `--dry-run` creates nothing:
 
 ```bash
 make gcloud-admin-dry-run ENV=dev
-```
-
-If you do not hold those roles, send that output to OMES. Otherwise run it
-for real — the dry run above has not changed the project:
-
-```bash
 make gcloud-admin ENV=dev
-make source-push  ENV=dev     # mirror the repo into the project
-make iam-check    ENV=dev     # prove it landed
 ```
 
-`iam-check` confirms the six identities exist, that the Terraform principal
-has all ten roles it needs, and that it holds none of the six it must not.
-The last of those is a warning by default and a failure under `STRICT=1` —
-excess privilege does not stop a deploy working, it stops the deploy proving
-anything. In an OMES project this runs in REDUCED mode; see
-[Running this in an OMES project](#omes).
+## 6. Publish the code and confirm the setup
 
-The Terraform principal defaults to your own account. When OMES names theirs,
-re-run — idempotent, nothing else changes:
+Either path lands here.
 
 ```bash
-make gcloud-admin ENV=dev TF_PRINCIPAL=serviceAccount:tf@their-proj.iam.gserviceaccount.com
+make source-push ENV=dev     # mirror the repo into the project
+make iam-check   ENV=dev     # confirm step 5 landed
 ```
+
+`iam-check` confirms the six identities exist, that you have all ten roles
+the deploy needs, and that you hold none of the six you should not. That last
+group is a warning, not a failure — excess privilege does not stop a deploy
+working, it stops the deploy proving anything. `STRICT=1` makes it a failure,
+which is the audit to ask OMES for.
+
+On an OMES project this runs in REDUCED mode and skips the role assertions,
+because you will not be able to read the project IAM policy. That is correct:
+see [Running this in an OMES project](#omes).
 
 ### Access you need granted {#access}
 
@@ -160,7 +201,7 @@ Two levels, and only the first is hard to get.
 | **Billing account** | `roles/billing.costsManager` | **Only** if you enable the budget alert. It is off by default. |
 | **GitHub repo** | read | Only to `git clone` the repo into Cloud Shell. Uploading a tarball or fetching the project's mirror needs no GitHub at all. |
 
-## 5. Stand it up {#stand-it-up}
+## 7. Stand it up {#stand-it-up}
 
 ```bash
 make up ENV=dev
@@ -197,7 +238,7 @@ On every later run it goes straight through. What it does, in order:
 
 Any of those can be run on its own with `make <target> ENV=dev`.
 
-## 6. Prove it works
+## 8. Prove it works
 
 ```bash
 make smoke ENV=dev

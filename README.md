@@ -33,17 +33,27 @@ gcloud auth application-default set-quota-project $PROJECT
 make install-terraform
 make doctor                     # must end "Ready."
 
-# 4. ONE TIME, privileged: identities, project IAM, APIs, buckets
-make gcloud-admin ENV=dev
-make source-push  ENV=dev
-make iam-check    ENV=dev
+# 4. what am I allowed to do here? read-only, needs no rights
+make access-check ENV=dev
 
-# 5. stand it up. stops once for the Snowflake password, then run it again
+# 5. the ONE step needing admin rights, once per project.
+#    Not an admin on this project? Send the request instead:
+#       make omes-request ENV=dev > owc-setup-request.txt
+make gcloud-admin ENV=dev
+
+# 6. publish the code, confirm step 5 landed
+make source-push ENV=dev
+make iam-check   ENV=dev
+
+# 7. stand it up. stops once for the Snowflake password, then run it again
 make up ENV=dev
 
-# 6. one real run of each pipeline
+# 8. one real run of each pipeline
 make smoke ENV=dev
 ```
+
+Step 5 is the only one that needs elevated rights, and the only one someone
+else may have to run. `make access-check` tells you which of those you are.
 
 Add `PROJECT=your-project` to every command to aim the same process at a
 different project. Nothing is edited and nothing has to be changed back.
