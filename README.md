@@ -37,8 +37,9 @@ make doctor                     # must end "Ready."
 make access-check ENV=dev
 
 # 5. the ONE step needing admin rights, once per project.
-#    Not an admin on this project? Send the request instead:
-#       make omes-request ENV=dev > owc-setup-request.txt
+#    Not an admin? Hand your project admin a standalone script instead —
+#    no repo and no roles granted to you:
+#       make omes-script ENV=dev > owc-setup.sh
 make gcloud-admin ENV=dev
 
 # 6. publish the code, confirm step 5 landed
