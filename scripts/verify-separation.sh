@@ -38,6 +38,22 @@ fi
 sa() { echo "sa-${PREFIX}-$1-1@${PROJECT}.iam.gserviceaccount.com"; }
 
 fail=0
+
+# Is MEMBER listed under ROLE in this policy? Not "do both strings appear" —
+# that is what the loose grep below does for the NEGATIVE checks, where
+# "appears nowhere" is a sound thing to test with it. A positive assertion
+# needs the member to be in that role's binding specifically, or a scheduler
+# holding some unrelated role would read as "can invoke".
+BINDING_MATCHER='
+import json, sys
+role, member = sys.argv[1], sys.argv[2]
+policy = json.load(sys.stdin)
+sys.exit(0 if any(
+    b.get("role") == role and member in b.get("members", [])
+    for b in policy.get("bindings", [])
+) else 1)
+'
+binding_has() { python3 -c "$BINDING_MATCHER" "$2" "$3" <<<"$1"; }
 pass() { printf '  OK       %s\n' "$1"; }
 bad()  { printf '  PROBLEM  %s\n' "$1"; fail=1; }
 err()  { printf '  ERROR    %s\n' "$1"; fail=1; }
@@ -97,7 +113,7 @@ done
 for job in "cr-${PREFIX}-lightcast-1" "cr-${PREFIX}-enrollment-1"; do
   if policy=$(gcloud run jobs get-iam-policy "$job" \
         --region "$REGION" --project "$PROJECT" --format=json 2>&1); then
-    if grep -q "$(sa scheduler)" <<<"$policy" && grep -q 'roles/run.invoker' <<<"$policy"; then
+    if binding_has "$policy" roles/run.invoker "serviceAccount:$(sa scheduler)"; then
       pass "scheduler can invoke $job"
     else
       bad "scheduler CANNOT invoke $job — the schedule will 403 when it fires"
