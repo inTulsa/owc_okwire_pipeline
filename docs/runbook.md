@@ -159,15 +159,36 @@ gcloud run jobs execute cr-$PREFIX-lightcast-1 --region=$REGION --project=$PROJE
 "url": ".../namespaces/<project>/jobs/cr-<prefix>-lightcast-1:run"
 ```
 
-The scheduler service account could not use `roles/run.invoker` on that job.
+Run the diagnosis rather than guessing at it — two guesses were spent on
+this before the checks existed:
 
-**Most often this is propagation, not a missing grant.** Resource-level IAM
-takes a minute or two to take effect, and a forced run fired soon after
-`tf-apply` beats it. That is what it was the first time this was seen in
-dev — the binding was present and the retry succeeded. Wait two minutes and
-run it again before changing anything.
+```bash
+make scheduler-debug ENV=$ENV
+```
 
-If it persists, check whether the grant is actually there. Terraform makes it
+Five checks in one pass: the exact `run.invoker` binding on each job, what
+each scheduler is configured to send, whether the **Cloud Scheduler service
+agent** exists, whether that agent can impersonate the scheduler account, and
+the most recent attempt in full rather than truncated.
+
+**The agent is the one that surprises people.** Cloud Scheduler does not call
+Cloud Run as the scheduler account directly — its service agent
+(`service-<number>@gcp-sa-cloudscheduler.iam.gserviceaccount.com`)
+impersonates that account to mint the OAuth token. If the agent is absent, or
+an org policy stripped its automatic `roles/cloudscheduler.serviceAgent`
+grant, every fire is a 403 **no matter how correct `run.invoker` is**.
+
+That is exactly what a clean `make verify-separation` and a `terraform plan`
+with no IAM in it, alongside a persistent 403, look like.
+`01-admin-identities.sh` now forces that agent into existence, the same way
+it already did for the BigQuery Data Transfer agent; a project set up before
+that may not have it.
+
+Propagation is the other common cause: resource-level IAM takes a minute or
+two, so a forced run fired straight after `tf-apply` can beat it. Retry once
+before changing anything.
+
+If `run.invoker` is genuinely missing, Terraform makes it
 (`google_cloud_run_v2_job_iam_member.scheduler_invoker`), so its absence
 means the apply did not reach that resource:
 
