@@ -137,17 +137,35 @@ admin will actually agree to — all three produce the same result.
 
 The usual answer when an admin will not grant you `serviceAccountAdmin`.
 
+**You** generate the file. This touches nothing in GCP:
+
 ```bash
 make omes-script ENV=dev > owc-setup.sh
 ```
 
-That writes a standalone, self-contained script: every command written out,
-no dependencies but `gcloud`, readable start to finish before they run it.
-Send it, or paste it into their Cloud Shell. They run:
+It is standalone: every command written out, no dependencies but `gcloud`,
+readable start to finish before anyone runs it.
+
+Get it to them. From Cloud Shell, this downloads it to your own machine so
+you can send it:
+
+```bash
+cloudshell download owc-setup.sh
+```
+
+On a call, `cat owc-setup.sh` and let them copy it straight into their own
+Cloud Shell instead.
+
+**They** run it, with their project set to this one:
 
 ```bash
 bash owc-setup.sh
 ```
+
+You cannot run it yourself — it fails at the fourth step with a 403 on
+`iam.serviceAccounts.create`, which is exactly the permission this whole
+split exists to avoid needing. It stops there rather than half-finishing,
+and the steps before it are idempotent, so a mistaken run costs nothing.
 
 It refuses to run against the wrong project, skips anything that already
 exists, and can be re-run safely. It creates the six service accounts, their
