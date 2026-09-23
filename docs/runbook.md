@@ -1149,6 +1149,28 @@ symptom: `tf-apply` has not completed.
 Older checkouts printed `>> both jobs updated` after these errors, because
 the loop ignored gcloud's exit status. If you see that, `git pull`.
 
+### `Syntax error: Expected end of input but got "\\"` from a bq query
+
+```text
+Error in query string: ... Syntax error: Expected end of input but got "\" at [1:80]
+make: *** [Makefile:626: smoke] Error 1
+```
+
+A backslash continuation inside a single-quoted string in a Makefile recipe.
+The quotes make the backslash literal to the shell, and GNU make 3.81 and
+4.3 disagree about whether they strip it first — so it works on macOS and
+fails in Cloud Shell.
+
+Fixed in `make smoke`; `git pull` if you see it. **The pipeline runs
+themselves are unaffected** — this is the display query at the end, after
+both jobs have already succeeded. Check what landed directly:
+
+```bash
+bq query --project_id=$PROJECT --use_legacy_sql=false 'SELECT pipeline, dataset, status, row_count FROM `owc_ops.pipeline_runs` ORDER BY started_at DESC LIMIT 10'
+```
+
+`make check` now fails on this pattern anywhere in the Makefile.
+
 ### `make build` tags the image `untracked`
 
 The code arrived without `.git`, so `git rev-parse --short HEAD` has no

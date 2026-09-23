@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Catch shell helpers that are called but never defined.
+"""Catch shell mistakes that only fail on someone else's machine.
+
+Two kinds so far, both of which shipped: a helper called but never
+defined, and a backslash continuation inside a single-quoted Makefile
+recipe. Neither is caught by `bash -n`, and the second is worse — it
+works on GNU make 3.81 and fails on 4.3, so the author cannot
+reproduce what the operator is seeing.
 
 `bash -n` does not catch this: an undefined function is a runtime error, and
 these scripts are mostly branches that a syntax check never executes. So a
@@ -58,11 +64,28 @@ for f in SCRIPTS:
                 f"{f.relative_to(ROOT)}:{line}: calls `{name}`, which is never defined here"
             )
 
+# Makefile recipes: a backslash continuation inside a single-quoted string.
+#
+# The quotes make the backslash literal to the shell, and GNU make 3.81 and
+# 4.3 disagree about whether they strip it first. So this works on macOS and
+# fails in Cloud Shell, which is the worst way for it to fail: the author
+# cannot reproduce it.
+makefile = ROOT / "Makefile"
+if makefile.exists():
+    for i, line in enumerate(makefile.read_text().splitlines(), 1):
+        if not line.startswith("\t") or not line.rstrip().endswith("\\"):
+            continue
+        if line.rstrip()[:-1].count("'") % 2 == 1:
+            problems.append(
+                f"Makefile:{i}: backslash continuation inside a single-quoted "
+                f"string — put it on one line (breaks on GNU make 4.3)"
+            )
+
 if problems:
-    print("Shell helpers called but not defined:\n")
+    print("Shell problems:\n")
     for p in sorted(set(problems)):
         print(f"  {p}")
     print(f"\n{len(set(problems))} problem(s).")
     sys.exit(1)
 
-print(f">> shell-check OK: {len(SCRIPTS)} scripts, every helper they call is defined")
+print(f">> shell-check OK: {len(SCRIPTS)} scripts + Makefile recipes")
