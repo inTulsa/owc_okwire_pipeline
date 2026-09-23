@@ -715,6 +715,23 @@ curl -s -H "Authorization: Bearer $TOK" \
 Compare against `gcloud logging metrics list --project=$PROJECT`. Metrics in
 the second list but not the first are still propagating.
 
+### `google_cloud_run_v2_job` plans to null out `client` and `client_version`
+
+```text
+~ resource "google_cloud_run_v2_job" "this" {
+    - client         = "gcloud" -> null
+    - client_version = "583.0.0" -> null
+```
+
+Cosmetic, and caused by this repo. `make set-image` uses
+`gcloud run jobs update`, which stamps the job with the client that last
+modified it. Terraform does not set those fields, so it plans to clear them.
+Nothing about the job's behaviour changes either way.
+
+Expect it after every `make set-image` or `make deploy`. It is the reason a
+plan is rarely empty on an environment that has been deployed to since its
+last apply.
+
 ### `google_cloud_scheduler_job` shows a pending `retry_config { retry_count = 0 }`
 
 Not a problem, and not perpetual. GCP omits `retryCount` from the API response
