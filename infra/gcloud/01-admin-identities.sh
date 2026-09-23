@@ -32,6 +32,10 @@ PREFIX=""
 PRINCIPAL=""
 LOCATION="US"
 DRY_RUN=0
+# --request is --dry-run wrapped in enough context to paste into an email.
+# The person who runs these commands is not the person who cloned this repo,
+# and will not have it: they need what to run, why, and how to hand it back.
+REQUEST=0
 SKIP_PRINCIPAL=0
 SKIP_STATE_BUCKET=0
 
@@ -51,6 +55,8 @@ usage: $0 <project-id> [options]
   --no-state-bucket   Skip the Terraform state bucket (OMES is hosting state).
   --location L        State bucket location (default US)
   --dry-run           Print every command; change nothing.
+  --request           --dry-run, wrapped as a handoff for whoever holds the
+                      admin roles. Send them the output.
 USAGE
   exit 64
 }
@@ -63,6 +69,7 @@ while [[ $# -gt 0 ]]; do
     --no-state-bucket) SKIP_STATE_BUCKET=1; shift ;;
     --location)        LOCATION="${2:?}"; shift 2 ;;
     --dry-run)         DRY_RUN=1; shift ;;
+    --request)         DRY_RUN=1; REQUEST=1; shift ;;
     -h|--help)         usage ;;
     -*)                echo "unknown option: $1" >&2; usage ;;
     *)                 [[ -z "$PROJECT" ]] || { echo "unexpected argument: $1" >&2; usage; }
@@ -87,7 +94,15 @@ fi
 # shellcheck source=names.sh
 source "$(dirname "${BASH_SOURCE[0]}")/names.sh"
 
-say()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
+# --request output gets pasted into mail and ticket systems, where escape
+# codes arrive as literal garbage. Plain text there, colour everywhere else.
+if (( REQUEST )) || [[ -n "${NO_COLOR:-}" ]] || [[ ! -t 1 ]]; then
+  B=""; R=""; D=""
+else
+  B=$'\033[1m'; R=$'\033[0m'; D=$'\033[2m'
+fi
+
+say()  { printf '\n%s==> %s%s\n' "$B" "$*" "$R"; }
 note() { printf '    %s\n' "$*"; }
 
 # Echo then execute. Every mutation in this script goes through run(), so
@@ -119,13 +134,55 @@ shellquote() {
 }
 
 run() {
-  printf '  \033[2m$\033[0m %s\n' "$(shellquote "$@")"
+  printf '  %s$%s %s\n' "$D" "$R" "$(shellquote "$@")"
   (( DRY_RUN )) && return 0
   "$@"
 }
 
-if (( DRY_RUN )); then
-  printf '\n\033[1m*** DRY RUN — nothing below is executed ***\033[0m\n'
+if (( REQUEST )); then
+  cat <<REQHDR
+
+================================================================================
+REQUEST: one-time setup for the OWC data platform on $PROJECT
+================================================================================
+
+What this is
+  The OWC data platform deploys into $PROJECT with Terraform. Terraform is
+  deliberately NOT allowed to create identities or touch the project IAM
+  policy — that was the feedback we had, and this is us acting on it.
+
+  Everything that needs elevated rights is therefore collected here, in
+  plain gcloud, to be run ONCE. After this, nothing in the deploy needs
+  serviceAccountAdmin, projectIamAdmin or serviceUsageAdmin again.
+
+Who needs to run it
+  Someone holding, on $PROJECT:
+      roles/iam.serviceAccountAdmin
+      roles/resourcemanager.projectIamAdmin
+      roles/serviceusage.serviceUsageAdmin
+
+What it creates
+  16 API enables, 6 service accounts, their project-level roles, two GCS
+  buckets (Terraform state and a source mirror), and the actAs grants that
+  let the deploy attach those identities to Cloud Run and Scheduler jobs.
+
+  It also grants the deploy principal below the ten resource-admin roles
+  Terraform needs — and none of the IAM-administration roles.
+
+  Deploy principal: ${PRINCIPAL:-<not specified — tell us who this should be>}
+
+It is idempotent: safe to re-run, and re-running repairs a partial run.
+
+How to hand it back
+  Reply that it is done. We verify from our side with a read-only check and
+  send you the result.
+
+--------------------------------------------------------------------------------
+THE COMMANDS
+--------------------------------------------------------------------------------
+REQHDR
+elif (( DRY_RUN )); then
+  printf '\n%s*** DRY RUN — nothing below is executed ***%s\n' "$B" "$R"
 fi
 
 say "Project $PROJECT (prefix $PREFIX)"
@@ -347,6 +404,34 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+if (( REQUEST )); then
+  cat <<REQFTR
+
+--------------------------------------------------------------------------------
+That is the whole request. Nothing above has been run.
+
+Questions we expect, answered up front:
+
+  "Why not let Terraform do this?"
+      Because every project-level IAM binding is a read-modify-write of the
+      project policy, so Terraform needed getIamPolicy on every run —
+      including runs that changed nothing. Moving these out is what removes
+      that.
+
+  "Why six service accounts?"
+      One per job, so each holds only what it needs. The scraper cannot read
+      the Snowflake secret; the Snowflake job cannot write the scraper's
+      cache. Sharing one account would remove that separation.
+
+  "Can we run a subset?"
+      The API enables and the service accounts are required. The two buckets
+      can be replaced with ones you provide — tell us the names and we will
+      point the config at them instead.
+================================================================================
+REQFTR
+  exit 0
+fi
+
 if (( DRY_RUN )); then
   say "Dry run complete — NOTHING above was executed"
   cat <<DRYNEXT

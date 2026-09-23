@@ -83,7 +83,7 @@ endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check auth-check doctor \
         diff-enrollment derive-scrape derive-check lock lock-check docs-check base-digest build deploy set-image which-image image-digest tf-init tf-bootstrap preflight verify-separation env-exports tf-output tf-plan tf-apply tf-fmt tf-validate clean \
-        gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push \
+        access-check omes-request gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push \
         tf-check install-terraform
 
 help: ## Show this help
@@ -493,6 +493,21 @@ source-push: auth-check ## Mirror this repo to gs://$(SOURCE_BUCKET) for anyone 
 	  echo "     mkdir -p ~/owc && cd ~/owc \\"; \
 	  echo "       && gcloud storage cat gs://$(SOURCE_BUCKET)/latest.tar.gz | tar xz"; \
 	  echo ""
+
+# The first thing to run on a project you did not create. Read-only, and it
+# asks the IAM API what YOU can do rather than reading the project policy,
+# which on someone else's project you will not be allowed to do.
+access-check: auth-check ## Where do I stand on $(PROJECT), and what must I ask for?
+	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	infra/gcloud/00-access-check.sh $(PROJECT) $(NAME_PREFIX)
+
+# The artifact you send whoever holds the admin roles. Self-contained: they
+# do not need this repo, make, or terraform — just the commands and the
+# context for why they are being asked.
+omes-request: ## Generate the one-time-setup request to send your project admin
+	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@infra/gcloud/01-admin-identities.sh $(PROJECT) --prefix $(NAME_PREFIX) \
+	  --principal $(TF_PRINCIPAL) --request
 
 gcloud-admin-dry-run: ## Print every privileged command the one-time setup would run, and change nothing
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
