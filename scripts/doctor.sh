@@ -201,7 +201,7 @@ fi
 
 echo ""
 if [ "$fail" -ne 0 ]; then
-  echo "Something required is missing. See docs/07-developer-setup.md."
+  echo "Something required is missing. See docs/deploy.md."
   exit 1
 fi
-echo "Ready. Next: docs/08-deploy.md"
+echo "Ready. Next: docs/deploy.md"

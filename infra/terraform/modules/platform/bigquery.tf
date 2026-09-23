@@ -29,7 +29,7 @@ resource "google_bigquery_dataset" "marts" {
   project     = var.project_id
   location    = var.location
   labels      = var.labels
-  description = "Published tables. Unpartitioned by design — see docs/01-architecture.md ADR-002."
+  description = "Published tables. Unpartitioned by design — see docs/architecture.md ADR-002."
 
   # ignore_changes on access is REQUIRED, not optional: the grants below are
   # declared with google_bigquery_dataset_iam_member resources, which mutate

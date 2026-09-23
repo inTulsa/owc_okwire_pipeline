@@ -6,7 +6,7 @@ Cloud Shell, either works.
 
 This is the only part of the repo that needs a Python toolchain. Deploying and
 operating need none of it; see
-[`08-deploy.md`](08-deploy.md).
+[`deploy.md`](deploy.md).
 
 ## Setup
 
@@ -44,6 +44,59 @@ shred -u .env 2>/dev/null || rm -f .env
 
 Nothing in the deploy path reads `.env`. The Cloud Run jobs get the password
 from Secret Manager.
+
+## What a workstation needs
+
+Needed to change the code — the tests, the linters and the pipelines all want
+the venv. Everything in the deploy path works here identically; Cloud Shell is
+a default, not a requirement, and it has a weekly usage quota that a
+workstation does not.
+
+| Tool | Minimum | Group | Install |
+|---|---|---|---|
+| **gcloud** | any current | Deploy | [cloud.google.com/sdk](https://cloud.google.com/sdk/docs/install) |
+| **bq** | ships with gcloud | Deploy | `gcloud components install bq` |
+| **terraform** | **>= 1.9** | Deploy | [developer.hashicorp.com](https://developer.hashicorp.com/terraform/install) |
+| **git**, **make**, **bash** | any | Deploy | preinstalled on macOS and Linux |
+| **python3** | any 3.x | Deploy | preinstalled. Used only to parse small JSON blobs. |
+| **Python 3.12** | **>= 3.12** | Development | `make setup` has `uv` fetch it — a system 3.11 is not a blocker |
+| **uv** | any current | Development | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+
+```bash
+make doctor      # tools and credentials
+make setup       # venv + dependencies
+make check       # lint, types, tests, lockfile, docs — everything CI runs
+```
+
+`make check` needs no cloud credentials and touches no network. If it passes,
+your machine is working.
+
+### You do not need Docker
+
+
+Images build in **Cloud Build**. The only `docker` string in this repo is
+inside `gcloud artifacts docker images`, and nothing runs a local daemon —
+including in Cloud Shell, where one happens to be available and is still not
+used. See
+[local-development.md](local-development.md#no-docker-locally).
+
+## Platform notes
+
+**Shell comments when pasting.** zsh does not treat `#` as a comment
+interactively (`INTERACTIVE_COMMENTS` is off by default, unlike bash), so
+pasting a multi-line block containing comments produces `command not found: #`
+and glob errors on the prose. Cloud Shell defaults to bash and does not have
+this problem. Every multi-step check in this repo is a `make` target partly
+for that reason — prefer `make verify-separation` over pasting a block.
+
+**The Makefile runs bash**, not your login shell (`SHELL := /bin/bash`), so
+recipes behave identically whatever you use interactively. macOS's bash 3.2 is
+sufficient; nothing here needs bash 4.
+
+**`uv` version and `make lock`.** `requirements.txt` is compiled by `uv pip
+compile`, and `make lock-check` runs in CI. If your `uv` resolves differently
+from whoever last ran `make lock`, the check fails on a diff you did not
+intend. Re-run `make lock` and commit the result rather than hand-editing.
 
 ## Running things
 

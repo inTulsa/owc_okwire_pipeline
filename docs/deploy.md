@@ -1,11 +1,15 @@
 # Deploy
 
-**Start here. This is the only deploy procedure.** It runs entirely in Google
-Cloud Shell — nothing installed on your machine, no GitHub Actions, and no
-`projectIamAdmin` on Terraform.
+**The whole procedure, and the only one.** Six steps, about 20 minutes, run
+entirely in Google Cloud Shell — nothing installed on your machine, no CI, and
+no `projectIamAdmin` on Terraform.
 
-Six steps, ~20 minutes. Every command is idempotent: re-running is how you
-repair a partial run.
+Every command is idempotent. Re-running is how you repair a partial run, so
+when something fails, fix it and start again from the top.
+
+Aiming this at a different project — your own, for a rehearsal — is one extra
+variable on every command: `PROJECT=your-project`. See
+[Rehearsing against your own project](#rehearsing-against-your-own-project).
 
 ---
 
@@ -141,6 +145,21 @@ re-run — idempotent, nothing else changes:
 make gcloud-admin ENV=dev TF_PRINCIPAL=serviceAccount:tf@their-proj.iam.gserviceaccount.com
 ```
 
+### Access you need granted {#access}
+
+Tooling is the easy half. These take longer to obtain, so start them early.
+
+Two levels, and only the first is hard to get.
+
+| Access | Scope | Needed for |
+|---|---|---|
+| **GCP, privileged** | `roles/iam.serviceAccountAdmin` + `roles/resourcemanager.projectIamAdmin` + `roles/serviceusage.serviceUsageAdmin` | `make gcloud-admin`, **once per project**, and `make iam-check STRICT=1` afterwards. In an OMES project this is theirs to run, from `make gcloud-admin-dry-run` output. |
+| **GCP, day to day** | the ten resource-admin roles `make gcloud-admin` grants, plus `serviceAccountUser` on five accounts | Everything else: `make up`, `make build`, `make tf-apply`, `make smoke`. Deliberately cannot read or write the project IAM policy. |
+| **Snowflake** | the reader account login + password | The lightcast pipeline. Password goes to Secret Manager, never into Terraform. |
+| **Alert distribution list** | an address you can add members to | `alert_emails`. Use a list, not a person, so the rotation changes without a Terraform change. |
+| **Billing account** | `roles/billing.costsManager` | **Only** if you enable the budget alert. It is off by default. |
+| **GitHub repo** | read | Only to `git clone` the repo into Cloud Shell. Uploading a tarball or fetching the project's mirror needs no GitHub at all. |
+
 ## 5. Stand it up {#stand-it-up}
 
 ```bash
@@ -267,7 +286,7 @@ carefully, and only if someone else can still administer it.
 
 The same six steps with `ENV=prod`. The two environments differ in exactly
 four settings, listed in
-[`03-gcp-setup.md`](03-gcp-setup.md#what-prod-does-differently).
+[`gcp-reference.md`](gcp-reference.md#what-prod-does-differently).
 
 ## Rehearsing against your own project
 
@@ -386,28 +405,5 @@ not stop a deploy working, it stops the deploy proving anything.
 - `cloudshell edit <file>` opens the built-in editor.
 
 Failure modes and their fixes are in
-[`02-runbook.md`](02-runbook.md#cloud-shell-and-the-reduced-permission-set).
-
-## Migrating a project applied with the old configuration {#migrating}
-
-Only relevant where Terraform previously created the identities. A fresh
-project has nothing to migrate.
-
-`manage_identities = false` makes Terraform want to **destroy** the service
-accounts it is now told not to manage. Forget them first — this removes them
-from state, it does not delete them:
-
-```bash
-cd infra/terraform/envs/dev
-terraform state list \
-  | grep -E 'google_(service_account|project_iam_member|project_service|project_service_identity|service_account_iam_member)\.' \
-  | grep -v 'module.wif' > /tmp/to-forget.txt
-
-cat /tmp/to-forget.txt                        # read before running the next line
-xargs -a /tmp/to-forget.txt -n1 terraform state rm
-terraform plan                                # only module.wif.* should be destroyed
-```
-
-The WIF module is the exception: there you **do** want the resources gone. A
-federation pool nobody uses is a way in that nobody is watching.
+[`runbook.md`](runbook.md#cloud-shell-and-the-reduced-permission-set).
 

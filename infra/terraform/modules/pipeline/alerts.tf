@@ -24,10 +24,10 @@ resource "google_monitoring_alert_policy" "task_failed" {
       ${var.max_retries} retries.
 
       The exit code names the cause — see the table in
-      `docs/02-runbook.md#exit-codes`. The structured log line carries
+      `docs/runbook.md#exit-codes`. The structured log line carries
       `event`, `dataset`, and `error`.
 
-      Runbook: `docs/02-runbook.md#alert-1-task-failed`.
+      Runbook: `docs/runbook.md#alert-1-task-failed`.
     EOT
   }
 
@@ -131,7 +131,7 @@ resource "google_monitoring_alert_policy" "event" {
       jsonPayload.event="${each.value.event}"
       ```
 
-      Runbook: `docs/02-runbook.md#${each.value.key}`.
+      Runbook: `docs/runbook.md#${each.value.key}`.
     EOT
   }
 
@@ -184,7 +184,7 @@ resource "google_monitoring_alert_policy" "memory_pressure" {
       `src/owcdata/pipelines/lightcast/run.py`, measured at ~290 MB. A task
       approaching 2 GiB means something is buffering that should be streaming.
 
-      Runbook: `docs/02-runbook.md#alert-8-memory`.
+      Runbook: `docs/runbook.md#alert-8-memory`.
     EOT
   }
 

@@ -47,7 +47,7 @@ BUCKET_STATE="gcs-${PROJECT}-tfstate-1"
 # Cloning from GitHub is the normal way in and needs nothing here. This serves
 # the case that has no clone available: someone with access to the GCP project
 # but not to the repo, or a Cloud Shell that cannot authenticate to GitHub.
-# `make source-push` publishes a tarball; docs/08-deploy.md has the
+# `make source-push` publishes a tarball; docs/deploy.md has the
 # one-line fetch.
 #
 # Created by 01-admin-identities.sh rather than by Terraform, for the same

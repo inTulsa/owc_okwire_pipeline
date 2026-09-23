@@ -450,7 +450,7 @@ tf-output: ## Show terraform outputs for $(ENV). Add NAME=<output> for one value
 # Mirror this repository into the project.
 #
 # Cloning from GitHub is the normal way in; this covers whoever has GCP access
-# but cannot clone. docs/08-deploy.md has the one-line fetch.
+# but cannot clone. docs/deploy.md has the one-line fetch.
 #
 # .git is INCLUDED on purpose: without it `git rev-parse --short HEAD` has no
 # answer, so `make build` tags the image "untracked" and `make which-image`

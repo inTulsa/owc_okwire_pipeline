@@ -4,7 +4,7 @@
 # Password auth is correct and is NOT deprecated here: Snowflake's password
 # phase-out explicitly exempts reader accounts. The only change from the
 # original pipeline is that the password lives here instead of in a .env file.
-# See docs/01-architecture.md ADR-004 and open item 3.
+# See docs/architecture.md ADR-004 and open item 3.
 #
 # The secret VALUE is set out of band (gcloud, or the console) and is not in
 # Terraform state:

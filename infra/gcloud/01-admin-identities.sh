@@ -276,7 +276,7 @@ create_sa lightcast  "OWC lightcast pipeline"      "Runs the lightcast Cloud Run
 create_sa enrollment "OWC enrollment pipeline"     "Runs the enrollment Cloud Run job. No secret access: the source is a public webpage."
 create_sa scheduler  "OWC Cloud Scheduler invoker" "Invokes the Cloud Run jobs. run.invoker on the specific jobs only."
 create_sa build      "OWC Cloud Build"             "Runs container builds. Reads build source, writes the image and logs. Nothing else."
-create_sa powerbi    "OWC PowerBI reader"          "Read-only on owc_marts. See docs/01-architecture.md ADR-006 for the JSON-key exception."
+create_sa powerbi    "OWC PowerBI reader"          "Read-only on owc_marts. See docs/architecture.md ADR-006 for the JSON-key exception."
 create_sa freshness  "OWC freshness check"         "Runs the owc_ops.pipeline_runs freshness scheduled query. Read-only."
 
 # ---------------------------------------------------------------------------
@@ -289,7 +289,7 @@ create_sa freshness  "OWC freshness check"         "Runs the owc_ops.pipeline_ru
 # Everything NOT here is resource-scoped — a bucket prefix, one secret, one
 # dataset, one Cloud Run job — and stays in Terraform, because setting a
 # policy on a bucket you just created is inherent to creating it and needs no
-# project-level permission. See docs/08-deploy.md for that line and
+# project-level permission. See docs/deploy.md for that line and
 # why it is drawn there.
 # ---------------------------------------------------------------------------
 say "Granting ${#RUNTIME_PROJECT_GRANTS[@]} project-level roles to the runtime identities"
@@ -361,7 +361,7 @@ if (( DRY_RUN )); then
   projectIamAdmin on $PROJECT, and have them run them.
 
   Only then do the rest: make iam-check, make source-push, make up.
-  docs/08-deploy.md has the order.
+  docs/deploy.md has the order.
 DRYNEXT
   exit 0
 fi
@@ -397,5 +397,5 @@ cat <<NEXT
   The full walkthrough, with what each step does and why, is the only other
   place this procedure is written down:
 
-    docs/08-deploy.md
+    docs/deploy.md
 NEXT
