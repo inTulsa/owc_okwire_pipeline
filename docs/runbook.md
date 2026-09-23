@@ -159,13 +159,17 @@ gcloud run jobs execute cr-$PREFIX-lightcast-1 --region=$REGION --project=$PROJE
 "url": ".../namespaces/<project>/jobs/cr-<prefix>-lightcast-1:run"
 ```
 
-The scheduler service account is missing `roles/run.invoker` **on that job**.
-Terraform grants it (`google_cloud_run_v2_job_iam_member.scheduler_invoker`),
-so either the apply did not reach it, or the grant was made moments ago and
-has not propagated — resource-level IAM takes a minute or two, and a
-`gcloud scheduler jobs run` fired immediately after an apply can beat it.
+The scheduler service account could not use `roles/run.invoker` on that job.
 
-Check it:
+**Most often this is propagation, not a missing grant.** Resource-level IAM
+takes a minute or two to take effect, and a forced run fired soon after
+`tf-apply` beats it. That is what it was the first time this was seen in
+dev — the binding was present and the retry succeeded. Wait two minutes and
+run it again before changing anything.
+
+If it persists, check whether the grant is actually there. Terraform makes it
+(`google_cloud_run_v2_job_iam_member.scheduler_invoker`), so its absence
+means the apply did not reach that resource:
 
 ```bash
 make verify-separation ENV=$ENV
