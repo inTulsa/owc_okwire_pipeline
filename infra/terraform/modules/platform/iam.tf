@@ -9,6 +9,10 @@
 # ---------------------------------------------------------------------------
 
 resource "google_service_account" "lightcast" {
+  # Created by infra/gcloud/01-admin-identities.sh when
+  # manage_identities is false. See that variable.
+  count = var.manage_identities ? 1 : 0
+
   account_id   = local.name.sa_lightcast
   project      = var.project_id
   display_name = "OWC lightcast pipeline (${var.env})"
@@ -17,6 +21,10 @@ resource "google_service_account" "lightcast" {
 }
 
 resource "google_service_account" "enrollment" {
+  # Created by infra/gcloud/01-admin-identities.sh when
+  # manage_identities is false. See that variable.
+  count = var.manage_identities ? 1 : 0
+
   account_id   = local.name.sa_enrollment
   project      = var.project_id
   display_name = "OWC enrollment pipeline (${var.env})"
@@ -25,6 +33,10 @@ resource "google_service_account" "enrollment" {
 }
 
 resource "google_service_account" "scheduler" {
+  # Created by infra/gcloud/01-admin-identities.sh when
+  # manage_identities is false. See that variable.
+  count = var.manage_identities ? 1 : 0
+
   account_id   = local.name.sa_scheduler
   project      = var.project_id
   display_name = "OWC Cloud Scheduler invoker (${var.env})"
@@ -50,6 +62,10 @@ resource "google_service_account" "scheduler" {
 # file already sets.
 # ---------------------------------------------------------------------------
 resource "google_service_account" "build" {
+  # Created by infra/gcloud/01-admin-identities.sh when
+  # manage_identities is false. See that variable.
+  count = var.manage_identities ? 1 : 0
+
   account_id   = local.name.sa_build
   project      = var.project_id
   display_name = "OWC Cloud Build (${var.env})"
@@ -59,9 +75,11 @@ resource "google_service_account" "build" {
 
 # Required when a build specifies its own service account.
 resource "google_project_iam_member" "build_log_writer" {
+  count = var.manage_identities ? 1 : 0
+
   project = var.project_id
   role    = "roles/logging.logWriter"
-  member  = "serviceAccount:${google_service_account.build.email}"
+  member  = "serviceAccount:${local.sa_email.build}"
 }
 
 # Reads the uploaded source tarball from gs://<project>_cloudbuild.
@@ -72,9 +90,11 @@ resource "google_project_iam_member" "build_log_writer" {
 # identity only the deployer can assume, and the deployer already has
 # storage.admin — so it widens nothing in practice.
 resource "google_project_iam_member" "build_source_reader" {
+  count = var.manage_identities ? 1 : 0
+
   project = var.project_id
   role    = "roles/storage.objectViewer"
-  member  = "serviceAccount:${google_service_account.build.email}"
+  member  = "serviceAccount:${local.sa_email.build}"
 }
 
 resource "google_artifact_registry_repository_iam_member" "build_writer" {
@@ -82,10 +102,14 @@ resource "google_artifact_registry_repository_iam_member" "build_writer" {
   location   = google_artifact_registry_repository.images.location
   repository = google_artifact_registry_repository.images.name
   role       = "roles/artifactregistry.writer"
-  member     = "serviceAccount:${google_service_account.build.email}"
+  member     = "serviceAccount:${local.sa_email.build}"
 }
 
 resource "google_service_account" "powerbi" {
+  # Created by infra/gcloud/01-admin-identities.sh when
+  # manage_identities is false. See that variable.
+  count = var.manage_identities ? 1 : 0
+
   account_id   = local.name.sa_powerbi
   project      = var.project_id
   display_name = "OWC PowerBI reader (${var.env})"
@@ -103,7 +127,7 @@ resource "google_service_account" "powerbi" {
 resource "google_storage_bucket_iam_member" "lightcast_raw_prefix" {
   bucket = google_storage_bucket.raw.name
   role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.lightcast.email}"
+  member = "serviceAccount:${local.sa_email.lightcast}"
 
   condition {
     title       = "lightcast prefix only"
@@ -115,7 +139,7 @@ resource "google_storage_bucket_iam_member" "lightcast_raw_prefix" {
 resource "google_storage_bucket_iam_member" "enrollment_raw_prefix" {
   bucket = google_storage_bucket.raw.name
   role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.enrollment.email}"
+  member = "serviceAccount:${local.sa_email.enrollment}"
 
   condition {
     title       = "enrollment prefix only"
@@ -129,8 +153,8 @@ resource "google_storage_bucket_iam_member" "enrollment_raw_prefix" {
 # objects outside the conditional grants above.
 resource "google_storage_bucket_iam_member" "raw_list" {
   for_each = {
-    lightcast  = google_service_account.lightcast.email
-    enrollment = google_service_account.enrollment.email
+    lightcast  = local.sa_email.lightcast
+    enrollment = local.sa_email.enrollment
   }
   bucket = google_storage_bucket.raw.name
   role   = "roles/storage.legacyBucketReader"
@@ -143,13 +167,13 @@ resource "google_storage_bucket_iam_member" "raw_list" {
 resource "google_storage_bucket_iam_member" "enrollment_state" {
   bucket = google_storage_bucket.enrollment_state.name
   role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.enrollment.email}"
+  member = "serviceAccount:${local.sa_email.enrollment}"
 }
 
 resource "google_storage_bucket_iam_member" "enrollment_state_list" {
   bucket = google_storage_bucket.enrollment_state.name
   role   = "roles/storage.legacyBucketReader"
-  member = "serviceAccount:${google_service_account.enrollment.email}"
+  member = "serviceAccount:${local.sa_email.enrollment}"
 }
 
 # ---------------------------------------------------------------------------
@@ -161,8 +185,8 @@ resource "google_storage_bucket_iam_member" "enrollment_state_list" {
 # ---------------------------------------------------------------------------
 locals {
   pipeline_sa_emails = {
-    lightcast  = google_service_account.lightcast.email
-    enrollment = google_service_account.enrollment.email
+    lightcast  = local.sa_email.lightcast
+    enrollment = local.sa_email.enrollment
   }
   writable_datasets = {
     staging = google_bigquery_dataset.staging.dataset_id
@@ -201,7 +225,7 @@ resource "google_bigquery_dataset_iam_member" "pipeline_data_editor" {
 }
 
 resource "google_project_iam_member" "pipeline_job_user" {
-  for_each = local.pipeline_sa_emails
+  for_each = var.manage_identities ? local.pipeline_sa_emails : {}
 
   project = var.project_id
   role    = "roles/bigquery.jobUser"
@@ -222,13 +246,15 @@ resource "google_bigquery_dataset_iam_member" "powerbi_marts" {
   project    = var.project_id
   dataset_id = google_bigquery_dataset.marts.dataset_id
   role       = "roles/bigquery.dataViewer"
-  member     = "serviceAccount:${google_service_account.powerbi.email}"
+  member     = "serviceAccount:${local.sa_email.powerbi}"
 }
 
 resource "google_project_iam_member" "powerbi_job_user" {
+  count = var.manage_identities ? 1 : 0
+
   project = var.project_id
   role    = "roles/bigquery.jobUser"
-  member  = "serviceAccount:${google_service_account.powerbi.email}"
+  member  = "serviceAccount:${local.sa_email.powerbi}"
 }
 
 # ---------------------------------------------------------------------------
@@ -236,7 +262,7 @@ resource "google_project_iam_member" "powerbi_job_user" {
 # logs never arrive, and every log-based alert is silently dead.
 # ---------------------------------------------------------------------------
 resource "google_project_iam_member" "pipeline_log_writer" {
-  for_each = local.pipeline_sa_emails
+  for_each = var.manage_identities ? local.pipeline_sa_emails : {}
 
   project = var.project_id
   role    = "roles/logging.logWriter"
@@ -244,7 +270,7 @@ resource "google_project_iam_member" "pipeline_log_writer" {
 }
 
 resource "google_project_iam_member" "pipeline_metric_writer" {
-  for_each = local.pipeline_sa_emails
+  for_each = var.manage_identities ? local.pipeline_sa_emails : {}
 
   project = var.project_id
   role    = "roles/monitoring.metricWriter"

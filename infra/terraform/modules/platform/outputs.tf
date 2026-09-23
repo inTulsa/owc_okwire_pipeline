@@ -9,14 +9,9 @@ output "enrollment_state_bucket" {
 }
 
 output "service_account_emails" {
-  value = {
-    lightcast  = google_service_account.lightcast.email
-    enrollment = google_service_account.enrollment.email
-    scheduler  = google_service_account.scheduler.email
-    powerbi    = google_service_account.powerbi.email
-    build      = google_service_account.build.email
-    freshness  = google_service_account.freshness.email
-  }
+  # From local.sa_email, not from the resources, so these are correct whether
+  # this module created the accounts or 01-admin-identities.sh did.
+  value       = local.sa_email
   description = "Runtime identities. One per pipeline, plus scheduler, PowerBI, and the freshness check."
 }
 

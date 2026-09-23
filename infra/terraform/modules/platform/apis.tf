@@ -24,7 +24,9 @@ locals {
 }
 
 resource "google_project_service" "enabled" {
-  for_each = toset(local.services)
+  # Enabled by infra/gcloud/01-admin-identities.sh when manage_apis is
+  # false, which drops serviceUsageAdmin from the Terraform principal.
+  for_each = var.manage_apis ? toset(local.services) : toset([])
 
   project = var.project_id
   service = each.value

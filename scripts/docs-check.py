@@ -71,7 +71,7 @@ for doc in DOCS:
             line_no = text[: m.start()].count("\n") + 1
             problems.append(f"{doc.relative_to(ROOT)}:{line_no}: NAME={m.group(1)} — no such terraform output")
 
-    for m in re.finditer(r"(?:scripts|infra/bootstrap)/[\w.-]+\.(?:sh|py)", text):
+    for m in re.finditer(r"(?:scripts|infra/gcloud)/[\w.-]+\.(?:sh|py)", text):
         if not (ROOT / m.group(0)).exists():
             line_no = text[: m.start()].count("\n") + 1
             problems.append(f"{doc.relative_to(ROOT)}:{line_no}: {m.group(0)} — file does not exist")

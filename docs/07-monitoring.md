@@ -14,7 +14,7 @@ quietly.
 >
 > Values come from that environment's `terraform.tfvars`. `make` targets read
 > the project themselves and need none of this. See
-> [03-gcp-setup.md](03-gcp-setup.md#set-your-shell-up-first).
+> [03-gcp-setup.md](09-gcloud-deploy.md#shell-setup).
 
 ## The alerts
 

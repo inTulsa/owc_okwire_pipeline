@@ -84,8 +84,15 @@ variable "env_name" {
 module "platform" {
   source = "../../modules/platform"
 
-  project_id      = var.project_id
-  env             = var.env_name
+  project_id = var.project_id
+  env        = var.env_name
+
+  # Identities, project-level IAM and API enablement are created once
+  # by infra/gcloud/01-admin-identities.sh, so this apply needs no
+  # permission on the project IAM policy. See docs/09-gcloud-deploy.md.
+  manage_identities = var.manage_identities
+  manage_apis       = var.manage_apis
+
   name_prefix     = var.name_prefix
   region          = var.region
   location        = var.location
@@ -335,10 +342,25 @@ module "enrollment" {
 }
 
 # ---------------------------------------------------------------------------
-# Keyless deploys
+# Keyless deploys from GitHub Actions.
+#
+# NOT BUILT by default. OMES cannot federate a personal GitHub account into
+# their projects — "we can not hook up your personal Github, but we can hook
+# up your instance with the state once you work with Jason Thornhill" — so
+# enable_wif is false in terraform.tfvars and this whole module is skipped.
+#
+# It is the single largest source of privilege in the config: the deployer
+# service account carries thirteen project roles including projectIamAdmin,
+# serviceAccountAdmin and workloadIdentityPoolAdmin. Not building it is most
+# of what answers the OMES permission objection.
+#
+# Set enable_wif = true when OMES's own GitHub/GitLab instance is federated,
+# and re-read docs/04-deployment.md from that point.
 # ---------------------------------------------------------------------------
 module "wif" {
   source = "../../modules/wif"
+
+  count = var.enable_wif ? 1 : 0
 
   project_id        = var.project_id
   env               = var.env_name

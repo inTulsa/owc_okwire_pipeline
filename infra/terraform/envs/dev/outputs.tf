@@ -12,11 +12,11 @@ output "enrollment_job" { value = module.enrollment.job_name }
 output "enrollment_schedulers" { value = module.enrollment.scheduler_job_names }
 output "enrollment_run_command" { value = module.enrollment.run_command }
 
-output "workload_identity_provider" { value = module.wif.workload_identity_provider }
-output "deployer_service_account" { value = module.wif.deployer_service_account_email }
+output "workload_identity_provider" { value = one(module.wif[*].workload_identity_provider) }
+output "deployer_service_account" { value = one(module.wif[*].deployer_service_account_email) }
 output "wif_attribute_condition" {
-  value       = module.wif.attribute_condition
-  description = "Review this in every plan diff — it is what keeps other GitHub repos out of this project."
+  value       = one(module.wif[*].attribute_condition)
+  description = "Review this in every plan diff — it is what keeps other GitHub repos out of this project. null when enable_wif = false."
 }
 
 output "dataset_task_counts" {

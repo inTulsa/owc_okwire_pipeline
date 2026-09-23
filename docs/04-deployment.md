@@ -1,5 +1,16 @@
 # Deployment
 
+> **Not the current deploy path.** `enable_wif = false` in both environments,
+> so the WIF provider these workflows authenticate against is not built and
+> the repository variables they read are not set. They are committed, correct,
+> and inert.
+>
+> OMES cannot federate a personal GitHub account into their projects. Until
+> their own instance is federated, deploys run from a workstation —
+> [`09-gcloud-deploy.md`](09-gcloud-deploy.md). Everything below from
+> [Deploying by hand](#deploying-by-hand) still applies; the Actions setup
+> is what waits.
+
 > **Shell setup.** The raw `gcloud` and `bq` commands here read `$PROJECT`
 > and `$PREFIX`. Set them from the environment you mean, so nothing ends up
 > pointed at the wrong project:
@@ -11,7 +22,7 @@
 >
 > Values come from that environment's `terraform.tfvars`. `make` targets read
 > the project themselves and need none of this. See
-> [03-gcp-setup.md](03-gcp-setup.md#set-your-shell-up-first).
+> [03-gcp-setup.md](09-gcloud-deploy.md#shell-setup).
 
 ## How a change reaches production
 
@@ -132,8 +143,10 @@ make gh-vars ENV=dev
 Run it again with `ENV=prod` **once prod has been applied** — not before. The
 prod project has to exist and have state, or there is nothing to read.
 
-`gh-vars` runs [`deployer-check`](03-gcp-setup.md#confirm-the-deployer-can-actually-deploy)
-first, for the same reason `tf-apply` runs `preflight`. Setting these
+`gh-vars` runs `make deployer-check` first, for the same reason `tf-apply`
+runs `preflight`. (Both refuse today, because `enable_wif = false` means there
+is no deployer service account to check — see
+[09](09-gcloud-deploy.md#what-this-defers).) Setting these
 variables is the moment deploys stop being yours and become CI's, so it is
 the last moment the difference between your permissions and the deployer's
 is cheap to find. Skipping straight to a push turns a one-second check into
@@ -241,30 +254,24 @@ tag makes it a race against whatever is currently pushed under that tag.
 
 ## Deploying by hand {#deploying-by-hand}
 
-```bash
-make build ENV=dev              # builds, pushes, and prints the apply command
-
-IMAGE=$(make -s image-digest ENV=dev)
-make tf-init  ENV=dev
-make tf-plan  ENV=dev TF_ARGS="-var=image_digest=$IMAGE"
-make tf-apply ENV=dev TF_ARGS="-var=image_digest=$IMAGE"
-```
-
-`make build` prints the exact `-var=` line to copy. It also reads `project_id`
-and `region` from the environment's `terraform.tfvars`, so the build lands in
-the right project rather than gcloud's default.
-
-The job's image is in `lifecycle.ignore_changes`, so it is set separately:
+**This moved.** The deploy procedure is
+[`09-gcloud-deploy.md`](09-gcloud-deploy.md), in full and in one place:
 
 ```bash
-make set-image ENV=dev
-make which-image ENV=dev     # confirm both jobs match the newest build
+make up ENV=dev
 ```
 
-Or do the whole loop in one command:
+What used to be listed here — `tf-init`, `build`, `tf-apply`, `set-image` — is
+what `make up` runs, in that order, with the checks between them that made the
+hand-typed version easy to get wrong. The individual targets still exist and
+[09 lists them](09-gcloud-deploy.md#stand-it-up) if you want to step
+through one at a time.
+
+For the day-to-day inner loop, once an environment is already up:
 
 ```bash
 make deploy ENV=dev          # build + push + point both jobs at it
+make which-image ENV=dev     # confirm both jobs match the newest build
 ```
 
 **Why `ignore_changes` on the image:** during an incident someone will run

@@ -15,7 +15,16 @@ TFVARS     := $(TF_DIR)/terraform.tfvars
 # duplicated here, so `make build ENV=prod` cannot quietly build into dev
 # (gcloud builds submit otherwise uses whatever the default project happens
 # to be). Override on the command line if you need to.
-tfvar      = $(shell awk -F= '/^[[:space:]]*$(1)[[:space:]]*=/ {gsub(/[" \t]/,"",$$2); print $$2; exit}' $(TFVARS) 2>/dev/null)
+# sub(/\#.*/) first: awk splits on "=", so $$2 is everything up to the next
+# one — including a trailing `# comment`, whose spaces the gsub then strips
+# and glues onto the value. `enable_wif = false  # no pool` parsed as
+# "false#nopool", which is not "false", so every guard reading it took the
+# wrong branch silently.
+#
+# The backslash before # is for MAKE, not awk: an unescaped # inside
+# $(shell ...) starts a make comment and truncates the call, which reports
+# as "unterminated call to function 'shell': missing ')'".
+tfvar      = $(shell awk -F= '/^[[:space:]]*$(1)[[:space:]]*=/ {sub(/\#.*/,"",$$2); gsub(/[" \t]/,"",$$2); print $$2; exit}' $(TFVARS) 2>/dev/null)
 PROJECT    ?= $(call tfvar,project_id)
 REGION     ?= $(or $(call tfvar,region),us-central1)
 IMAGE_TAG  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo untracked)
@@ -38,7 +47,19 @@ BUILD_SA    = sa-$(NAME_PREFIX)-build-1@$(PROJECT).iam.gserviceaccount.com
 # The identity GitHub Actions assumes via WIF. Mirrors modules/wif/main.tf,
 # which is also the source `deployer-check` reads the expected roles from.
 DEPLOYER_SA = sa-$(NAME_PREFIX)-deployer-1@$(PROJECT).iam.gserviceaccount.com
+# A mirror of this repo inside the project, for anyone who cannot clone from
+# GitHub. Created by infra/gcloud/01-admin-identities.sh, not by Terraform.
+SOURCE_BUCKET = gcs-$(NAME_PREFIX)-source-1
 WIF_TF     := infra/terraform/modules/wif/main.tf
+# Whether this environment builds the GitHub WIF path at all. False in both
+# environments: OMES cannot federate a personal GitHub account. The targets
+# that only make sense with Actions read this and refuse rather than
+# reporting a missing deployer as a permission problem.
+ENABLE_WIF  = $(call tfvar,enable_wif)
+# Who runs terraform. Defaults to the active gcloud account, which is right
+# for a hand deploy; override when OMES attaches their own pipeline identity:
+#   make iam-check ENV=dev TF_PRINCIPAL=serviceAccount:tf@omes-proj.iam.gserviceaccount.com
+TF_PRINCIPAL ?= user:$(shell gcloud config get-value account 2>/dev/null)
 ORIGINAL   := tests/fixtures/primary_enrollment_data_script.original.py
 SCRAPE     := src/owcdata/pipelines/enrollment/scrape.py
 
@@ -55,7 +76,8 @@ RUN_ARGS += --limit $(LIMIT)
 endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check auth-check doctor \
-        diff-enrollment derive-scrape derive-check lock lock-check docs-check base-digest build deploy set-image which-image image-digest tf-init tf-reinit tf-bootstrap preflight wif-check deployer-check verify-separation env-exports tf-output gh-vars tf-plan tf-apply tf-fmt tf-validate clean
+        diff-enrollment derive-scrape derive-check lock lock-check docs-check base-digest build deploy set-image which-image image-digest tf-init tf-reinit tf-bootstrap preflight wif-check deployer-check verify-separation env-exports tf-output gh-vars tf-plan tf-apply tf-fmt tf-validate clean \
+        gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -262,17 +284,35 @@ tf-reinit: ## Re-point $(ENV) at the bucket in its backend.tf (after changing pr
 # The placeholder digest satisfies the pipeline module's "must be a digest"
 # validation, which Terraform evaluates even for resources -target excludes.
 # No Cloud Run job is created by this step.
+# Breaks the first-deploy cycle: Terraform creates the Artifact Registry that
+# `make build` needs to push to.
+#
+# Four targets, and each unblocks the next step:
+#
+#   images             what `make build` pushes to
+#   snowflake_password the container you store the password into
+#   lightcast_accessor ordering, not bootstrap: Cloud Run validates at CREATE
+#                      time that a job's runtime identity can read the secrets
+#                      it mounts, and nothing in the graph forces that grant
+#                      to land before the job
+#   build_writer       lets sa-<prefix>-build-1 push to the registry
+#
+# The build service account itself is NOT here: it is created by
+# infra/gcloud/01-admin-identities.sh, along with its project-level grants.
+#
+# The placeholder digest satisfies the pipeline module's "must be a digest"
+# validation, which Terraform evaluates even for resources -target excludes.
+# No Cloud Run job is created by this step.
 tf-bootstrap: ## First deploy only: create Artifact Registry + the secret container
 	cd $(TF_DIR) && terraform init && terraform apply \
 	  -target=module.platform.google_artifact_registry_repository.images \
 	  -target=module.platform.google_secret_manager_secret.snowflake_password \
-	  -target=module.platform.google_service_account.build \
-	  -target=module.platform.google_project_iam_member.build_log_writer \
-	  -target=module.platform.google_project_iam_member.build_source_reader \
+	  -target=module.platform.google_secret_manager_secret_iam_member.lightcast_accessor \
 	  -target=module.platform.google_artifact_registry_repository_iam_member.build_writer \
 	  -var='image_digest=bootstrap@sha256:0000000000000000000000000000000000000000000000000000000000000000'
 	@echo ""
-	@echo ">> Artifact Registry, the secret container, and the build identity exist."
+	@echo ">> Artifact Registry and the secret container exist, and the build"
+	@echo "   identity can push to the registry."
 	@echo "   Next:"
 	@echo "     1. printf '%s' 'THE_PASSWORD' | gcloud secrets versions add $(SECRET_NAME) --data-file=- --project $(PROJECT)"
 	@echo "     2. make build ENV=$(ENV)"
@@ -340,7 +380,16 @@ tf-validate: ## terraform validate for $(ENV)
 # preserves the owner's exact casing. A mismatch fails CLOSED — deploys stop
 # authenticating — so it is safe but silent, and easy to lose an afternoon to.
 wif-check: ## Verify github_repository in tfvars matches the actual git remote, exactly
-	@remote=$$(git remote get-url origin 2>/dev/null \
+	@# One shell, not two. `exit 0` inside its own recipe line ends only that
+	@# line's subshell — make then runs the next line regardless, which had
+	@# this printing "skipped" and then doing the check anyway.
+	@if [ "$(ENABLE_WIF)" != "true" ]; then \
+	  echo ">> wif-check skipped: enable_wif = false in $(TFVARS)"; \
+	  echo "   No WIF pool and no deployer service account are built, so there is"; \
+	  echo "   no attribute_condition for github_repository to have to match."; \
+	  exit 0; \
+	fi; \
+	remote=$$(git remote get-url origin 2>/dev/null \
 	    | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$$##'); \
 	  configured=$$(awk -F= '/^[[:space:]]*github_repository[[:space:]]*=/ {gsub(/[" \t]/,"",$$2); print $$2; exit}' $(TFVARS)); \
 	  echo "  git remote : $${remote:-<none>}"; \
@@ -438,7 +487,20 @@ tf-output: ## Show terraform outputs for $(ENV). Add NAME=<output> for one value
 # google_project_iam_member blocks are read: the artifact-registry and
 # service-account grants in that file are not project-level and would never
 # appear in a project IAM policy.
-deployer-check: auth-check ## Verify the deployer SA has every role GitHub Actions needs
+# No auth-check prerequisite: whether this environment HAS a deployer is a
+# configuration question, and answering it with "your gcloud token expired"
+# sends you to re-authenticate for a check that was never going to run.
+deployer-check: ## Verify the deployer SA has every role GitHub Actions needs
+	@if [ "$(ENABLE_WIF)" != "true" ]; then \
+	  echo ""; \
+	  echo "  enable_wif = false in $(TFVARS), so there is no deployer service"; \
+	  echo "  account to check. GitHub Actions is not the deploy path for this"; \
+	  echo "  environment — deploys run from gcloud, as you."; \
+	  echo ""; \
+	  echo "  What to check instead:  make iam-check ENV=$(ENV)"; \
+	  echo ""; exit 1; \
+	fi
+	@scripts/require-gcloud-auth.sh
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@expected=$$(awk '/^resource "google_project_iam_member"/,/^\}$$/' $(WIF_TF) \
 	    | grep -oE '"roles/[A-Za-z.]+"' | tr -d '"' | sort -u); \
@@ -512,6 +574,158 @@ gh-vars: deployer-check ## Set the GitHub repo variables for $(ENV) from its ter
 	  gh variable set WIF_PROVIDER_$$up   --body "$$wif"; \
 	  gh variable set DEPLOYER_SA_$$up    --body "$$sa"; \
 	  echo ""; gh variable list
+
+# -- the gcloud-only path ----------------------------------------------------
+#
+# OMES will not grant the Terraform process projectIamAdmin or
+# serviceAccountAdmin, and cannot federate a personal GitHub account into
+# their projects. So identities, project-level IAM and API enablement are
+# created ONCE, by hand, with an account that does hold those roles; and
+# every run after that is resources only.
+#
+# These four targets are that split. `make up ENV=dev` is the whole
+# unprivileged half.
+
+# Mirror this repository into the project.
+#
+# Cloning from GitHub is the normal way in; this covers whoever has GCP access
+# but cannot clone. docs/09-gcloud-deploy.md has the one-line fetch.
+#
+# .git is INCLUDED on purpose: without it `git rev-parse --short HEAD` has no
+# answer, so `make build` tags the image "untracked" and `make which-image`
+# can no longer tell you which commit a job is running.
+#
+# .env is EXCLUDED on purpose, and the check below is not a formality: it
+# holds the Snowflake password, and a bucket is a much easier thing to read
+# than a laptop.
+source-push: auth-check ## Mirror this repo to gs://$(SOURCE_BUCKET) for anyone who cannot clone from GitHub
+	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@gcloud storage buckets describe gs://$(SOURCE_BUCKET) --project $(PROJECT) >/dev/null 2>&1 || { \
+	  echo ""; \
+	  echo "  gs://$(SOURCE_BUCKET) does not exist."; \
+	  echo "  It is created by the one-time privileged step:"; \
+	  echo ""; \
+	  echo "    make gcloud-admin ENV=$(ENV)"; \
+	  echo ""; exit 1; \
+	}
+	@sha=$$(git rev-parse --short HEAD 2>/dev/null || echo untracked); \
+	  tmp=$$(mktemp -d); tarball="$$tmp/owc-okwire-pipeline-$$sha.tar.gz"; \
+	  tar czf "$$tarball" \
+	    --exclude='./.venv' --exclude='./.terraform' --exclude='*/.terraform' \
+	    --exclude='./.mypy_cache' --exclude='./.pytest_cache' --exclude='./.ruff_cache' \
+	    --exclude='./exports' --exclude='./.owcdata-local' \
+	    --exclude='./.env' --exclude='*.tfstate' --exclude='*.tfstate.backup' \
+	    -C . . ; \
+	  if tar tzf "$$tarball" | grep -qE '(^|/)\.env$$'; then \
+	    echo "REFUSING: .env is in the tarball — it holds the Snowflake password." >&2; \
+	    rm -rf "$$tmp"; exit 1; \
+	  fi; \
+	  files=$$(tar tzf "$$tarball" | wc -l | tr -d ' '); \
+	  size=$$(du -h "$$tarball" | awk '{print $$1}'); \
+	  echo ">> $$files files, $$size, at commit $$sha"; \
+	  gcloud storage cp "$$tarball" gs://$(SOURCE_BUCKET)/ --project $(PROJECT); \
+	  gcloud storage cp "$$tarball" gs://$(SOURCE_BUCKET)/latest.tar.gz --project $(PROJECT); \
+	  rm -rf "$$tmp"; \
+	  echo ""; \
+	  echo ">> mirrored. To fetch it without cloning from GitHub:"; \
+	  echo ""; \
+	  echo "     mkdir -p ~/owc && cd ~/owc \\"; \
+	  echo "       && gcloud storage cat gs://$(SOURCE_BUCKET)/latest.tar.gz | tar xz"; \
+	  echo ""
+
+gcloud-admin-dry-run: ## Print every privileged command the one-time setup would run, and change nothing
+	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	infra/gcloud/01-admin-identities.sh $(PROJECT) --prefix $(NAME_PREFIX) \
+	  --principal $(TF_PRINCIPAL) --dry-run
+
+gcloud-admin: auth-check ## ONE TIME, PRIVILEGED: create the identities, project IAM and APIs
+	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	infra/gcloud/01-admin-identities.sh $(PROJECT) --prefix $(NAME_PREFIX) \
+	  --principal $(TF_PRINCIPAL)
+
+# The replacement for `deployer-check` on this path.
+#
+# Same failure it always caught, one layer down: an apply that works as you
+# says nothing about an apply that runs with the reduced role set. The
+# difference is that it now also asserts the roles that must be ABSENT, which
+# is the claim OMES actually asked us to make.
+iam-check: auth-check ## Verify the one-time setup landed and Terraform's principal is correctly limited
+	@test -n "$(PROJECT)"     || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@test -n "$(NAME_PREFIX)" || { echo "could not read name_prefix from $(TFVARS)" >&2; exit 1; }
+	infra/gcloud/02-verify-admin.sh $(PROJECT) --prefix $(NAME_PREFIX) --principal $(TF_PRINCIPAL)
+
+# The OMES naming convention is spelled out in three places: the Terraform
+# modules' naming.tf, this Makefile, and infra/gcloud/names.sh. The third
+# copy exists because those scripts run before Terraform is initialised, by
+# people who may not have Terraform at all — but a copy that can drift is a
+# copy that will.
+names-check: ## Verify infra/gcloud/names.sh agrees with the Terraform naming convention
+	@tf=$$(grep -oE 'sa_[a-z]+ *= *"\$$\{local\.abbrev\.sa\}-\$$\{var\.name_prefix\}-[a-z]+-1"' \
+	    infra/terraform/modules/platform/naming.tf \
+	  | sed -E 's/.*-\$$\{var\.name_prefix\}-([a-z]+)-1"/\1/' | sort -u); \
+	  sh=$$(PROJECT=x PREFIX=y bash -c 'source infra/gcloud/names.sh; for e in "$${ALL_SAS[@]}"; do echo "$${e}"; done' \
+	  | sed -E 's/^sa-y-([a-z]+)-1@.*/\1/' | sort -u); \
+	  if [ "$$tf" = "$$sh" ]; then \
+	    echo ">> names-check OK: $$(echo $$tf | wc -w | tr -d ' ') service account names agree"; \
+	  else \
+	    echo ""; \
+	    echo "  infra/gcloud/names.sh and modules/platform/naming.tf disagree."; \
+	    echo ""; \
+	    diff <(echo "$$tf") <(echo "$$sh") | sed 's/^/    /'; \
+	    echo ""; \
+	    echo "  < only in naming.tf (Terraform)   > only in names.sh (gcloud)"; \
+	    echo ""; exit 1; \
+	  fi
+
+smoke: auth-check ## One real end-to-end run of each pipeline, then show the manifest
+	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@echo ">> lightcast / dim_area  (78 rows; unlimited, so it really publishes)"
+	gcloud run jobs execute $(LIGHTCAST_JOB) --region $(REGION) --project $(PROJECT) \
+	  --args="run,lightcast,--dataset,dim_area" --tasks=1 --wait
+	@echo ""
+	@echo ">> enrollment"
+	gcloud run jobs execute $(ENROLLMENT_JOB) --region $(REGION) --project $(PROJECT) --wait
+	@echo ""
+	@echo ">> run manifest"
+	@bq query --project_id=$(PROJECT) --use_legacy_sql=false --format=pretty \
+	  'SELECT pipeline, dataset, status, row_count, ROUND(duration_seconds,1) AS secs \
+	   FROM `owc_ops.pipeline_runs` ORDER BY started_at DESC LIMIT 10'
+
+# The whole unprivileged half, in order, from a fresh clone.
+#
+# Stops at the Snowflake password rather than prompting for it: the value must
+# not reach a shell history, a Makefile, or Terraform state. Re-run `make up`
+# after storing it and everything before that point is a no-op.
+up: ## Stand $(ENV) up end to end, after gcloud-admin has run once
+	@$(MAKE) --no-print-directory iam-check ENV=$(ENV)
+	@echo ""
+	@$(MAKE) --no-print-directory tf-reinit ENV=$(ENV)
+	@echo ""
+	@$(MAKE) --no-print-directory tf-bootstrap ENV=$(ENV)
+	@echo ""
+	@versions=$$(gcloud secrets versions list $(SECRET_NAME) --project $(PROJECT) \
+	    --filter='state:ENABLED' --format='value(name)' 2>/dev/null | wc -l | tr -d ' '); \
+	  if [ "$$versions" = "0" ]; then \
+	    echo ""; \
+	    echo "  Stopping here: $(SECRET_NAME) has no version yet."; \
+	    echo ""; \
+	    echo "  The lightcast job reads SNOWFLAKE_PASSWORD from versions/latest at"; \
+	    echo "  CREATION time, so the apply below cannot succeed without one."; \
+	    echo "  Store it, then run 'make up ENV=$(ENV)' AGAIN — everything above"; \
+	    echo "  this point is a no-op the second time:"; \
+	    echo ""; \
+	    echo "    printf '%s' 'THE_PASSWORD' | \\"; \
+	    echo "      gcloud secrets versions add $(SECRET_NAME) --data-file=- --project $(PROJECT)"; \
+	    echo ""; exit 1; \
+	  fi
+	@$(MAKE) --no-print-directory build ENV=$(ENV)
+	@image=$$($(MAKE) -s --no-print-directory image-digest ENV=$(ENV)) && \
+	  $(MAKE) --no-print-directory tf-apply ENV=$(ENV) TF_ARGS="-var=image_digest=$$image"
+	@$(MAKE) --no-print-directory set-image ENV=$(ENV)
+	@echo ""
+	@$(MAKE) --no-print-directory verify-separation ENV=$(ENV)
+	@echo ""
+	@echo ">> $(ENV) is up. Prove it end to end:  make smoke ENV=$(ENV)"
 
 tf-plan: ## terraform plan for $(ENV). Add TF_ARGS='-var=image_digest=...'
 	cd $(TF_DIR) && terraform plan $(TF_ARGS)
