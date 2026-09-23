@@ -64,21 +64,38 @@ chmod +x "$BIN_DIR/terraform"
 echo ">> installed $BIN_DIR/terraform"
 
 # Being on PATH is the whole point; a binary in a directory nothing searches
-# is the same as not installing it.
-case ":$PATH:" in
-  *":$BIN_DIR:"*)
-    echo ">> $BIN_DIR is already on PATH"
-    "$BIN_DIR/terraform" version | head -1
-    ;;
-  *)
-    echo ""
-    echo "  $BIN_DIR is NOT on your PATH. Add it for this session:"
-    echo ""
-    echo "    export PATH=\"$BIN_DIR:\$PATH\""
-    echo ""
-    echo "  and for future ones:"
-    echo ""
-    echo "    echo 'export PATH=\"$BIN_DIR:\$PATH\"' >> ~/.bashrc"
-    echo ""
-    ;;
-esac
+# is the same as not installing it, and "now go edit your shell config" is a
+# step that has cost a round trip every time it has been printed.
+#
+# Debian's ~/.profile does add $HOME/bin — but only if it exists AT LOGIN.
+# We just created it, so this session will not have picked it up, and in
+# Cloud Shell a session is cheap to be in the middle of. So make it work
+# now and make it stick, rather than describing how.
+#
+# Set SKIP_PATH_SETUP=1 to manage your own shell config.
+LINE="export PATH=\"$BIN_DIR:\$PATH\""
+RC="${RC_FILE:-$HOME/.bashrc}"
+
+if [ -n "${SKIP_PATH_SETUP:-}" ]; then
+  echo ""
+  echo "  SKIP_PATH_SETUP is set. Add this yourself:"
+  echo "    $LINE"
+  echo ""
+elif case ":$PATH:" in *":$BIN_DIR:"*) true ;; *) false ;; esac; then
+  echo ">> $BIN_DIR is already on PATH"
+  "$BIN_DIR/terraform" version | head -1
+else
+  if [ -f "$RC" ] && grep -qF "$BIN_DIR" "$RC"; then
+    echo ">> $RC already references $BIN_DIR"
+  else
+    printf '\n# added by owc install-terraform\n%s\n' "$LINE" >> "$RC"
+    echo ">> added $BIN_DIR to PATH in $RC (for future sessions)"
+  fi
+  echo ""
+  echo "  This shell started before that, so it needs the export once."
+  echo "  Copy this line, or just open a new Cloud Shell tab:"
+  echo ""
+  echo "    $LINE"
+  echo ""
+  "$BIN_DIR/terraform" version | head -1
+fi

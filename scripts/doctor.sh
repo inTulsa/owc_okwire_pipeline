@@ -66,6 +66,16 @@ else
   bad bq     "ships with the gcloud SDK"
 fi
 
+# A real terraform sitting in ~/bin that this shell cannot see is a
+# different problem from no terraform, and telling someone to install it
+# again does not fix it. Check before reporting.
+installed_elsewhere() {
+  [ -x "$HOME/bin/terraform" ] && ! command -v terraform >/dev/null 2>&1 && return 0
+  [ -x "$HOME/bin/terraform" ] && [ "$(command -v terraform)" != "$HOME/bin/terraform" ] \
+    && "$HOME/bin/terraform" version >/dev/null 2>&1 && return 0
+  return 1
+}
+
 # Tolerant on purpose. A bare json.load() fails on anything terraform prints
 # before the JSON — an upgrade notice, a warning — and this then reported
 # "version not parseable" and silently stopped checking the >= 1.9 floor.
@@ -93,6 +103,8 @@ if v=$(tf_version) && [ -n "$v" ]; then
   else
     bad terraform "$v — need >= 1.9 (versions.tf). Fix: make install-terraform"
   fi
+elif installed_elsewhere; then
+  bad terraform "installed at \$HOME/bin/terraform but this shell cannot see it. Run: export PATH=\"\$HOME/bin:\$PATH\"  (or open a new tab)"
 elif command -v terraform >/dev/null; then
   bad terraform "on PATH but reports no version — in Cloud Shell that is the install stub, not terraform. Fix: make install-terraform"
 else

@@ -41,6 +41,16 @@ print(json.loads(raw[i:])["terraform_version"])
     | sed -n 's/^Terraform v\{0,1\}\([0-9][0-9.]*\).*/\1/p' | head -1 | grep .
 }
 
+# A real terraform sitting in ~/bin that this shell cannot see is a
+# different problem from no terraform, and telling someone to install it
+# again does not fix it. Check before reporting.
+installed_elsewhere() {
+  [ -x "$HOME/bin/terraform" ] && ! command -v terraform >/dev/null 2>&1 && return 0
+  [ -x "$HOME/bin/terraform" ] && [ "$(command -v terraform)" != "$HOME/bin/terraform" ] \
+    && "$HOME/bin/terraform" version >/dev/null 2>&1 && return 0
+  return 1
+}
+
 ver_ge() {
   [ "$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" = "$1" ]
 }
@@ -54,6 +64,24 @@ if v=$(tf_version) && [ -n "$v" ]; then
     echo "terraform $v is too old — this repo needs >= $MIN (see versions.tf)."
     echo ""
     echo "  make install-terraform"
+    echo ""
+  } >&2
+  exit 1
+fi
+
+if installed_elsewhere; then
+  {
+    echo ""
+    echo "terraform is installed at \$HOME/bin/terraform, but this shell's PATH"
+    echo "does not include it — so terraform commands here run the Cloud Shell"
+    echo "stub instead, or nothing at all."
+    echo ""
+    echo "Fix this shell:"
+    echo ""
+    echo "    export PATH=\"\$HOME/bin:\$PATH\""
+    echo ""
+    echo "New Cloud Shell tabs already have it — install-terraform added it to"
+    echo "~/.bashrc. Nothing was changed. Re-run this command afterwards."
     echo ""
   } >&2
   exit 1

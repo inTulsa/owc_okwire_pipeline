@@ -100,8 +100,12 @@ it under `/usr`, where it is gone next session:
 make install-terraform
 ```
 
-Downloads the pinned version, verifies its published SHA256, and puts it in
-`~/bin`. Re-run `make doctor` afterwards; it must say `ok terraform`.
+Downloads the pinned version, verifies its published SHA256, puts it in
+`~/bin`, and adds that to `PATH` in `~/.bashrc` so later sessions have it.
+
+**The shell you are in started before that**, so it needs the export once —
+the installer prints the exact line, or just open a new Cloud Shell tab.
+Then re-run `make doctor`; it must say `ok terraform`.
 
 **Do not skip this on a MISSING terraform line.** The stub can exit zero, so
 `terraform init && terraform apply` appears to succeed while creating
