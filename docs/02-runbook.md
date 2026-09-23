@@ -1267,6 +1267,32 @@ If that 404s, nobody has run `make source-push` in this project.
 `gcloud storage ls gs://gcs-$PREFIX-source-1/` lists every published revision,
 versioned by short SHA, so an older one is always available.
 
+### `NOT_FOUND: Secret [...] not found` when storing the Snowflake password
+
+The secret container was never created, because `terraform apply` never ran —
+even though `make tf-bootstrap` printed
+
+```text
+>> Artifact Registry and the secret container exist, and the build
+   identity can push to the registry.
+```
+
+Cloud Shell does not ship terraform. It ships a stub that prints apt install
+instructions, and that stub can exit **zero**, so
+`terraform init && terraform apply` looks like it succeeded while creating
+nothing. The success line above is make's, not terraform's.
+
+```bash
+make doctor                  # will now say MISSING terraform
+make install-terraform
+make up ENV=$ENV             # everything is idempotent; re-run from the top
+```
+
+Every `tf-*` target runs `scripts/require-terraform.sh` first, so this cannot
+recur silently — "on PATH" is not the test, "reports a version" is. The
+guard exists because the first symptom of this was a Secret Manager error
+several steps downstream, which points at the wrong component entirely.
+
 ### `make build` tags the image `untracked`
 
 The code arrived without `.git`, so `git rev-parse --short HEAD` has no

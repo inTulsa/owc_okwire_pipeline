@@ -77,7 +77,8 @@ endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check auth-check doctor \
         diff-enrollment derive-scrape derive-check lock lock-check docs-check base-digest build deploy set-image which-image image-digest tf-init tf-reinit tf-bootstrap preflight wif-check deployer-check verify-separation env-exports tf-output gh-vars tf-plan tf-apply tf-fmt tf-validate clean \
-        gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push
+        gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push \
+        tf-check install-terraform
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -232,7 +233,20 @@ image-digest: auth-check ## Print just the digest-pinned image reference (script
 	  echo "$(IMAGE_REPO)@$$digest"
 
 # -- terraform ---------------------------------------------------------------
-tf-init: ## terraform init for $(ENV)
+# Every terraform target depends on this.
+#
+# Cloud Shell does not ship terraform — it ships a stub that prints install
+# instructions and can exit ZERO. `terraform init && terraform apply` then
+# "succeeds" having created nothing, make prints its success message, and the
+# first symptom is a NOT_FOUND from Secret Manager several steps later.
+# "On PATH" is not the test; "reports a version" is.
+tf-check: ## Verify terraform is real and new enough
+	@scripts/require-terraform.sh
+
+install-terraform: ## Install terraform into ~/bin, where a Cloud Shell session keeps it
+	@scripts/install-terraform.sh
+
+tf-init: tf-check ## terraform init for $(ENV)
 	cd $(TF_DIR) && terraform init
 
 # Re-point a working copy at a different project's state bucket.
@@ -249,7 +263,7 @@ tf-init: ## terraform init for $(ENV)
 # state is left untouched where it is.
 #
 # A fresh clone never needs this — there is no cache to invalidate.
-tf-reinit: ## Re-point $(ENV) at the bucket in its backend.tf (after changing projects)
+tf-reinit: tf-check ## Re-point $(ENV) at the bucket in its backend.tf (after changing projects)
 	@echo ">> re-pointing $(ENV) at $$(awk -F'"' '/bucket/{print $$2}' $(TF_DIR)/backend.tf)"
 	cd $(TF_DIR) && terraform init -reconfigure
 	@echo ""
@@ -303,7 +317,7 @@ tf-reinit: ## Re-point $(ENV) at the bucket in its backend.tf (after changing pr
 # The placeholder digest satisfies the pipeline module's "must be a digest"
 # validation, which Terraform evaluates even for resources -target excludes.
 # No Cloud Run job is created by this step.
-tf-bootstrap: ## First deploy only: create Artifact Registry + the secret container
+tf-bootstrap: tf-check ## First deploy only: create Artifact Registry + the secret container
 	cd $(TF_DIR) && terraform init && terraform apply \
 	  -target=module.platform.google_artifact_registry_repository.images \
 	  -target=module.platform.google_secret_manager_secret.snowflake_password \
@@ -364,7 +378,7 @@ base-digest: ## Print the current digest for the Dockerfile's base image tag
 tf-fmt: ## terraform fmt across all modules and envs
 	terraform fmt -recursive infra/terraform
 
-tf-validate: ## terraform validate for $(ENV)
+tf-validate: tf-check ## terraform validate for $(ENV)
 	cd $(TF_DIR) && terraform validate
 
 # The lightcast Cloud Run job mounts SNOWFLAKE_PASSWORD from
@@ -732,10 +746,10 @@ up: ## Stand $(ENV) up end to end, after gcloud-admin has run once
 	@echo ""
 	@echo ">> $(ENV) is up. Prove it end to end:  make smoke ENV=$(ENV)"
 
-tf-plan: ## terraform plan for $(ENV). Add TF_ARGS='-var=image_digest=...'
+tf-plan: tf-check ## terraform plan for $(ENV). Add TF_ARGS='-var=image_digest=...'
 	cd $(TF_DIR) && terraform plan $(TF_ARGS)
 
-tf-apply: preflight ## terraform apply for $(ENV). Add TF_ARGS='-var=image_digest=...'
+tf-apply: tf-check preflight ## terraform apply for $(ENV). Add TF_ARGS='-var=image_digest=...'
 	cd $(TF_DIR) && terraform apply $(TF_ARGS)
 
 clean: ## Remove caches and local pipeline output

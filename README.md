@@ -14,8 +14,7 @@ live in [`pipelines.yml`](pipelines.yml).
 
 ## Quick start
 
-**Deploying or operating an environment** — from Google Cloud Shell, which
-needs nothing installed:
+**Deploying or operating an environment** — from Google Cloud Shell:
 
 ```bash
 # 1. get the code (or upload a tarball — see the doc)
@@ -26,7 +25,8 @@ eval "$(make -s env-exports ENV=dev)"
 gcloud auth application-default login
 gcloud auth application-default set-quota-project $PROJECT
 
-make doctor                     # 3. green light before anything is created
+make install-terraform          # 3. Cloud Shell ships a stub, not terraform
+make doctor                     #    green light before anything is created
 
 make gcloud-admin ENV=dev       # 4. ONE TIME, privileged: identities + project IAM
 make source-push  ENV=dev       #    mirror the repo into the project
