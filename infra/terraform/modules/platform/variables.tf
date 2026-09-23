@@ -162,3 +162,26 @@ variable "freshness_check_enabled" {
   EOT
   default     = true
 }
+
+variable "secret_replica_locations" {
+  type        = list(string)
+  description = <<-EOT
+    Regions to replicate the Snowflake secret into. Empty means `[var.region]`.
+
+    Exists because `replication { auto {} }` puts a secret in `global`, and an
+    organization with `constraints/gcp.resourceLocations` rejects that:
+
+      Error 400: Constraint constraints/gcp.resourceLocations violated
+      attempting to create a secret in [global]
+
+    Naming regions explicitly satisfies the policy. One replica is enough —
+    the only reader is a Cloud Run job in `region` — but add a second if your
+    policy permits it and you want the redundancy.
+
+    Replication is fixed at creation. Changing this on an existing secret
+    forces replacement, which destroys its versions, so the module ignores
+    changes to it. To actually move a secret, delete and recreate it and
+    store the password again.
+  EOT
+  default     = []
+}
