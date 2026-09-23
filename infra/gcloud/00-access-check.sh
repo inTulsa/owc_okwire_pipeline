@@ -128,6 +128,27 @@ for e in "${ADMIN_PERMS[@]}"; do
 done
 fi
 
+# An organization may restrict where resources can live. Finding that out
+# from a failed apply is expensive: the secret dies on `global`, and GCS and
+# BigQuery would die on a multi-region `US` if the policy is region-only.
+# Reading it up front costs one call and is usually permitted.
+head2 "Location policy"
+if pol=$(gcloud resource-manager org-policies describe \
+      constraints/gcp.resourceLocations --project "$PROJECT" --effective \
+      --format='value(listPolicy.allowedValues)' 2>&1); then
+  if [[ -z "$pol" || "$pol" == *"allValues"* ]]; then
+    printf '  \033[32mok\033[0m   %s\n' "no location restriction in effect"
+  else
+    printf '  \033[33mnote\033[0m     allowed locations: %s\n' "$(tr ',' ' ' <<<"$pol")"
+    printf '  \033[2m%s\033[0m\n' "Secret Manager cannot use 'global' here — the config pins the"
+    printf '  \033[2m%s\033[0m\n' "secret to \$REGION, which is correct for this. If GCS or BigQuery"
+    printf '  \033[2m%s\033[0m\n' "fail on location, set location = a permitted region in tfvars;"
+    printf '  \033[2m%s\033[0m\n' "they must match each other or load jobs fail."
+  fi
+else
+  printf '  \033[2mskip\033[0m     cannot read the org policy (usually fine; it may still apply)\n'
+fi
+
 head2 "What already exists"
 sa_found=0
 for email in "${ALL_SAS[@]}"; do
