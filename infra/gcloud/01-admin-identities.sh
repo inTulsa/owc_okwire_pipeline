@@ -347,6 +347,25 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+if (( DRY_RUN )); then
+  say "Dry run complete — NOTHING above was executed"
+  cat <<DRYNEXT
+
+  No project was changed. Nothing exists yet.
+
+  To actually create it, re-run without --dry-run:
+
+    make gcloud-admin ENV=<env>
+
+  Or send the commands above to whoever holds serviceAccountAdmin and
+  projectIamAdmin on $PROJECT, and have them run them.
+
+  Only then do the rest: make iam-check, make source-push, make up.
+  docs/09-gcloud-deploy.md has the order.
+DRYNEXT
+  exit 0
+fi
+
 say "Done"
 cat <<NEXT
 
