@@ -82,14 +82,21 @@ print(json.loads(raw[i:])["terraform_version"])
   terraform version 2>/dev/null | sed -n 's/^Terraform v\{0,1\}\([0-9][0-9.]*\).*/\1/p' | head -1 | grep . 
 }
 
-if v=$(tf_version); then
-  if ver_ge "$v" 1.9.0; then ok terraform "$v  (rehearsed on 1.13.4)"; else bad terraform "$v — need >= 1.9, see versions.tf"; fi
+# "On PATH" is NOT the test. Cloud Shell ships a terraform stub that prints
+# apt instructions and can exit 0; an earlier version of this check called
+# that "installed (version not parseable)" and passed it, so `make up` ran a
+# terraform that created nothing and reported success. If it will not tell
+# you its version, it is not a terraform.
+if v=$(tf_version) && [ -n "$v" ]; then
+  if ver_ge "$v" 1.9.0; then
+    ok terraform "$v  (rehearsed on 1.13.4)"
+  else
+    bad terraform "$v — need >= 1.9 (versions.tf). Fix: make install-terraform"
+  fi
 elif command -v terraform >/dev/null; then
-  ok terraform "installed (version not parseable)"
-elif (( IN_CLOUD_SHELL )); then
-  bad terraform "not on PATH — unexpected in Cloud Shell; try: sudo apt-get install -y terraform"
+  bad terraform "on PATH but reports no version — in Cloud Shell that is the install stub, not terraform. Fix: make install-terraform"
 else
-  bad terraform "not installed — https://developer.hashicorp.com/terraform/install"
+  bad terraform "not installed. Fix: make install-terraform"
 fi
 
 # Any python3. The deploy scripts use it only to parse small JSON blobs with

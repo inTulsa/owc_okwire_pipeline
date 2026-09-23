@@ -21,13 +21,20 @@ group is incomplete.
 
 ## Cloud Shell, the default
 
-Cloud Shell ships gcloud, `bq`, terraform, git, make and python3 — the whole
-Deploy group — and authenticates gcloud as the account you signed into the
-console with. There is nothing to install.
+Cloud Shell ships gcloud, `bq`, git, make and python3, and authenticates
+gcloud as the account you signed into the console with.
 
-Run `make doctor` rather than trusting that sentence: it names what is
-actually there and, for anything missing, the command that fixes it. The
-image changes over time and this document does not.
+**It does not ship terraform** — what looks like terraform is a stub that
+prints apt install instructions. One command fixes it, and it belongs in
+`$HOME` because that is the only thing a session keeps:
+
+```bash
+make install-terraform
+```
+
+Run `make doctor` rather than trusting any of this: it names what is actually
+there and, for anything missing, the command that fixes it. The image changes
+over time and this document does not.
 
 ```bash
 cd ~ && git clone https://github.com/inTulsa/owc_okwire_pipeline.git owc && cd owc
@@ -41,7 +48,9 @@ Deploy — required. This is all 'make up' needs.
 
   ok       gcloud       <version>
   ok       bq           installed
-  ok       terraform    <version>  (rehearsed on 1.13.4)
+  MISSING  terraform    on PATH but reports no version — in Cloud Shell that
+                        is the install stub, not terraform.
+                        Fix: make install-terraform
   ok       python3      <version>
   ok       git          <version>
   ok       make         <version>

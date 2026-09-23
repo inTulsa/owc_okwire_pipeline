@@ -86,6 +86,25 @@ is why it comes after step 2 and not before.
 Warnings in the **Development** group are fine: the deploy path needs no
 virtualenv, no `uv` and not Python 3.12.
 
+### Cloud Shell does not ship terraform
+
+It ships a **stub** that prints apt install instructions. Install a real one
+into `$HOME`, which is the only thing a Cloud Shell session keeps — apt puts
+it under `/usr`, where it is gone next session:
+
+```bash
+make install-terraform
+```
+
+Downloads the pinned version, verifies its published SHA256, and puts it in
+`~/bin`. Re-run `make doctor` afterwards; it must say `ok terraform`.
+
+**Do not skip this on a MISSING terraform line.** The stub can exit zero, so
+`terraform init && terraform apply` appears to succeed while creating
+nothing — and the first symptom is a `NOT_FOUND` from Secret Manager several
+steps later, pointing at the wrong thing entirely. Every `tf-*` target now
+refuses to run rather than let that happen.
+
 ## 4. Create the identities — privileged, once per project
 
 The **only** step needing `serviceAccountAdmin` + `projectIamAdmin`. It
