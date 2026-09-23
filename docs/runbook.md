@@ -1125,6 +1125,30 @@ recur silently — "on PATH" is not the test, "reports a version" is. The
 guard exists because the first symptom of this was a Secret Manager error
 several steps downstream, which points at the wrong component entirely.
 
+### `gcloud.run.jobs.update ... could not be found` from `make deploy`
+
+```text
+ERROR: (gcloud.run.jobs.update) Job [cr-<prefix>-lightcast-1] could not be found.
+```
+
+The jobs do not exist yet. **`make deploy` does not run Terraform** — it
+builds an image and points existing jobs at it, which is the inner loop for
+an environment that is already up. Terraform creates the jobs.
+
+```bash
+make up ENV=$ENV
+```
+
+The image you already built is reused, so nothing is wasted.
+
+If `make up` itself stopped earlier — at the Snowflake password, or an org
+policy — finish that first; the jobs are created by the `tf-apply` inside it.
+No BigQuery datasets and no Cloud Run jobs in the console is the same
+symptom: `tf-apply` has not completed.
+
+Older checkouts printed `>> both jobs updated` after these errors, because
+the loop ignored gcloud's exit status. If you see that, `git pull`.
+
 ### `make build` tags the image `untracked`
 
 The code arrived without `.git`, so `git rev-parse --short HEAD` has no
