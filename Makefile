@@ -649,10 +649,15 @@ gcloud-admin: auth-check ## ONE TIME, PRIVILEGED: create the identities, project
 # says nothing about an apply that runs with the reduced role set. The
 # difference is that it now also asserts the roles that must be ABSENT, which
 # is the claim OMES actually asked us to make.
-iam-check: auth-check ## Verify the one-time setup landed and Terraform's principal is correctly limited
+# STRICT=1 turns "the principal holds more than it needs" from a warning into
+# a failure. Off by default because `make up` runs this first, and refusing to
+# deploy because someone holds too MUCH permission helps nobody — the deploy
+# would work. On for the audit you hand OMES.
+iam-check: auth-check ## Verify the one-time setup landed. STRICT=1 also fails on excess privilege.
 	@test -n "$(PROJECT)"     || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@test -n "$(NAME_PREFIX)" || { echo "could not read name_prefix from $(TFVARS)" >&2; exit 1; }
-	infra/gcloud/02-verify-admin.sh $(PROJECT) --prefix $(NAME_PREFIX) --principal $(TF_PRINCIPAL)
+	infra/gcloud/02-verify-admin.sh $(PROJECT) --prefix $(NAME_PREFIX) \
+	  --principal $(TF_PRINCIPAL) $(if $(STRICT),--strict,)
 
 # The OMES naming convention is spelled out in three places: the Terraform
 # modules' naming.tf, this Makefile, and infra/gcloud/names.sh. The third

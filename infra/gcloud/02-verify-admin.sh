@@ -18,12 +18,20 @@ set -uo pipefail
 PROJECT=""
 PREFIX=""
 PRINCIPAL=""
+# Excess privilege does not stop a deploy working; it stops the deploy
+# PROVING anything about the reduced role set. Those are different questions,
+# and conflating them meant a project whose operator happened to be owner
+# could not run `make up` at all — blocked by holding too much permission,
+# which is nonsense. Default answers "can this deploy?"; --strict answers
+# "is this principal actually minimised?", which is the audit OMES wants.
+STRICT=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --prefix)    PREFIX="${2:?}"; shift 2 ;;
     --principal) PRINCIPAL="${2:?}"; shift 2 ;;
-    -h|--help)   echo "usage: $0 <project-id> [--prefix P] [--principal MEMBER]" >&2; exit 64 ;;
+    --strict)    STRICT=1; shift ;;
+    -h|--help)   echo "usage: $0 <project-id> [--prefix P] [--principal MEMBER] [--strict]" >&2; exit 64 ;;
     *)           PROJECT="$1"; shift ;;
   esac
 done
@@ -175,24 +183,38 @@ else
   # This is the assertion the whole split exists to make true. A pass here is
   # the answer to "projectIamAdmin and serviceAccountAdmin is too much for
   # terraform process".
+  excess=0
   for role in "${TF_PRINCIPAL_FORBIDDEN_ROLES[@]}"; do
     if has_binding "$PRINCIPAL" "$role"; then
-      bad "STILL HAS $role"
-      bad "  gcloud projects remove-iam-policy-binding $PROJECT \\"
-      bad "    --member $PRINCIPAL --role $role"
+      excess=1
+      # bad under --strict, warn otherwise. The deploy works either way.
+      report=$( (( STRICT )) && echo bad || echo warn )
+      $report "STILL HAS $role"
+      $report "  gcloud projects remove-iam-policy-binding $PROJECT \\"
+      $report "    --member $PRINCIPAL --role $role"
       if [[ "$role" == "roles/owner" ]]; then
         # Removing your own owner on a project you created can leave nobody
         # able to grant IAM on it. Printing the command without this warning
         # is how someone locks themselves out while following a checklist.
-        bad "  ^ CAREFUL if this is a project you created and you are its only"
-        bad "    owner: removing it may leave nobody able to grant IAM here."
-        bad "    Run 01-admin-identities.sh FIRST, confirm another principal"
-        bad "    can administer the project, and only then drop owner."
+        $report "  ^ CAREFUL if this is a project you created and you are its"
+        $report "    only owner: removing it may leave nobody able to grant IAM"
+        $report "    here. Run 01-admin-identities.sh FIRST, confirm another"
+        $report "    principal can administer the project, then drop owner."
       fi
     else
       pass "does not have $role"
     fi
   done
+  if (( excess )); then
+    if (( STRICT )); then
+      printf '  \033[2m%s\033[0m\n' "--strict: excess privilege is a failure here."
+    else
+      printf '  \033[2m%s\033[0m\n' "This does NOT block a deploy — the roles above are more than"
+      printf '  \033[2m%s\033[0m\n' "Terraform needs, not less. It does mean this run proves nothing"
+      printf '  \033[2m%s\033[0m\n' "about the reduced role set, because you would succeed regardless."
+      printf '  \033[2m%s\033[0m\n' "Re-run with STRICT=1 to make it a failure."
+    fi
+  fi
 
   head2 "Terraform principal $PRINCIPAL — actAs on the identities it attaches"
   for target in "${ATTACHED_SAS[@]}"; do
@@ -344,6 +366,11 @@ echo ""
 if (( fail )); then
   echo "Not ready. Fix the PROBLEM lines above, then re-run."
   exit 1
+fi
+if (( ${excess:-0} )); then
+  echo "Ready to deploy, with more privilege than the design calls for."
+  echo "See the warn lines above; 'make iam-check STRICT=1' treats them as failures."
+  exit 0
 fi
 if (( REDUCED )); then
   echo "Ready to deploy. The IAM role audit was skipped — run this as an admin"

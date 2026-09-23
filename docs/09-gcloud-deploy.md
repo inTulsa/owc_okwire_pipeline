@@ -108,9 +108,12 @@ make source-push  ENV=dev     # mirror the repo into the project
 make iam-check    ENV=dev     # prove it landed
 ```
 
-`iam-check` is the artifact to send back to OMES: it confirms the six
-identities exist, the Terraform principal has all ten roles it needs, and that
-it holds **none** of the six it must not.
+`iam-check` confirms the six identities exist, that the Terraform principal
+has all ten roles it needs, and that it holds none of the six it must not.
+The last of those is a warning by default and a failure under `STRICT=1` —
+excess privilege does not stop a deploy working, it stops the deploy proving
+anything. In an OMES project this runs in REDUCED mode; see
+[Running this in an OMES project](#omes).
 
 The Terraform principal defaults to your own account. When OMES names theirs,
 re-run — idempotent, nothing else changes:
@@ -166,6 +169,80 @@ One real run of each pipeline — `dim_area` is 78 rows, unlimited, so it
 actually publishes — then the run manifest. Look for `status = success`.
 
 ---
+
+## Running this in an OMES project {#omes}
+
+The six steps are the same. What differs is **who runs step 4**, and that
+changes what the other steps look like.
+
+### Step 4 is theirs, not yours
+
+You will not hold `serviceAccountAdmin` or `projectIamAdmin` on `owc-dpar-d`
+or `owc-dpar-p`. So:
+
+```bash
+make gcloud-admin-dry-run ENV=dev
+```
+
+Send that output to OMES. It is every command, shell-quoted, with nothing
+inferred — they can read it, run it, or run the script themselves. Ask them
+to name you as the Terraform principal:
+
+```bash
+./infra/gcloud/01-admin-identities.sh owc-dpar-d   --principal user:gabriel.torianyk@tulsaforyou.com
+```
+
+If OMES is hosting Terraform state — *"we can hook up your instance with the
+state"* — they add `--no-state-bucket`, tell you the bucket, and you set it in
+**both** `terraform.tfvars` and `backend.tf` before step 5.
+
+### `iam-check` will run in REDUCED mode there, and that is correct
+
+None of the ten roles you get includes `resourcemanager.projects.getIamPolicy`.
+So in an OMES project the check cannot read the project IAM policy, says so,
+and skips the role assertions:
+
+```text
+Running in REDUCED mode
+  This account cannot read the project IAM policy, so the role
+  assertions below are skipped. That is the expected state for the
+  Terraform principal, and it is its own proof: an account that cannot
+  call getIamPolicy does not hold roles/resourcemanager.projectIamAdmin.
+```
+
+Everything a deploy depends on is still checked — the six identities, the
+buckets, the APIs, ADC, `actAs`. The full audit is something **OMES** runs,
+with their own account:
+
+```bash
+make iam-check ENV=dev STRICT=1
+```
+
+That is the report to ask them for, and the one that answers Stephen's
+objection on their own terms rather than yours.
+
+### What a rehearsal on your own project cannot prove
+
+On a project you created you are `roles/owner`, so every permission check
+succeeds whether or not the reduced role set is sufficient. `iam-check` warns
+about this rather than failing — excess privilege does not stop a deploy, it
+stops the deploy being *evidence*:
+
+```text
+warn     STILL HAS roles/owner
+         This does NOT block a deploy — the roles above are more than
+         Terraform needs, not less. It does mean this run proves nothing
+         about the reduced role set, because you would succeed regardless.
+```
+
+Everything else rehearses faithfully: the script's output, the resource
+graph, the ordering, the two-pass `make up`, the smoke test. The one
+unproven claim — "ten roles are enough" — is proven the first time it runs
+in an OMES project, where you genuinely do not have more.
+
+To close that gap before handing over, have OMES run step 4 on a project
+where you are not owner, or drop owner on the test project *after* step 4 —
+carefully, and only if someone else can still administer it.
 
 ## Then prod
 
