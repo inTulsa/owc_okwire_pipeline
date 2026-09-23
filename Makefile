@@ -83,7 +83,7 @@ endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check auth-check doctor \
         diff-enrollment derive-scrape derive-check lock lock-check docs-check shell-check base-digest build deploy set-image which-image image-digest tf-init tf-bootstrap preflight verify-separation env-exports tf-output tf-plan tf-apply tf-fmt tf-validate clean \
-        access-check omes-request omes-script gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push \
+        access-check prep omes-request omes-script gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push \
         tf-check install-terraform
 
 help: ## Show this help
@@ -512,13 +512,26 @@ omes-request: ## What to ask your project admin for, scoped to what is missing
 	@infra/gcloud/03-admin-request.sh $(PROJECT) --prefix $(NAME_PREFIX) \
 	  --principal $(TF_PRINCIPAL)
 
+# Everything the deploy account can already do: enabling APIs, provisioning
+# the Data Transfer agent, creating the two buckets. Doing this yourself
+# before the call keeps it out of what you have to ask an admin for, and
+# leaves their file containing nothing but identity work.
+prep: auth-check ## Do the setup that needs no elevated rights (APIs, buckets)
+	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@tmp=$$(mktemp); \
+	  infra/gcloud/04-standalone.sh $(PROJECT) --prefix $(NAME_PREFIX) \
+	    --principal $(TF_PRINCIPAL) --location $(call tfvar,location) \
+	    --part operator > "$$tmp"; \
+	  gcloud config set project $(PROJECT) >/dev/null 2>&1; \
+	  bash "$$tmp"; rc=$$?; rm -f "$$tmp"; exit $$rc
+
 # A single file to hand a project admin who will not grant you the roles and
-# will not clone your repo. Every command written out, no dependencies but
-# gcloud, readable start to finish before they run it.
+# will not clone your repo. Identity work only — the parts you can do
+# yourself are in `make prep`, so nothing in their file needs explaining.
 omes-script: ## Write a standalone setup script for your project admin to run
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@infra/gcloud/04-standalone.sh $(PROJECT) --prefix $(NAME_PREFIX) \
-	  --principal $(TF_PRINCIPAL) --location $(call tfvar,location)
+	  --principal $(TF_PRINCIPAL) --location $(call tfvar,location) --part admin
 
 gcloud-admin-dry-run: ## Print every privileged command the one-time setup would run, and change nothing
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }

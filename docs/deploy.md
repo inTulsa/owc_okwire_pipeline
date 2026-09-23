@@ -133,6 +133,18 @@ the bottom tells you which of the two paths below you are on.
 The normal case, and the only step anyone else touches. Pick whichever the
 admin will actually agree to — all three produce the same result.
 
+First, do your own half. It needs no elevated rights and it keeps their
+file down to identity work alone:
+
+```bash
+make prep ENV=dev
+```
+
+Three steps: the 16 API enables, the BigQuery Data Transfer agent, and the
+two GCS buckets. All things your account can already do, so there is no
+reason for them to be in a request to somebody else — and a bucket creation
+sitting in the middle of an IAM request is a question, which costs days.
+
 ### They run one file (no repo, no roles granted to you)
 
 The usual answer when an admin will not grant you `serviceAccountAdmin`.
@@ -176,11 +188,12 @@ You cannot run it yourself — it fails at the fourth step with a 403 on
 split exists to avoid needing. It stops there rather than half-finishing,
 and the steps before it are idempotent, so a mistaken run costs nothing.
 
-It refuses to run against the wrong project, skips anything that already
-exists, and can be re-run safely. It creates the six service accounts, their
-project roles, the two buckets, the API enables, and the `actAs` grants that
-let **you** attach those identities — without granting you anything that can
-administer IAM.
+Three steps, and nothing but identities: create the six service accounts,
+grant them their project roles, and grant **you** `actAs` on the five the
+deploy attaches. It refuses to run against the wrong project, skips anything
+that already exists, and is safe to re-run.
+
+Nothing in it grants you anything that can administer IAM.
 
 ### They grant you the two roles for the call
 
