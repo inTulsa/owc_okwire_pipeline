@@ -19,6 +19,11 @@ source "$(dirname "${BASH_SOURCE[0]}")/names.sh"
 head2() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 ok()   { printf '  \033[32mok\033[0m    %s\n' "$1"; }
 bad()  { printf '  \033[31mNO\033[0m    %s\n' "$1"; }
+# Distinct from NO on purpose. Most of what this script inspects needs
+# permissions the deploy account does not have, and "cannot see it" is not
+# evidence of absence — reporting it as one is how an admin gets sent to fix
+# something that was never broken.
+huh()  { printf '  \033[33m????\033[0m  %s\n' "$1"; }
 note() { printf '        %s\n' "$1"; }
 
 BINDING_MATCHER='
@@ -84,15 +89,25 @@ fi
 # roles/cloudscheduler.serviceAgent grant, every fire is a 403 no matter how
 # correct the run.invoker binding is.
 head2 "3. Cloud Scheduler service agent"
-if gcloud iam service-accounts describe "$SCHED_AGENT" --project "$PROJECT" >/dev/null 2>&1; then
+if out=$(gcloud iam service-accounts describe "$SCHED_AGENT" --project "$PROJECT" 2>&1); then
   ok "exists: $SCHED_AGENT"
 else
-  # Absent is not proof of fault — agents are often not listable — but it is
-  # the first thing worth forcing.
-  bad "not visible: $SCHED_AGENT"
-  note "Force it into existence (needs serviceusage rights):"
-  note "  gcloud beta services identity create \\"
-  note "    --service=cloudscheduler.googleapis.com --project $PROJECT"
+  # Google-managed service agents are frequently not describable by a
+  # project member whether or not they exist. Only a NOT_FOUND says anything.
+  case "$out" in
+    *NOT_FOUND*|*"not found"*|*"Unknown service account"*)
+      bad "does not exist: $SCHED_AGENT"
+      note "Force it (the deploy account has the serviceusage rights):"
+      note "  gcloud beta services identity create \\"
+      note "    --service=cloudscheduler.googleapis.com --project $PROJECT" ;;
+    *)
+      huh "cannot tell whether $SCHED_AGENT exists"
+      note "$(tail -1 <<<"$out")"
+      note "Google-managed agents are often invisible to a project member."
+      note "This is not evidence either way, and forcing it is harmless:"
+      note "  gcloud beta services identity create \\"
+      note "    --service=cloudscheduler.googleapis.com --project $PROJECT" ;;
+  esac
 fi
 
 head2 "4. Can that agent impersonate the scheduler account?"
@@ -111,8 +126,19 @@ if pol=$(gcloud iam service-accounts get-iam-policy "$SA_SCHEDULER" \
     note "    --role roles/iam.serviceAccountTokenCreator"
   fi
 else
-  bad "cannot read the scheduler account's policy"
+  huh "inconclusive — cannot read the scheduler account's policy"
   note "$(tail -1 <<<"$pol")"
+  note ""
+  note "This needs iam.serviceAccounts.getIamPolicy, which the deploy"
+  note "account does not have. It cannot confirm whether the grant landed."
+  note ""
+  note "Ask whoever made the grant to run this and send you the output:"
+  note "  gcloud iam service-accounts get-iam-policy $SA_SCHEDULER \\"
+  note "    --project $PROJECT --format=json"
+  note ""
+  note "Or skip it — firing the scheduler is the definitive test:"
+  note "  gcloud scheduler jobs run cs-$PREFIX-lightcast-monthly-1 \\"
+  note "    --location $REGION --project $PROJECT"
 fi
 
 # --- 5. the untruncated failure --------------------------------------------
@@ -141,7 +167,7 @@ print("        %-11s %s" % ("timestamp", entry.get("timestamp", "")))
 PY
 )
 gcloud logging read \
-  "resource.type=cloud_scheduler_job AND resource.labels.project_id=$PROJECT" \
+  'resource.type="cloud_scheduler_job"' --freshness=7d \
   --project "$PROJECT" --limit 1 --format=json 2>/dev/null \
   | python3 -c "$LAST_ATTEMPT"
 echo ""

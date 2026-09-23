@@ -180,9 +180,26 @@ grant, every fire is a 403 **no matter how correct `run.invoker` is**.
 
 That is exactly what a clean `make verify-separation` and a `terraform plan`
 with no IAM in it, alongside a persistent 403, look like.
-`01-admin-identities.sh` now forces that agent into existence, the same way
-it already did for the BigQuery Data Transfer agent; a project set up before
-that may not have it.
+`01-admin-identities.sh` now forces that agent into existence and grants it
+`tokenCreator` explicitly, the same way it already did for the BigQuery Data
+Transfer agent; a project set up before that may not have either.
+
+**Checks 3 and 4 can come back `????`, and that is not a failure.** Reading a
+service account's IAM policy needs `iam.serviceAccounts.getIamPolicy`, and
+Google-managed service agents are often not describable by a project member —
+neither of which the deploy account has. When the script cannot see something
+it says so rather than reporting NO, because an inconclusive check reported as
+a failure sends an admin to fix what was never broken.
+
+When those two are inconclusive, **fire the scheduler — that is the
+definitive test**:
+
+```bash
+gcloud scheduler jobs run cs-$PREFIX-lightcast-monthly-1 --location $REGION --project $PROJECT
+```
+
+then read check 5, or Cloud Logging directly. The scheduler's own history
+shows success either way, because `jobs:run` returns an Operation.
 
 Propagation is the other common cause: resource-level IAM takes a minute or
 two, so a forced run fired straight after `tf-apply` can beat it. Retry once
