@@ -132,6 +132,7 @@ emit 'gcloud beta services identity create \'
 emit '  --service=cloudscheduler.googleapis.com --project "$PROJECT"'
 emit 'PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format="value(projectNumber)")'
 emit 'DTS_AGENT="service-${PROJECT_NUMBER}@gcp-sa-bigquerydatatransfer.iam.gserviceaccount.com"'
+emit 'SCHEDULER_AGENT="service-${PROJECT_NUMBER}@gcp-sa-cloudscheduler.iam.gserviceaccount.com"'
 emit ""
 
 next_step "Creating the two GCS buckets"
@@ -196,6 +197,15 @@ emit '# The Data Transfer agent runs a scheduled query as the freshness'
 emit '# account, so it needs to mint tokens for that one account.'
 emit "gcloud iam service-accounts add-iam-policy-binding $SA_FRESHNESS \\"
 emit '  --project "$PROJECT" --member "serviceAccount:$DTS_AGENT" \'
+emit '  --role roles/iam.serviceAccountTokenCreator --quiet >/dev/null'
+emit ""
+emit '# Cloud Scheduler impersonates the scheduler account to mint the OAuth'
+emit '# token it calls Cloud Run with. roles/cloudscheduler.serviceAgent'
+emit '# normally covers this automatically; an organization that strips'
+emit '# default grants leaves it absent, and then every scheduled run is a'
+emit '# 403 that the run.invoker binding cannot explain.'
+emit "gcloud iam service-accounts add-iam-policy-binding $SA_SCHEDULER \\"
+emit '  --project "$PROJECT" --member "serviceAccount:$SCHEDULER_AGENT" \'
 emit '  --role roles/iam.serviceAccountTokenCreator --quiet >/dev/null'
 emit ""
 
