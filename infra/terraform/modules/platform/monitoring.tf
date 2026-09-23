@@ -34,6 +34,8 @@ locals {
 # route it to the distribution list.
 # ---------------------------------------------------------------------------
 resource "google_service_account" "freshness" {
+  count = var.manage_identities ? 1 : 0
+
   account_id   = local.name.sa_freshness
   project      = var.project_id
   display_name = "OWC freshness check (${var.env})"
@@ -45,13 +47,15 @@ resource "google_bigquery_dataset_iam_member" "freshness_reader" {
   project    = var.project_id
   dataset_id = google_bigquery_dataset.ops.dataset_id
   role       = "roles/bigquery.dataViewer"
-  member     = "serviceAccount:${google_service_account.freshness.email}"
+  member     = "serviceAccount:${local.sa_email.freshness}"
 }
 
 resource "google_project_iam_member" "freshness_job_user" {
+  count = var.manage_identities ? 1 : 0
+
   project = var.project_id
   role    = "roles/bigquery.jobUser"
-  member  = "serviceAccount:${google_service_account.freshness.email}"
+  member  = "serviceAccount:${local.sa_email.freshness}"
 }
 
 # Provision the BigQuery Data Transfer Service agent.
@@ -63,6 +67,8 @@ resource "google_project_iam_member" "freshness_job_user" {
 # exist". This forces it into existence and hands back its real email, which
 # is also safer than string-building the address ourselves.
 resource "google_project_service_identity" "bigquerydatatransfer" {
+  count = var.manage_identities ? 1 : 0
+
   provider = google-beta
 
   project = var.project_id
@@ -74,9 +80,11 @@ resource "google_project_service_identity" "bigquerydatatransfer" {
 # The Data Transfer Service mints tokens for the freshness SA when it runs the
 # scheduled query, so its agent needs tokenCreator on that SA.
 resource "google_service_account_iam_member" "freshness_token_creator" {
-  service_account_id = google_service_account.freshness.name
+  count = var.manage_identities ? 1 : 0
+
+  service_account_id = "projects/${var.project_id}/serviceAccounts/${local.sa_email.freshness}"
   role               = "roles/iam.serviceAccountTokenCreator"
-  member             = google_project_service_identity.bigquerydatatransfer.member
+  member             = one(google_project_service_identity.bigquerydatatransfer[*].member)
 }
 
 data "google_project" "this" {
@@ -177,7 +185,7 @@ resource "google_bigquery_data_transfer_config" "freshness_check" {
   display_name         = "OWC pipeline freshness check (${var.env})"
   data_source_id       = "scheduled_query"
   schedule             = var.freshness_check_schedule
-  service_account_name = google_service_account.freshness.email
+  service_account_name = local.sa_email.freshness
 
   params = {
     query = local.freshness_query

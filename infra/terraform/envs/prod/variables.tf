@@ -35,7 +35,50 @@ variable "alert_emails" {
 
 variable "github_repository" {
   type        = string
-  description = "owner/repo allowed to deploy via WIF."
+  description = <<-EOT
+    owner/repo allowed to deploy via WIF. Only read when enable_wif is true;
+    the module that validates it is not instantiated otherwise.
+
+    Defaults to empty rather than being required, because requiring it would
+    make an environment that does not use GitHub Actions carry a value that
+    means nothing — and `make wif-check` would then compare it against a git
+    remote nobody deploys from.
+  EOT
+  default     = ""
+}
+
+variable "enable_wif" {
+  type        = bool
+  description = <<-EOT
+    Build the Workload Identity Federation pool, provider, and deployer
+    service account for GitHub Actions.
+
+    False in both environments today. OMES cannot federate a personal GitHub
+    account into their projects, and this module is where nearly all of the
+    config's privilege lives — the deployer holds thirteen project roles
+    including projectIamAdmin, serviceAccountAdmin and
+    workloadIdentityPoolAdmin.
+
+    Turn it on when OMES federates their own GitHub/GitLab instance. Deploying
+    by hand never used WIF at all.
+  EOT
+  default     = false
+}
+
+variable "manage_identities" {
+  type        = bool
+  description = <<-EOT
+    Passed through to the platform module. False means
+    infra/gcloud/01-admin-identities.sh created the six service accounts and
+    their project-level IAM, so this apply touches neither.
+  EOT
+  default     = false
+}
+
+variable "manage_apis" {
+  type        = bool
+  description = "Passed through to the platform module. False means the APIs were enabled by 01-admin-identities.sh."
+  default     = false
 }
 
 variable "allowed_refs" {

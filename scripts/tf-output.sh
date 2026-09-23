@@ -21,7 +21,7 @@ fail() {
     echo ""
     echo "That environment has no state — nothing has been applied to it yet."
     echo "Bootstrap it first:"
-    echo "  ./infra/bootstrap/bootstrap.sh $PROJECT"
+    echo "  ./infra/gcloud/01-admin-identities.sh $PROJECT"
     echo "  make tf-bootstrap ENV=$ENV_NAME"
     echo "  make build ENV=$ENV_NAME"
     echo "  make tf-apply ENV=$ENV_NAME TF_ARGS=\"-var=image_digest=\$(make -s image-digest ENV=$ENV_NAME)\""

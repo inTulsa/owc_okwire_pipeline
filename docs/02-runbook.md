@@ -528,7 +528,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOK" \
 # 200
 ```
 
-`./infra/bootstrap/bootstrap.sh` now runs exactly this check and fails with the
+`make iam-check` runs exactly this check and fails with the
 specific fix, so a fresh machine hits a one-line error instead of this.
 
 **Also check `core.project`.** If `gcloud config list` shows an unrelated
@@ -717,7 +717,7 @@ merely misspelled applies cleanly and then never fires.
 
 `google_project_service` needs Service Usage and Cloud Resource Manager to
 already be on — Terraform cannot enable the APIs that let it enable APIs. Run
-`./infra/bootstrap/bootstrap.sh <project>` first.
+`make gcloud-admin ENV=$ENV` first.
 
 ## The smoke test "succeeded" but there is no data in owc_marts
 
@@ -838,6 +838,16 @@ curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOK" \
 
 ## CI/CD failures
 
+> **Most of this section is dormant.** `enable_wif = false` in both
+> environments, so GitHub Actions does not deploy and nothing runs as a
+> deployer service account. Deploys run from Cloud Shell, as you — see
+> [`09-gcloud-deploy.md`](09-gcloud-deploy.md). The build entries below still
+> apply, because `make build` submits the same Cloud Build either way.
+>
+> For failures on the current path, see
+> [Cloud Shell and the reduced permission set](#cloud-shell-and-the-reduced-permission-set).
+
+
 ### CI: `The interpreter at /usr is externally managed`
 
 `uv pip install --system` targets the runner's system Python, which is PEP 668
@@ -926,6 +936,12 @@ error is usually buried; grepping `--log` for `error|denied` finds it faster.
 
 ## WIF and outputs
 
+> Everything from [GitHub Actions deploys fail to
+> authenticate](#github-actions-deploys-fail-to-authenticate-via-wif) onward
+> needs `enable_wif = true`, which neither environment sets today. The first
+> two entries apply on any path.
+
+
 ### `terraform output` says "No outputs found"
 
 You are almost certainly in the repo root. Terraform outputs live in the env
@@ -938,8 +954,13 @@ make tf-output ENV=$ENV
 Add `NAME=<output>` for a single raw value:
 
 ```bash
-make tf-output ENV=$ENV NAME=wif_attribute_condition
+make tf-output ENV=$ENV NAME=lightcast_job
 ```
+
+`wif_attribute_condition`, `workload_identity_provider` and
+`deployer_service_account` print **nothing** today: `enable_wif = false`, so
+the module producing them is not instantiated and `one(module.wif[*]...)`
+yields null. That is correct, not a missing output.
 
 ### A pasted `#` line errors in zsh
 
@@ -1093,7 +1114,7 @@ make deployer-check ENV=$ENV      # confirm, then re-run the failed workflow
 Nothing is half-applied when this happens: refresh fails before the plan, so
 the run changes nothing. Re-running after the fix is safe.
 
-**Why it never failed locally:** `make tf-apply` on your laptop runs as you,
+**Why it never failed locally:** `make tf-apply` run by hand runs as you,
 and you are project owner. Only CI runs as the deployer.
 
 #### The other shape: `lacks IAM permission "iam.serviceAccounts.actAs"`
@@ -1125,6 +1146,137 @@ adding one cannot leave the check behind.
 Note the freshness grant is **prod-only in practice**: dev sets
 `freshness_check_enabled = false`, so the resource is never created there
 and a missing grant cannot surface until prod.
+
+## Cloud Shell and the reduced permission set
+
+The failure modes created by moving identities and project IAM out of
+Terraform. All of them are permission or ordering problems, and all of them
+are answered by the same first command:
+
+```bash
+make iam-check ENV=$ENV
+```
+
+### `Error 403: ... does not have <some>.<permission> access`, during apply
+
+The Terraform principal is missing one of the ten resource-admin roles. This
+is now the *normal* shape of a permission failure: nobody runs as owner any
+more, so a missing role shows up as a 403 on one resource type rather than
+never showing up at all.
+
+`iam-check` names the exact role, because it parses the expected list from
+`infra/gcloud/names.sh` rather than repeating it:
+
+```text
+  PROBLEM  MISSING roles/cloudscheduler.admin — terraform apply will 403 on
+           the resources it covers
+```
+
+Fix by re-running the privileged step — it is idempotent, and grants only what
+is missing:
+
+```bash
+make gcloud-admin ENV=$ENV
+```
+
+If you no longer hold `projectIamAdmin` yourself, send OMES the one command
+`iam-check` printed. That is the whole point of the split: this is a
+single-line ask, not "give Terraform admin".
+
+### `Error 403: ... lacks IAM permission "iam.serviceAccounts.actAs"`
+
+Attaching a service account to a Cloud Run job, a Scheduler job, a Cloud Build
+submission or a BigQuery scheduled query requires `actAs` **on that account**,
+which is a per-account binding and invisible in the project IAM policy.
+
+This was previously masked: a human applying as owner has `actAs` on
+everything, so the gap only ever appeared in CI. With a reduced principal it
+appears immediately, which is better.
+
+`make iam-check` checks all five accounts and names the ones that fail. The
+fix is `make gcloud-admin ENV=$ENV`.
+
+### `Error 400: Service account sa-<name_prefix>-<role>-1@... does not exist`
+
+The privileged step has not run in this project, or ran with a different
+`name_prefix`. Terraform does not create these any more — it builds the
+addresses from `name_prefix` and attaches them.
+
+```bash
+make iam-check ENV=$ENV      # says which of the six are missing
+make gcloud-admin ENV=$ENV   # creates them
+```
+
+A plan cannot catch this: the emails are derived strings, not looked up. That
+is deliberate — looking them up would need `iam.serviceAccounts.get` on every
+plan, putting an IAM read back into exactly the code path this design removed.
+`iam-check` is where the check lives instead, and `make up` runs it first.
+
+### `terraform plan` wants to DESTROY the service accounts
+
+You flipped `manage_identities` to false in a project where Terraform had
+already created them, without forgetting them first. Terraform is doing what
+it was told: those resources left the configuration, so it wants them gone.
+
+**Do not apply.** Remove them from state — which forgets them, it does not
+delete them — using the exact sequence in
+[`09-gcloud-deploy.md`](09-gcloud-deploy.md#migrating).
+
+### Cloud Shell disconnected during a `terraform apply`
+
+Sessions end after about 20 minutes idle. Cloud Shell runs inside tmux, so
+reattach rather than starting again:
+
+```bash
+tmux attach
+```
+
+If the apply really did die, the state is **locked** and the next run says so,
+naming the lock ID:
+
+```text
+Error: Error acquiring the state lock
+  ID:        1743...
+  Operation: OperationTypeApply
+```
+
+Confirm nothing else is running, then release it and re-apply. A half-applied
+run re-applied is fine; two applies racing on one state file is not:
+
+```bash
+cd infra/terraform/envs/$ENV && terraform force-unlock <ID>
+```
+
+### The repo is gone from Cloud Shell
+
+`$HOME` persists between sessions but is deleted after 120 days of inactivity
+— a realistic interval for a pipeline that runs monthly. Clone it again:
+
+```bash
+cd ~ && git clone https://github.com/inTulsa/owc_okwire_pipeline.git owc
+```
+
+Without GitHub access, use the project's own mirror:
+
+```bash
+mkdir -p ~/owc && cd ~/owc \
+  && gcloud storage cat gs://gcs-$PREFIX-source-1/latest.tar.gz | tar xz
+```
+
+If that 404s, nobody has run `make source-push` in this project.
+`gcloud storage ls gs://gcs-$PREFIX-source-1/` lists every published revision,
+versioned by short SHA, so an older one is always available.
+
+### `make build` tags the image `untracked`
+
+The code arrived without `.git`, so `git rev-parse --short HEAD` has no
+answer — usually a hand-made tarball. `git clone`, and the tarball
+`make source-push` publishes, both include it.
+
+Harmless for the build itself — the image still pushes and
+`make image-digest` falls back to `:latest` — but `make which-image` can no
+longer tell you which commit a job is running, which matters during an
+incident. Re-fetch with `make source-push`'s tarball.
 
 ## Common procedures
 

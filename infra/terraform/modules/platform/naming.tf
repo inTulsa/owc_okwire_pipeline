@@ -48,3 +48,30 @@ locals {
     registry_images  = "${local.abbrev.registry}-${var.name_prefix}-images-1"
   }
 }
+
+# ---------------------------------------------------------------------------
+# Service account emails, derived rather than read off the resources.
+#
+# Every reference in this module goes through this map, so the module works
+# identically whether it CREATES the accounts (manage_identities = true) or
+# merely attaches ones that OMES created with
+# infra/gcloud/01-admin-identities.sh (manage_identities = false).
+#
+# Derived from the naming convention rather than looked up with a
+# `data "google_service_account"` block on purpose: the data source needs
+# iam.serviceAccounts.get, which none of the resource-admin roles in
+# TF_PRINCIPAL_ROLES carries. Adding a permission in order to discover a name
+# this file already knows how to build would put an IAM read back into every
+# plan — the exact thing this split removes. `make iam-check` confirms the
+# accounts exist, using the operator's own gcloud credentials.
+# ---------------------------------------------------------------------------
+locals {
+  sa_email = {
+    lightcast  = "${local.name.sa_lightcast}@${var.project_id}.iam.gserviceaccount.com"
+    enrollment = "${local.name.sa_enrollment}@${var.project_id}.iam.gserviceaccount.com"
+    scheduler  = "${local.name.sa_scheduler}@${var.project_id}.iam.gserviceaccount.com"
+    build      = "${local.name.sa_build}@${var.project_id}.iam.gserviceaccount.com"
+    powerbi    = "${local.name.sa_powerbi}@${var.project_id}.iam.gserviceaccount.com"
+    freshness  = "${local.name.sa_freshness}@${var.project_id}.iam.gserviceaccount.com"
+  }
+}

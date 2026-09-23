@@ -1,7 +1,12 @@
 # Local development
 
-Both pipelines run on a laptop, and `--target local` reproduces their original
-on-disk behavior.
+Both pipelines run outside GCP, and `--target local` reproduces their original
+on-disk behavior. "Local" here means *not on Cloud Run* — a workstation or a
+Cloud Shell, either works.
+
+This is the only part of the repo that needs a Python toolchain. Deploying and
+operating need none of it; see
+[`09-gcloud-deploy.md`](09-gcloud-deploy.md).
 
 ## Setup
 
@@ -12,6 +17,33 @@ make validate                 # config + all 41 SQL files, no network
 ```
 
 `make help` lists every target.
+
+`make setup` runs `uv venv --python 3.12`, and **uv downloads that
+interpreter** rather than using the system one — so a system Python 3.11 is
+not a blocker. uv itself is not preinstalled in Cloud Shell:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### If you do this in Cloud Shell, know where the password ends up
+
+`.env` holds the Snowflake password in plaintext, and Cloud Shell's `$HOME`
+**persists between sessions**. That is a credential sitting in a
+Google-managed home directory belonging to your user account, not a
+throwaway container.
+
+It is `.gitignore`d and `make source-push` refuses to upload a tarball
+containing it, so it will not escape that way. But delete it when you are
+done, and prefer a workstation if you would rather the password never live in
+a cloud-hosted home at all:
+
+```bash
+shred -u .env 2>/dev/null || rm -f .env
+```
+
+Nothing in the deploy path reads `.env`. The Cloud Run jobs get the password
+from Secret Manager.
 
 ## Running things
 
@@ -82,6 +114,10 @@ gcloud auth application-default login    # what Terraform uses — separate
 The two are independent, so Terraform can keep working while `make build`
 fails, and vice versa.
 
+**In Cloud Shell the first line is already done for you** and the second is
+not, which is exactly why the second is the one that gets forgotten.
+`make doctor` reports both and names the Cloud Shell-specific fix.
+
 ## Testing
 
 ```bash
@@ -145,8 +181,10 @@ sees.
 
 ## No Docker locally
 
-Docker is not installed on the maintainers' machines. Image builds go through
-Cloud Build:
+Image builds go through Cloud Build, which is also why nothing here needs a
+local daemon — Docker is not installed on the maintainers' machines, and the
+fact that Cloud Shell happens to have one running is irrelevant. `make build`
+is a `gcloud builds submit` of the source tarball:
 
 ```bash
 make build ENV=dev
