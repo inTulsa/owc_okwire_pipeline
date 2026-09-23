@@ -82,7 +82,7 @@ RUN_ARGS += --limit $(LIMIT)
 endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check auth-check doctor \
-        diff-enrollment derive-scrape derive-check lock lock-check docs-check base-digest build deploy set-image which-image image-digest tf-init tf-bootstrap preflight verify-separation env-exports tf-output tf-plan tf-apply tf-fmt tf-validate clean \
+        diff-enrollment derive-scrape derive-check lock lock-check docs-check shell-check base-digest build deploy set-image which-image image-digest tf-init tf-bootstrap preflight verify-separation env-exports tf-output tf-plan tf-apply tf-fmt tf-validate clean \
         access-check omes-request gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push \
         tf-check install-terraform
 
@@ -137,10 +137,13 @@ typecheck: ## mypy
 # couplings were introduced at once (make targets, the naming convention,
 # scripts, terraform outputs) and they all rot silently: nothing fails until
 # a person follows the instructions, by which point you are not there.
+shell-check: ## Verify every shell helper the scripts call is actually defined
+	$(PY) scripts/shell-check.py
+
 docs-check: ## Verify the docs only reference targets, outputs and scripts that exist
 	@python3 scripts/docs-check.py
 
-check: lint typecheck derive-check lock-check docs-check validate test ## The full gate. Run before every commit.
+check: lint typecheck derive-check lock-check docs-check shell-check validate test ## The full gate. Run before every commit.
 
 diff-enrollment: ## Show every change made to the carried-over enrollment script
 	@diff -u $(ORIGINAL) $(SCRAPE) || true
