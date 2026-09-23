@@ -11,10 +11,10 @@
 #    the additional runs"
 #
 # So every identity, every project-level IAM binding, every API enable, and
-# the state bucket are created here, in gcloud, once. Terraform is then left
-# with resources only, and runs with the ten resource-admin roles in
-# TF_PRINCIPAL_ROLES (see names.sh) — no projectIamAdmin, no
-# serviceAccountAdmin, no serviceUsageAdmin, no workloadIdentityPoolAdmin.
+# the state and source buckets are created here, in gcloud, once. Terraform
+# is then left with resources only, and runs with the ten resource-admin
+# roles in TF_PRINCIPAL_ROLES (see names.sh) — no projectIamAdmin, no
+# serviceAccountAdmin, no serviceUsageAdmin.
 #
 # Idempotent: safe to re-run, and re-running is how you repair a partial run.
 #
@@ -255,8 +255,8 @@ run gcloud storage buckets update "gs://$BUCKET_SOURCE" --versioning --project "
 #
 # One per pipeline, not one shared: the scraper has no business holding the
 # Snowflake secret, and the Lightcast job has no business writing the scrape
-# cache. There is deliberately NO deployer service account and no Workload
-# Identity Federation pool — GitHub Actions is not in this path.
+# cache. Six is the whole list: there is no CI identity, because deploys run
+# from Cloud Shell as a person.
 # ---------------------------------------------------------------------------
 say "Creating six service accounts"
 
@@ -289,7 +289,7 @@ create_sa freshness  "OWC freshness check"         "Runs the owc_ops.pipeline_ru
 # Everything NOT here is resource-scoped — a bucket prefix, one secret, one
 # dataset, one Cloud Run job — and stays in Terraform, because setting a
 # policy on a bucket you just created is inherent to creating it and needs no
-# project-level permission. See docs/09-gcloud-deploy.md for that line and
+# project-level permission. See docs/08-deploy.md for that line and
 # why it is drawn there.
 # ---------------------------------------------------------------------------
 say "Granting ${#RUNTIME_PROJECT_GRANTS[@]} project-level roles to the runtime identities"
@@ -361,7 +361,7 @@ if (( DRY_RUN )); then
   projectIamAdmin on $PROJECT, and have them run them.
 
   Only then do the rest: make iam-check, make source-push, make up.
-  docs/09-gcloud-deploy.md has the order.
+  docs/08-deploy.md has the order.
 DRYNEXT
   exit 0
 fi
@@ -397,5 +397,5 @@ cat <<NEXT
   The full walkthrough, with what each step does and why, is the only other
   place this procedure is written down:
 
-    docs/09-gcloud-deploy.md
+    docs/08-deploy.md
 NEXT

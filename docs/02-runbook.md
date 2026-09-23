@@ -708,7 +708,7 @@ curl -s -H "Authorization: Bearer $TOK" \
 
 The pairing that bit this repo: `query/scanned_bytes_billed` is reported
 against **`global`**, not `bigquery_project`. The verified table is in
-[`07-monitoring.md`](07-monitoring.md#metric-type-strings).
+[`06-monitoring.md`](06-monitoring.md#metric-type-strings).
 
 Note this error is the *good* case — it fails at apply. A metric type that is
 merely misspelled applies cleanly and then never fires.
@@ -759,7 +759,7 @@ make deploy ENV=$ENV      # build at this commit, then point the jobs at it
 ```
 
 Keeping tag and commit aligned matters because a digest is how a rollback is
-identified — see [`04-deployment.md`](04-deployment.md#rolling-back).
+identified — see [Roll back the image](#roll-back-the-image).
 
 ## A fix was deployed but the old behavior persists
 
@@ -836,30 +836,8 @@ curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOK" \
   "https://secretmanager.googleapis.com/v1/projects/$PROJECT/secrets/sm-$PREFIX-snowflake-password-1"
 ```
 
-## CI/CD failures
+## Build failures
 
-> **Most of this section is dormant.** `enable_wif = false` in both
-> environments, so GitHub Actions does not deploy and nothing runs as a
-> deployer service account. Deploys run from Cloud Shell, as you — see
-> [`09-gcloud-deploy.md`](09-gcloud-deploy.md). The build entries below still
-> apply, because `make build` submits the same Cloud Build either way.
->
-> For failures on the current path, see
-> [Cloud Shell and the reduced permission set](#cloud-shell-and-the-reduced-permission-set).
-
-
-### CI: `The interpreter at /usr is externally managed`
-
-`uv pip install --system` targets the runner's system Python, which is PEP 668
-externally-managed on Ubuntu. Install into a venv and put it on `PATH`, which
-is also what `make setup` does locally:
-
-```yaml
-- run: |
-    uv venv --python 3.12
-    echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
-    uv pip install -e ".[dev]"
-```
 
 ### Build: `sa-<name_prefix>-build-1@... does not have storage.objects.get access` to the source tarball
 
@@ -882,17 +860,24 @@ make deploy ENV=$ENV
 If it persists past a few minutes, the grant is genuinely missing —
 `terraform apply` did not run, or ran without the build-SA resources:
 
+The build identity and its project-level grants are created by
+`infra/gcloud/01-admin-identities.sh`, not by Terraform, so check them there:
+
 ```bash
-cd infra/terraform/envs/$ENV && terraform state list | grep build
-# expect: google_service_account.build, build_log_writer,
-#         build_source_reader, build_writer, and the deployer's act_as
+make iam-check ENV=$ENV      # names any missing build grant
+```
+
+Only the registry grant is Terraform's:
+
+```bash
+cd infra/terraform/envs/$ENV && terraform state list | grep build_writer
 ```
 
 **On the project-level grant.** Scoping it to the `_cloudbuild` bucket would
 be tighter, but that bucket is created by `gcloud builds submit` itself, so a
 bucket-scoped grant cannot exist before the first build. It is read-only
-object access, held by an identity only the deployer can assume, in a project
-where the deployer already has `storage.admin` — so it widens nothing in
+object access, held by an identity nobody logs in as, in a project where the
+Terraform principal already has `storage.admin` — so it widens nothing in
 practice. The tighter alternative is `--gcs-source-staging-dir` pointed at a
 Terraform-managed bucket, which would also need that bucket created during
 bootstrap.
@@ -904,8 +889,8 @@ not the cause — legacy ACLs are additive and do not override an IAM grant.
 
 Submitting a Cloud Build requires `iam.serviceAccountUser` on the identity the
 build runs as. Without an explicit one, that is the **Compute Engine default**
-service account — which carries project Editor, so granting the deployer
-`actAs` on it would be a privilege-escalation path rather than a fix.
+service account — which carries project Editor, so granting `actAs` on it
+would be a privilege-escalation path rather than a fix.
 
 Instead, builds run as `sa-<name_prefix>-build-1`, named by the `_BUILD_SA`
 substitution in `docker/cloudbuild.yaml`. To resolve a numeric id from an
@@ -934,12 +919,7 @@ gh run view <id> --log 2>&1 | grep -iE 'error|denied|not found' | head
 `--log-failed` returns the whole failed job including its cleanup, so the real
 error is usually buried; grepping `--log` for `error|denied` finds it faster.
 
-## WIF and outputs
-
-> Everything from [GitHub Actions deploys fail to
-> authenticate](#github-actions-deploys-fail-to-authenticate-via-wif) onward
-> needs `enable_wif = true`, which neither environment sets today. The first
-> two entries apply on any path.
+## Terraform and the shell
 
 
 ### `terraform output` says "No outputs found"
@@ -957,10 +937,8 @@ Add `NAME=<output>` for a single raw value:
 make tf-output ENV=$ENV NAME=lightcast_job
 ```
 
-`wif_attribute_condition`, `workload_identity_provider` and
-`deployer_service_account` print **nothing** today: `enable_wif = false`, so
-the module producing them is not instantiated and `one(module.wif[*]...)`
-yields null. That is correct, not a missing output.
+`make tf-output ENV=$ENV` with no `NAME` lists every output, which is the
+fastest way to find the one you want.
 
 ### A pasted `#` line errors in zsh
 
@@ -987,165 +965,29 @@ comments for this reason.
 
 
 
-### A YAML snippet pasted into the shell errors
+### Terraform is planning against the wrong project
+
+`make tf-init` prints the bucket it is adopting — check that line first:
 
 ```text
-zsh: command not found: name:
-zsh: command not found: run:
-json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+>> dev -> gs://gcs-owc-dpar-d-tfstate-1 (prefix env/dev)
+>> resources in state: 0
 ```
 
-You pasted GitHub Actions YAML into a terminal. It is not shell, and the
-`ACTIONS_ID_TOKEN_REQUEST_*` variables exist only inside a runner with
-`id-token: write` — so `curl` returned nothing and Python got empty input.
-Nothing ran and nothing is broken.
+The backend is supplied with `-backend-config` on every init, derived from
+`PROJECT`, and `tf-init` always passes `-reconfigure`. So switching projects
+is `make up ENV=dev PROJECT=other`, and there is no cached backend to
+invalidate.
 
-Blocks tagged `yaml` in these docs belong in a workflow file. Only `bash`
-blocks are meant to be run.
+This used to be a literal in `backend.tf`. Terraform then stopped with
+`Backend configuration changed` and suggested `-migrate-state`, which is
+destructive in a quiet way — it copies the OLD project's state into the NEW
+bucket, after which Terraform believes those resources exist where they do
+not.
 
-### GitHub Actions deploys fail to authenticate via WIF
+`0 is correct for a project you have not applied to yet.` A non-zero count on
+a project you believe is fresh means you are pointed at the wrong bucket.
 
-The usual cause is the `attribute_condition` not matching the repository
-string GitHub actually sends. `assertion.repository` preserves the owner's
-**exact casing** and the comparison is case-sensitive, so `intulsa/repo` never
-matches `inTulsa/repo`.
-
-It fails **closed** — no security hole, just no deploys — which is why it can
-sit unnoticed.
-
-```bash
-make wif-check ENV=$ENV      # compares tfvars against the git remote
-make tf-output ENV=$ENV NAME=wif_attribute_condition
-```
-
-`make tf-apply` runs `wif-check` as part of `preflight`, so a mismatch blocks
-the apply rather than shipping a condition that cannot match.
-
-Other things to check, in order:
-
-1. **`allowed_refs`.** Prod pins `refs/heads/prod`, so a branch or a fork's
-   pull request cannot deploy there. That is intentional — confirm the
-   workflow is running on the `prod` branch.
-2. **The repository variables.** `WIF_PROVIDER_<ENV>` and
-   `DEPLOYER_SA_<ENV>` must match `make tf-output`.
-3. **`id-token: write`** permission on the workflow job. Without it GitHub
-   never mints a token at all.
-
-Changing `github_repository` replaces
-`module.wif.google_service_account_iam_member.github_may_impersonate`, because
-the repository is embedded in its `principalSet` member string. That
-replacement is expected and safe.
-
-### `Backend configuration changed` after pointing at a different project
-
-```text
-Error: Backend configuration changed
-
-A change in the backend configuration has been detected, which may require
-migrating existing state.
-```
-
-Terraform caches the backend config in `.terraform/`, so editing the bucket
-in `backend.tf` invalidates it. **A fresh clone never sees this** — there is
-no cache to invalidate — so it is a working-copy problem, not a setup one.
-
-**Take `-reconfigure`, not the `-migrate-state` the error suggests first.**
-
-```bash
-make tf-reinit ENV=$ENV
-```
-
-`-migrate-state` copies the OLD project's state into the NEW bucket. Terraform
-then believes the old project's resources exist in the new project and plans
-against them — deleting and recreating things that were never there. It is the
-right flag for moving one environment's state to a new bucket, and the wrong
-one for pointing a working copy at a different environment.
-
-Each environment already keeps its state in its own bucket, so switching
-projects means adopting that bucket as it is. `tf-reinit` prints the resource
-count afterwards; `0` is correct for a project you have not applied to yet.
-
-### GitHub Actions authenticates fine, then the apply 403s
-
-A different failure with a similar smell. The `auth` step is green, the build
-succeeds, and `terraform apply` dies during **refresh** with a wall of
-near-identical errors:
-
-```text
-Error when reading or editing Resource "project \"owc-dpar-d\"" with IAM Member:
-Role "roles/storage.admin" Member "serviceAccount:sa-owc-dpar-d-deployer-1@...":
-Error retrieving IAM policy for project "owc-dpar-d":
-googleapi: Error 403: The caller does not have permission, forbidden
-```
-
-```text
-Permission 'iam.workloadIdentityPools.get' denied on resource
-'//iam.googleapis.com/projects/.../workloadIdentityPools/wip-owc-dpar-d-github-1'
-```
-
-**WIF is not the problem** — assuming the deployer worked. The deployer is
-missing permissions once assumed.
-
-The misleading part is that each error names the role being *granted*
-(`roles/storage.admin`, etc.), which the deployer already has. The role that
-is *missing* is never named. Every `google_project_iam_member` read-modify-
-writes the project IAM policy, so all 22 of them fail on the same absent
-`resourcemanager.projects.getIamPolicy`.
-
-```bash
-make deployer-check ENV=$ENV
-```
-
-That names the missing roles directly. The usual answers are
-`roles/resourcemanager.projectIamAdmin` and
-`roles/iam.workloadIdentityPoolAdmin` — neither is implied by the resource
-admin roles, and `serviceAccountAdmin` grants no `workloadIdentityPools`
-permissions at all.
-
-Both are declared in `modules/wif/main.tf`, so the fix is an apply run as a
-project owner — the deployer cannot grant itself the permission it needs to
-make the grant:
-
-```bash
-make tf-apply ENV=$ENV TF_ARGS="-var=image_digest=$(make -s image-digest ENV=$ENV)"
-make deployer-check ENV=$ENV      # confirm, then re-run the failed workflow
-```
-
-Nothing is half-applied when this happens: refresh fails before the plan, so
-the run changes nothing. Re-running after the fix is safe.
-
-**Why it never failed locally:** `make tf-apply` run by hand runs as you,
-and you are project owner. Only CI runs as the deployer.
-
-#### The other shape: `lacks IAM permission "iam.serviceAccounts.actAs"`
-
-```text
-Error 403: The principal (user or service account) lacks IAM permission
-"iam.serviceAccounts.actAs" for the resource
-"sa-<prefix>-scheduler-1@<project>.iam.gserviceaccount.com"
-```
-
-Same cause, different permission. Attaching a service account to a
-resource requires `actAs` **on that account** — a per-service-account
-binding, not a project role — so the project-role list can be complete and
-this still fails. Terraform attaches one in three places:
-
-| File | Field | Identity |
-|---|---|---|
-| `modules/pipeline/job.tf` | `service_account` | lightcast, enrollment |
-| `modules/pipeline/scheduler.tf` | `service_account_email` | scheduler |
-| `modules/platform/monitoring.tf` | `service_account_name` | freshness |
-
-plus the build identity, which `gcloud builds submit` runs as. All five must
-appear in `impersonatable_service_accounts` in the environment's `main.tf`.
-
-`make deployer-check` verifies both halves — the project roles and the
-actAs bindings — and parses the expected accounts out of that list, so
-adding one cannot leave the check behind.
-
-Note the freshness grant is **prod-only in practice**: dev sets
-`freshness_check_enabled = false`, so the resource is never created there
-and a missing grant cannot surface until prod.
 
 ## Cloud Shell and the reduced permission set
 
@@ -1220,7 +1062,7 @@ it was told: those resources left the configuration, so it wants them gone.
 
 **Do not apply.** Remove them from state — which forgets them, it does not
 delete them — using the exact sequence in
-[`09-gcloud-deploy.md`](09-gcloud-deploy.md#migrating).
+[`08-deploy.md`](08-deploy.md#migrating).
 
 ### Cloud Shell disconnected during a `terraform apply`
 
@@ -1343,6 +1185,47 @@ bq cp -f "$PROJECT:owc_marts.THE_TABLE@-3600000" $PROJECT:owc_marts.THE_TABLE
 ```
 
 (`@-3600000` is one hour ago, in milliseconds. The window is 7 days.)
+
+### Roll back the image {#roll-back-the-image}
+
+Pin an older digest on both jobs. The job's image is in
+`lifecycle.ignore_changes`, so `terraform apply` will not revert the pin —
+but the next `make deploy` will, so fix the source too.
+
+Find a previous digest:
+
+```bash
+gcloud artifacts docker images list \
+  $REGION-docker.pkg.dev/$PROJECT/ar-$PREFIX-images-1/owcdata \
+  --include-tags --sort-by=~CREATE_TIME --limit=10 --project $PROJECT
+```
+
+Point both jobs at it:
+
+```bash
+make set-image ENV=$ENV IMAGE=$REGION-docker.pkg.dev/$PROJECT/ar-$PREFIX-images-1/owcdata@sha256:OLDER
+make which-image ENV=$ENV
+```
+
+`set-image` refuses anything that is not digest-pinned, so a tag cannot be
+substituted by accident.
+
+Then fix the source — revert the commit, and redeploy when you are out of
+the incident:
+
+```bash
+git revert <commit>
+make deploy ENV=$ENV
+```
+
+### Roll back the infrastructure {#roll-back-the-infrastructure}
+
+Revert the commit and apply. There is no CI, so the apply is the deploy:
+
+```bash
+git revert <commit>
+make tf-apply ENV=$ENV TF_ARGS="-var=image_digest=$(make -s image-digest ENV=$ENV)"
+```
 
 ### Re-run one dataset
 

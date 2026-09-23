@@ -269,6 +269,30 @@ The same six steps with `ENV=prod`. The two environments differ in exactly
 four settings, listed in
 [`03-gcp-setup.md`](03-gcp-setup.md#what-prod-does-differently).
 
+## Rehearsing against your own project
+
+The same six steps with one extra variable. Nothing is edited, nothing is
+committed, nothing has to be changed back:
+
+```bash
+make gcloud-admin ENV=dev PROJECT=my-test-project
+make up           ENV=dev PROJECT=my-test-project
+make smoke        ENV=dev PROJECT=my-test-project
+```
+
+`PROJECT` reaches all three places that matter — the gcloud steps that create
+the identities, the `-var` values Terraform applies with, and the state bucket
+passed to `terraform init`.
+
+Use `ENV=dev`. Prod sets `schedulers_paused = false`, so an apply there
+creates live schedulers that fire the monthly schedule at Lightcast's
+warehouse from whatever project you aimed it at.
+
+One thing a rehearsal on your own project cannot prove: you will be
+`roles/owner` there, so every permission check passes whether or not the ten
+roles are sufficient. `iam-check` warns rather than failing — see
+[Running this in an OMES project](#omes).
+
 ## Why it is split this way
 
 Three pieces of OMES feedback, and what each became:
@@ -287,11 +311,15 @@ Those, plus the seven service accounts and the API enables, moved to
 > **"we can not hook up your personal Github, but we can hook up your instance
 > with the state once you work with Jason Thornhill."**
 
-`enable_wif = false` in both environments: no federation pool, no OIDC
-provider, no deployer service account. That single flag removes the largest
-concentration of privilege in the config — the deployer held 13 project roles
-including all three of `projectIamAdmin`, `serviceAccountAdmin` and
-`workloadIdentityPoolAdmin`.
+There is no CI in this repo. The Workload Identity Federation pool, the OIDC
+provider, the deployer service account and the GitHub Actions workflows are
+all deleted — the deployer alone held 13 project roles, including all three
+of `projectIamAdmin`, `serviceAccountAdmin` and `workloadIdentityPoolAdmin`.
+Deploys run from Cloud Shell, as a person.
+
+If OMES federates their own instance later, that is a new deploy path built
+against whatever they run, not a dormant one waiting in this repo. The git
+history has the old one.
 
 Nothing about the pipelines changed. Same jobs, schedules, alerts and data.
 
@@ -302,7 +330,7 @@ reads or writes the project IAM policy.**
 
 | | Created by | Needs |
 |---|---|---|
-| APIs, service accounts, project IAM, `actAs`, state + source buckets | step 4 | `serviceAccountAdmin`, `projectIamAdmin`, `serviceUsageAdmin` |
+| APIs, service accounts, project IAM, `actAs`, state + source buckets | step 4, in gcloud | `serviceAccountAdmin`, `projectIamAdmin`, `serviceUsageAdmin` |
 | Buckets, datasets, tables, registry, secret, jobs, schedulers, alerts | Terraform | resource admin only |
 | **Resource-scoped** IAM — bucket prefix, dataset `dataEditor`, secret accessor, registry reader, job `run.invoker` | Terraform | nothing extra |
 
@@ -337,10 +365,14 @@ Scheduler job, a build or a scheduled query requires `actAs` on it.
 **No longer needed. `make iam-check` fails if they are still granted:**
 
 ```
-roles/resourcemanager.projectIamAdmin     roles/iam.workloadIdentityPoolAdmin
-roles/iam.serviceAccountAdmin             roles/serviceusage.serviceUsageAdmin
+roles/resourcemanager.projectIamAdmin     roles/serviceusage.serviceUsageAdmin
+roles/iam.serviceAccountAdmin             roles/iam.workloadIdentityPoolAdmin
 roles/owner                               roles/editor
 ```
+
+Holding one of these is a **warning**, not a failure: excess privilege does
+not stop a deploy working, it stops the deploy proving anything.
+`make iam-check ENV=dev STRICT=1` makes it a failure — that is the audit.
 
 ## Working in Cloud Shell
 
@@ -379,15 +411,3 @@ terraform plan                                # only module.wif.* should be dest
 The WIF module is the exception: there you **do** want the resources gone. A
 federation pool nobody uses is a way in that nobody is watching.
 
-## What this defers
-
-GitHub Actions. `.github/workflows/` is committed, correct and inert — the
-repository variables are unset and the WIF provider it authenticates against
-is not built. `make deployer-check` and `make gh-vars` refuse with an
-explanation rather than reporting the missing deployer as a permission
-problem.
-
-When OMES federates their own instance: set `enable_wif = true`, apply once
-with an account holding `workloadIdentityPoolAdmin`, then follow
-[`04-deployment.md`](04-deployment.md#setting-up-github-actions). Nothing here
-has to be undone.

@@ -50,14 +50,13 @@ locals {
 }
 
 # ---------------------------------------------------------------------------
-# Service account emails, derived rather than read off the resources.
+# Service account emails, derived from the naming convention.
 #
-# Every reference in this module goes through this map, so the module works
-# identically whether it CREATES the accounts (manage_identities = true) or
-# merely attaches ones that OMES created with
-# infra/gcloud/01-admin-identities.sh (manage_identities = false).
+# This module never creates a service account. All six are created once by
+# infra/gcloud/01-admin-identities.sh, and everything here simply attaches
+# them — which is what keeps Terraform out of the project IAM policy.
 #
-# Derived from the naming convention rather than looked up with a
+# Derived rather than looked up with a
 # `data "google_service_account"` block on purpose: the data source needs
 # iam.serviceAccounts.get, which none of the resource-admin roles in
 # TF_PRINCIPAL_ROLES carries. Adding a permission in order to discover a name

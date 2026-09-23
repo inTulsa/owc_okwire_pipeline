@@ -19,7 +19,6 @@ resource "google_secret_manager_secret" "snowflake_password" {
     auto {}
   }
 
-  depends_on = [google_project_service.enabled]
 }
 
 # Only the lightcast SA. The enrollment SA is deliberately absent — its source

@@ -22,7 +22,6 @@ resource "google_bigquery_dataset" "staging" {
   # Staging is diffing material after a failure, not a permanent store.
   default_table_expiration_ms = var.staging_table_expiration_days * 24 * 60 * 60 * 1000
 
-  depends_on = [google_project_service.enabled]
 }
 
 resource "google_bigquery_dataset" "marts" {
@@ -41,7 +40,6 @@ resource "google_bigquery_dataset" "marts" {
     ignore_changes  = [access]
   }
 
-  depends_on = [google_project_service.enabled]
 }
 
 resource "google_bigquery_dataset" "ops" {
@@ -51,7 +49,6 @@ resource "google_bigquery_dataset" "ops" {
   labels      = var.labels
   description = "pipeline_runs manifest and the views used to read it. No table data."
 
-  depends_on = [google_project_service.enabled]
 }
 
 # ---------------------------------------------------------------------------

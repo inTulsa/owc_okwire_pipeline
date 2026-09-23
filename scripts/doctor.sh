@@ -135,9 +135,6 @@ else
   warn venv "not created — run 'make setup' if you want to run tests or pipelines locally"
 fi
 
-command -v gh >/dev/null && ok gh "$(gh version | head -1 | awk '{print $3}')" \
-  || warn gh "not installed — only 'make gh-vars', which needs enable_wif = true"
-
 echo ""
 echo "Not required: Docker. Images build in Cloud Build; nothing here runs a local daemon."
 echo ""
@@ -204,7 +201,7 @@ fi
 
 echo ""
 if [ "$fail" -ne 0 ]; then
-  echo "Something required is missing. See docs/08-developer-setup.md."
+  echo "Something required is missing. See docs/07-developer-setup.md."
   exit 1
 fi
-echo "Ready. Next: docs/09-gcloud-deploy.md"
+echo "Ready. Next: docs/08-deploy.md"

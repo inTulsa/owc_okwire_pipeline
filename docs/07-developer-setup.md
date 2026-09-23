@@ -62,7 +62,6 @@ Development — optional. Needed for 'make check', 'make test', 'make run'.
                         fetch 3.12, so this is fine
   warn     uv           not installed — needed only by 'make setup'/'make lock'
   warn     venv         not created — run 'make setup' if you want to run tests
-  warn     gh           not installed — only 'make gh-vars'
 
 Credentials
 
@@ -82,7 +81,7 @@ Shell does **not** do for you is Terraform's credentials — see
 
 Can't reach GitHub from here? Upload a tarball, or fetch the project's own
 mirror — both in
-[`09-gcloud-deploy.md`](09-gcloud-deploy.md#get-the-code).
+[`08-deploy.md`](08-deploy.md#get-the-code).
 
 ### Three Cloud Shell facts worth knowing up front
 
@@ -110,7 +109,6 @@ workstation does not.
 | **python3** | any 3.x | Deploy | preinstalled. Used only to parse small JSON blobs. |
 | **Python 3.12** | **>= 3.12** | Development | `make setup` has `uv` fetch it — a system 3.11 is not a blocker |
 | **uv** | any current | Development | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
-| **gh** | any current | Neither today | Only `make gh-vars`, which needs `enable_wif = true` |
 
 ```bash
 make doctor      # tools and credentials
@@ -127,7 +125,7 @@ Images build in **Cloud Build**. The only `docker` string in this repo is
 inside `gcloud artifacts docker images`, and nothing runs a local daemon —
 including in Cloud Shell, where one happens to be available and is still not
 used. See
-[05-local-development.md](05-local-development.md#no-docker-locally).
+[04-local-development.md](04-local-development.md#no-docker-locally).
 
 ## Authenticate twice
 
@@ -164,7 +162,7 @@ found`, which Terraform reports as `storage: bucket doesn't exist`.
 Tooling is the easy half. These take longer to obtain, so start them early.
 
 There are **two** levels of GCP access, and only the first is hard to get. See
-[`09-gcloud-deploy.md`](09-gcloud-deploy.md#where-the-line-is-drawn) for why
+[`08-deploy.md`](08-deploy.md#where-the-line-is-drawn) for why
 the line is there.
 
 | Access | Scope | Needed for |
@@ -174,7 +172,7 @@ the line is there.
 | **Snowflake** | the reader account login + password | The lightcast pipeline. Password goes to Secret Manager, never into Terraform. |
 | **Alert distribution list** | an address you can add members to | `alert_emails`. Use a list, not a person, so the rotation changes without a Terraform change. |
 | **Billing account** | `roles/billing.costsManager` | **Only** if you enable the budget alert. It is off by default. |
-| **GitHub repo** | write, and admin for `make gh-vars` | Not needed today — `enable_wif = false`, and OMES cannot federate a personal GitHub account. Revisit when their own instance is wired up. |
+| **GitHub repo** | read | Only to `git clone` the repo into Cloud Shell. Uploading a tarball or fetching the project's mirror needs no GitHub at all. |
 
 ## Platform notes
 
@@ -197,7 +195,7 @@ intend. Re-run `make lock` and commit the result rather than hand-editing.
 ## Next
 
 - Deploying or operating an environment:
-  [`09-gcloud-deploy.md`](09-gcloud-deploy.md)
+  [`08-deploy.md`](08-deploy.md)
 - Running a pipeline and changing code:
-  [`05-local-development.md`](05-local-development.md)
+  [`04-local-development.md`](04-local-development.md)
 - An alert fired: [`02-runbook.md`](02-runbook.md)

@@ -58,7 +58,6 @@ resource "google_storage_bucket" "raw" {
     prevent_destroy = true
   }
 
-  depends_on = [google_project_service.enabled]
 }
 
 # ---------------------------------------------------------------------------
@@ -94,5 +93,4 @@ resource "google_storage_bucket" "enrollment_state" {
     prevent_destroy = true
   }
 
-  depends_on = [google_project_service.enabled]
 }
