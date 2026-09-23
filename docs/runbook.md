@@ -1095,7 +1095,7 @@ make iam-check ENV=$ENV
 
 ### `Error 403: ... does not have <some>.<permission> access`, during apply
 
-The Terraform principal is missing one of the ten resource-admin roles. This
+The Terraform principal is missing one of the eleven resource-admin roles. This
 is now the *normal* shape of a permission failure: nobody runs as owner any
 more, so a missing role shows up as a 403 on one resource type rather than
 never showing up at all.

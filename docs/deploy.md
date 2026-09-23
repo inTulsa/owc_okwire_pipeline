@@ -242,7 +242,7 @@ make source-push ENV=dev     # mirror the repo into the project
 make iam-check   ENV=dev     # confirm step 5 landed
 ```
 
-`iam-check` confirms the six identities exist, that you have all ten roles
+`iam-check` confirms the six identities exist, that you have all eleven roles
 the deploy needs, and that you hold none of the six you should not. That last
 group is a warning, not a failure — excess privilege does not stop a deploy
 working, it stops the deploy proving anything. `STRICT=1` makes it a failure,
@@ -261,7 +261,7 @@ Two levels, and only the first is hard to get.
 | Access | Scope | Needed for |
 |---|---|---|
 | **GCP, privileged** | `roles/iam.serviceAccountAdmin` + `roles/resourcemanager.projectIamAdmin` + `roles/serviceusage.serviceUsageAdmin` | `make gcloud-admin`, **once per project**, and `make iam-check STRICT=1` afterwards. In an OMES project this is theirs to run, from `make gcloud-admin-dry-run` output. |
-| **GCP, day to day** | the ten resource-admin roles `make gcloud-admin` grants, plus `serviceAccountUser` on five accounts | Everything else: `make up`, `make build`, `make tf-apply`, `make smoke`. Deliberately cannot read or write the project IAM policy. |
+| **GCP, day to day** | the eleven resource-admin roles `make gcloud-admin` grants, plus `serviceAccountUser` on five accounts | Everything else: `make up`, `make build`, `make tf-apply`, `make smoke`. Deliberately cannot read or write the project IAM policy. |
 | **Snowflake** | the reader account login + password | The lightcast pipeline. Password goes to Secret Manager, never into Terraform. |
 | **Alert distribution list** | an address you can add members to | `alert_emails`. Use a list, not a person, so the rotation changes without a Terraform change. |
 | **Billing account** | `roles/billing.costsManager` | **Only** if you enable the budget alert. It is off by default. |
@@ -343,7 +343,7 @@ state"* — they add `--no-state-bucket`, tell you the bucket, and you set it in
 
 ### `iam-check` will run in REDUCED mode there, and that is correct
 
-None of the ten roles you get includes `resourcemanager.projects.getIamPolicy`.
+None of the eleven roles you get includes `resourcemanager.projects.getIamPolicy`.
 So in an OMES project the check cannot read the project IAM policy, says so,
 and skips the role assertions:
 
@@ -382,7 +382,7 @@ warn     STILL HAS roles/owner
 
 Everything else rehearses faithfully: the script's output, the resource
 graph, the ordering, the two-pass `make up`, the smoke test. The one
-unproven claim — "ten roles are enough" — is proven the first time it runs
+unproven claim — "eleven roles are enough" — is proven the first time it runs
 in an OMES project, where you genuinely do not have more.
 
 To close that gap before handing over, have OMES run step 4 on a project
@@ -482,7 +482,13 @@ roles/storage.admin                       roles/secretmanager.admin
 roles/bigquery.admin                      roles/artifactregistry.admin
 roles/run.developer                       roles/monitoring.editor
 roles/cloudbuild.builds.editor            roles/logging.configWriter
+roles/logging.viewer
 ```
+
+`logging.viewer` is there because the alerting in this system is log-based
+and the runbook's diagnostics are `gcloud logging read`. `configWriter`
+creates metrics and sinks; it does not read entries. Without the viewer role
+an operator can see that an alert fired and nothing about why.
 
 plus `roles/iam.serviceAccountUser` on five specific accounts — per-account,
 not project-wide, because attaching an identity to a Cloud Run job, a
