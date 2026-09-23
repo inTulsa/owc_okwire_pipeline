@@ -166,8 +166,45 @@ for key in ("jobName", "targetType", "status", "debugInfo", "url"):
 print("        %-11s %s" % ("timestamp", entry.get("timestamp", "")))
 PY
 )
-gcloud logging read \
-  'resource.type="cloud_scheduler_job"' --freshness=7d \
-  --project "$PROJECT" --limit 1 --format=json 2>/dev/null \
-  | python3 -c "$LAST_ATTEMPT"
+# stderr captured, not discarded. Swallowing it turned "you cannot read
+# logs" into "(no scheduler attempts logged yet)" — a definite-sounding
+# answer to a question that was never asked successfully, which is the same
+# fault checks 3 and 4 just had.
+if logs=$(gcloud logging read 'resource.type="cloud_scheduler_job"' \
+      --freshness=7d --project "$PROJECT" --limit 1 --format=json 2>&1); then
+  python3 -c "$LAST_ATTEMPT" <<<"$logs"
+else
+  huh "cannot read the scheduler logs"
+  note "$(tail -1 <<<"$logs")"
+  note ""
+  note "Reading log entries needs roles/logging.viewer. The deploy account"
+  note "has logging.configWriter, which creates metrics and sinks but does"
+  note "not read entries — so this says nothing about whether it fired."
+  note ""
+  note "Check 6 answers the same question with permissions you do have."
+fi
+
+# --- 6. did anything actually run? -----------------------------------------
+#
+# The question behind all of this is "did the scheduler start the job", and
+# a Cloud Run execution is the evidence. roles/run.developer can list them,
+# which the deploy account has — so this works where reading the logs does
+# not.
+head2 "6. Recent executions of each job"
+for job in "$JOB_LIGHTCAST" "$JOB_ENROLLMENT"; do
+  if execs=$(gcloud run jobs executions list --job "$job" --region "$REGION" \
+        --project "$PROJECT" --limit 3 \
+        --format='value(metadata.name,status.completionTime)' 2>&1); then
+    if [[ -z "$execs" ]]; then
+      note "$job: no executions yet"
+    else
+      ok "$job has run:"
+      while read -r line; do [[ -n "$line" ]] && note "$line"; done <<< "$execs"
+    fi
+  else
+    huh "$job: cannot list executions"
+    note "$(tail -1 <<<"$execs")"
+  fi
+done
+
 echo ""

@@ -89,6 +89,12 @@ TF_PRINCIPAL_ROLES=(
   roles/monitoring.editor
   # Log-based metrics.
   roles/logging.configWriter
+  # Reading them back. configWriter creates metrics and sinks; it does not
+  # grant logging.logEntries.list. Without this the runbook's diagnostics do
+  # not run at all — every structured-log lookup, the scheduler's execution
+  # history, and the failure detail behind every alert. The alerting in this
+  # system is log-based, so an operator who cannot read logs cannot work.
+  roles/logging.viewer
   # `make build` submits a Cloud Build. Drop this if builds move to OMES CI.
   roles/cloudbuild.builds.editor
 )
