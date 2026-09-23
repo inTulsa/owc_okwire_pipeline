@@ -184,6 +184,22 @@ with no IAM in it, alongside a persistent 403, look like.
 `tokenCreator` explicitly, the same way it already did for the BigQuery Data
 Transfer agent; a project set up before that may not have either.
 
+**The order is load-bearing.** IAM accepts a binding for a principal that
+does not exist yet: the grant is recorded, reports success, and does nothing.
+So a `tokenCreator` grant applied before the agent was provisioned looks
+exactly like a fix and is not — which is what happened on `owc-dpar-d`, where
+the grant succeeded and the next fire was still `PERMISSION_DENIED`.
+
+Create the agent first. The deploy account can do this itself:
+
+```bash
+gcloud beta services identity create --service=cloudscheduler.googleapis.com --project $PROJECT
+```
+
+It is idempotent and prints the agent's real address. **Then** have the
+`tokenCreator` grant re-applied, and fire the scheduler again. The script
+does these in that order; a hand-run grant on its own may not have.
+
 **Checks 3 and 4 can come back `????`, and that is not a failure.** Reading a
 service account's IAM policy needs `iam.serviceAccounts.getIamPolicy`, and
 Google-managed service agents are often not describable by a project member —
