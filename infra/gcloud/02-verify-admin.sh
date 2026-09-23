@@ -177,9 +177,18 @@ else
   # terraform process".
   for role in "${TF_PRINCIPAL_FORBIDDEN_ROLES[@]}"; do
     if has_binding "$PRINCIPAL" "$role"; then
-      bad "STILL HAS $role — remove it:"
+      bad "STILL HAS $role"
       bad "  gcloud projects remove-iam-policy-binding $PROJECT \\"
       bad "    --member $PRINCIPAL --role $role"
+      if [[ "$role" == "roles/owner" ]]; then
+        # Removing your own owner on a project you created can leave nobody
+        # able to grant IAM on it. Printing the command without this warning
+        # is how someone locks themselves out while following a checklist.
+        bad "  ^ CAREFUL if this is a project you created and you are its only"
+        bad "    owner: removing it may leave nobody able to grant IAM here."
+        bad "    Run 01-admin-identities.sh FIRST, confirm another principal"
+        bad "    can administer the project, and only then drop owner."
+      fi
     else
       pass "does not have $role"
     fi
@@ -237,7 +246,15 @@ if ! ADC_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null)
   bad "  Cloud Shell logs gcloud in for you but NOT Terraform. Run:"
   bad "    gcloud auth application-default login"
 else
-  ADC_FILE="${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/.config/gcloud/application_default_credentials.json}"
+  # Cloud Shell sets CLOUDSDK_CONFIG to a per-session /tmp directory, so
+  # $HOME/.config/gcloud is the wrong place to look. Getting this wrong meant
+  # the x-goog-user-project header below was omitted, and the check no longer
+  # mirrored what the client library actually sends.
+  ADC_FILE="${GOOGLE_APPLICATION_CREDENTIALS:-}"
+  if [[ -z "$ADC_FILE" ]]; then
+    cfg=$(gcloud info --format='value(config.paths.global_config_dir)' 2>/dev/null)
+    ADC_FILE="${cfg:-$HOME/.config/gcloud}/application_default_credentials.json"
+  fi
   ADC_QUOTA=""
   [[ -f "$ADC_FILE" ]] && ADC_QUOTA=$(python3 -c \
     "import json,sys;print(json.load(open(sys.argv[1])).get('quota_project_id',''))" \

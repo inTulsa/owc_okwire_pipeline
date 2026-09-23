@@ -92,14 +92,15 @@ The **only** step needing `serviceAccountAdmin` + `projectIamAdmin`. It
 creates the six service accounts, their project IAM, the 16 API enables, and
 the state and source buckets.
 
-Look at it first — `--dry-run` prints every command, shell-quoted, and changes
-nothing:
+Look at it first — `--dry-run` prints every command, shell-quoted, and
+**creates nothing at all**:
 
 ```bash
 make gcloud-admin-dry-run ENV=dev
 ```
 
-If you do not hold those roles, send that output to OMES. Otherwise:
+If you do not hold those roles, send that output to OMES. Otherwise run it
+for real — the dry run above has not changed the project:
 
 ```bash
 make gcloud-admin ENV=dev

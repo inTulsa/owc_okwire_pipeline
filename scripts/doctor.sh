@@ -66,7 +66,23 @@ else
   bad bq     "ships with the gcloud SDK"
 fi
 
-if v=$(terraform version -json 2>/dev/null | python3 -c 'import json,sys;print(json.load(sys.stdin)["terraform_version"])' 2>/dev/null); then
+# Tolerant on purpose. A bare json.load() fails on anything terraform prints
+# before the JSON — an upgrade notice, a warning — and this then reported
+# "version not parseable" and silently stopped checking the >= 1.9 floor.
+# Find the first {, and fall back to the plain output.
+tf_version() {
+  terraform version -json 2>/dev/null | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+i = raw.find("{")
+if i < 0:
+    raise SystemExit(1)
+print(json.loads(raw[i:])["terraform_version"])
+' 2>/dev/null && return 0
+  terraform version 2>/dev/null | sed -n 's/^Terraform v\{0,1\}\([0-9][0-9.]*\).*/\1/p' | head -1 | grep . 
+}
+
+if v=$(tf_version); then
   if ver_ge "$v" 1.9.0; then ok terraform "$v  (rehearsed on 1.13.4)"; else bad terraform "$v — need >= 1.9, see versions.tf"; fi
 elif command -v terraform >/dev/null; then
   ok terraform "installed (version not parseable)"
@@ -135,7 +151,15 @@ else
 fi
 
 if gcloud auth application-default print-access-token >/dev/null 2>&1; then
-  adc_file="${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/.config/gcloud/application_default_credentials.json}"
+  # Ask gcloud where its config lives rather than assuming
+  # $HOME/.config/gcloud: Cloud Shell sets CLOUDSDK_CONFIG to a per-session
+  # /tmp directory, so the guess misses and this reported "no quota project
+  # set" one line after gcloud confirmed setting one.
+  adc_file="${GOOGLE_APPLICATION_CREDENTIALS:-}"
+  if [ -z "$adc_file" ]; then
+    cfg=$(gcloud info --format='value(config.paths.global_config_dir)' 2>/dev/null)
+    adc_file="${cfg:-$HOME/.config/gcloud}/application_default_credentials.json"
+  fi
   quota=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('quota_project_id',''))" "$adc_file" 2>/dev/null || true)
   if [ -n "$quota" ]; then
     ok "ADC" "quota project: $quota"
