@@ -156,6 +156,15 @@ cloudshell download owc-setup.sh
 On a call, `cat owc-setup.sh` and let them copy it straight into their own
 Cloud Shell instead.
 
+The file explains how to run itself — you do not have to write instructions
+to go with it. Its header says, in order: open Cloud Shell on the project,
+upload via the toolbar's **⋮ → Upload → File**, then
+
+```text
+gcloud config set project <project>
+bash ~/owc-setup.sh
+```
+
 **They** run it, with their project set to this one:
 
 ```bash
