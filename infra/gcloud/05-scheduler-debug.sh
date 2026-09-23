@@ -117,21 +117,31 @@ fi
 
 # --- 5. the untruncated failure --------------------------------------------
 head2 "5. Most recent scheduler attempt, in full"
+# The formatter lives in a variable, not inline after `python3 -c '`.
+# Inline, the single quotes around a dict key close the shell string: the
+# first attempt printed
+#   SyntaxError: unexpected character after line continuation character
+# because bash had already eaten the quotes before python saw them.
+LAST_ATTEMPT=$(cat <<'PY'
+import json, sys
+try:
+    entries = json.load(sys.stdin)
+except Exception:
+    print("        (could not read logs)")
+    raise SystemExit
+if not entries:
+    print("        (no scheduler attempts logged yet)")
+    raise SystemExit
+entry = entries[0]
+payload = entry.get("jsonPayload", {})
+for key in ("jobName", "targetType", "status", "debugInfo", "url"):
+    if key in payload:
+        print("        %-11s %s" % (key, payload[key]))
+print("        %-11s %s" % ("timestamp", entry.get("timestamp", "")))
+PY
+)
 gcloud logging read \
   "resource.type=cloud_scheduler_job AND resource.labels.project_id=$PROJECT" \
   --project "$PROJECT" --limit 1 --format=json 2>/dev/null \
-  | python3 -c '
-import json, sys
-try:
-    e = json.load(sys.stdin)
-except Exception:
-    print("        (could not read logs)"); raise SystemExit
-if not e:
-    print("        (no scheduler attempts logged yet)"); raise SystemExit
-p = e[0].get("jsonPayload", {})
-for k in ("jobName", "targetType", "status", "debugInfo", "url"):
-    if k in p:
-        print(f"        {k:11} {p[k]}")
-print(f"        {'timestamp':11} {e[0].get(\"timestamp\",\"\")}")
-'
+  | python3 -c "$LAST_ATTEMPT"
 echo ""

@@ -200,9 +200,12 @@ DTS_AGENT=""
 if (( ! DRY_RUN )); then
   PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
   DTS_AGENT="service-${PROJECT_NUMBER}@gcp-sa-bigquerydatatransfer.iam.gserviceaccount.com"
-  note "agent: $DTS_AGENT"
+  SCHEDULER_AGENT="service-${PROJECT_NUMBER}@gcp-sa-cloudscheduler.iam.gserviceaccount.com"
+  note "data transfer agent: $DTS_AGENT"
+  note "scheduler agent    : $SCHEDULER_AGENT"
 else
   DTS_AGENT="service-<project-number>@gcp-sa-bigquerydatatransfer.iam.gserviceaccount.com"
+  SCHEDULER_AGENT="service-<project-number>@gcp-sa-cloudscheduler.iam.gserviceaccount.com"
 fi
 
 # ---------------------------------------------------------------------------
@@ -337,6 +340,20 @@ say "Granting the Data Transfer agent tokenCreator on the freshness identity"
 run gcloud iam service-accounts add-iam-policy-binding "$SA_FRESHNESS" \
   --project "$PROJECT" \
   --member "serviceAccount:$DTS_AGENT" \
+  --role roles/iam.serviceAccountTokenCreator --quiet
+
+# And the same for Cloud Scheduler, which impersonates the scheduler account
+# to mint the OAuth token it calls Cloud Run with.
+#
+# roles/cloudscheduler.serviceAgent normally covers this and is granted
+# automatically at the project level. An organization that strips default
+# grants leaves it absent, and then every scheduled fire is a 403 that
+# run.invoker cannot explain — observed on owc-dpar-d. Granting it
+# explicitly costs one call and does not depend on that default surviving.
+say "Granting the Cloud Scheduler agent tokenCreator on the scheduler identity"
+run gcloud iam service-accounts add-iam-policy-binding "$SA_SCHEDULER" \
+  --project "$PROJECT" \
+  --member "serviceAccount:$SCHEDULER_AGENT" \
   --role roles/iam.serviceAccountTokenCreator --quiet
 
 if (( SKIP_PRINCIPAL )); then
