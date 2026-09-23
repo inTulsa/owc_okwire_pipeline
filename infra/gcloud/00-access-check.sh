@@ -49,33 +49,84 @@ for e in "${DEPLOY_PERMS[@]}" "${ADMIN_PERMS[@]}"; do all+=("${e%%|*}"); done
 printf '\n\033[1mAccess check — %s\033[0m\n' "$PROJECT"
 printf '  account: %s\n' "$(gcloud config get-value account 2>/dev/null)"
 
-if ! GRANTED=$(gcloud projects test-iam-permissions "$PROJECT" \
-      --permissions="$(IFS=,; echo "${all[*]}")" \
-      --format='value(permissions)' 2>&1); then
+# projects.testIamPermissions, called directly.
+#
+# There is no `gcloud projects test-iam-permissions` — the CLI does not
+# expose this verb, only get/set-iam-policy, which need permissions you will
+# not have on a project you do not administer. The REST method is the point
+# of the whole check: ANY principal may ask it what IT can do, so it works
+# exactly where reading the policy does not.
+TOKEN=$(gcloud auth print-access-token 2>/dev/null) || {
   echo ""
-  echo "Could not query permissions on $PROJECT:"
-  echo "  $(tail -1 <<<"$GRANTED")"
-  echo ""
-  echo "Either the project id is wrong, or your account has no access to it"
-  echo "at all. Both are things to raise before anything else."
+  echo "No gcloud credentials. Run: gcloud auth login"
   exit 1
+}
+
+BODY=$(python3 -c '
+import json, sys
+print(json.dumps({"permissions": sys.argv[1:]}))
+' "${all[@]}")
+
+PERMS_UNKNOWN=0
+RESP=$(mktemp); trap 'rm -f "$RESP"' EXIT
+CODE=$(curl -s -o "$RESP" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "$BODY" \
+  "https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT}:testIamPermissions" \
+  || echo 000)
+
+if [[ "$CODE" != "200" ]]; then
+  msg=$(python3 -c "
+import json,sys
+try:
+    e = json.load(open(sys.argv[1])).get('error', {})
+    print(f\"{e.get('status','')} {e.get('message','')}\".strip())
+except Exception:
+    print('(no error body)')
+" "$RESP" 2>/dev/null)
+  echo ""
+  echo "Could not query your permissions on $PROJECT  (HTTP $CODE)"
+  echo "  $msg"
+  echo ""
+  case "$CODE" in
+    403) echo "  Your account has no access to this project at all, or the"
+         echo "  Cloud Resource Manager API is not enabled on it." ;;
+    404) echo "  No such project, or it is not visible to this account." ;;
+    *)   echo "  Unexpected. Check the project id and that you are logged in." ;;
+  esac
+  echo ""
+  echo "  account: $(gcloud config get-value account 2>/dev/null)"
+  echo "  project: $PROJECT"
+  echo ""
+  echo "  Continuing with the checks that need no special access."
+  PERMS_UNKNOWN=1
 fi
-GRANTED=$(tr ';' '\n' <<<"$GRANTED")
+
+GRANTED=$(python3 -c "
+import json,sys
+print('\n'.join(json.load(open(sys.argv[1])).get('permissions', [])))
+" "$RESP")
 has() { grep -qx -- "$1" <<<"$GRANTED"; }
 
 deploy_missing=0
-head2 "Can you run the deploy? (steps 5-6)"
+admin_have=0
+if (( PERMS_UNKNOWN )); then
+  head2 "Your permissions"
+  printf '  could not be determined — see the error above\n'
+else
+head2 "Can you run the deploy? (steps 7-8)"
 for e in "${DEPLOY_PERMS[@]}"; do
   p="${e%%|*}"; r="${e##*|}"
   if has "$p"; then yes "$p" "$r"; else no "$p" "$r"; deploy_missing=$((deploy_missing+1)); fi
 done
 
-admin_have=0
-head2 "Can you run the one privileged step? (step 4)"
+head2 "Can you run the one privileged step? (step 5b)"
 for e in "${ADMIN_PERMS[@]}"; do
   p="${e%%|*}"; r="${e##*|}"
   if has "$p"; then yes "$p" "$r"; admin_have=$((admin_have+1)); else no "$p" "$r"; fi
 done
+fi
 
 head2 "What already exists"
 sa_found=0
@@ -103,7 +154,15 @@ done
 
 # ---------------------------------------------------------------------------
 head2 "Verdict"
-if (( admin_have == 3 )); then
+if (( PERMS_UNKNOWN )); then
+  echo "  Cannot tell what you are allowed to do, so start by asking."
+  echo "  Send your project admin the request:"
+  echo ""
+  echo "    make omes-request ENV=<env> > owc-setup-request.txt"
+  echo ""
+  echo "  If Cloud Resource Manager is simply not enabled on the project yet,"
+  echo "  the request's first command turns it on along with the other 15."
+elif (( admin_have == 3 )); then
   echo "  You can run everything yourself, including step 4:"
   echo ""
   echo "    make gcloud-admin ENV=<env>"

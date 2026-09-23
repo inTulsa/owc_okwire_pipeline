@@ -138,8 +138,13 @@ Send that file. It is self-contained — the recipient needs no repo, no
 commands create, why Terraform is not doing it, and every command verbatim
 so they can read before running.
 
-Name yourself as the deploy principal, which the request already does from
-your active gcloud account. To name a different one:
+**Generate it from the Cloud Shell of the project it is for.** The deploy
+principal is taken from the active gcloud account, and that is often not the
+account you use elsewhere — an OMES project signs you in as your agency
+identity, not the one on your laptop. The request prints which account it
+used so a mismatch is visible before anyone grants anything.
+
+To name a different one explicitly:
 
 ```bash
 make omes-request ENV=dev TF_PRINCIPAL=serviceAccount:tf@their-project.iam.gserviceaccount.com
