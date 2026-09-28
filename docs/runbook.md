@@ -186,13 +186,24 @@ No sudo, fixes it most of the time:
 export GODEBUG=netdns=cgo
 ```
 
-**2. Turn IPv6 off for the session.** Go then sees no usable IPv6 address
-and stops offering AAAA to the dialer. Cloud Shell VMs are disposable, so
-this costs nothing:
+**2. Tell the resolver to prefer IPv4.** This is the reliable one, and it
+only works with step 1 in place — `getaddrinfo` reads `/etc/gai.conf`, Go's
+own resolver does not. Raising the precedence of IPv4-mapped addresses puts
+A records ahead of AAAA for every lookup:
 
 ```bash
-sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1 && sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
+echo 'precedence ::ffff:0:0/96  100' | sudo tee -a /etc/gai.conf
 ```
+
+Check it took — the first line should be an IPv4 address:
+
+```bash
+getent ahosts storage.googleapis.com | head -3
+```
+
+Disabling IPv6 with `sysctl net.ipv6.conf.all.disable_ipv6=1` is the more
+obvious move and frequently does nothing in Cloud Shell, which is
+containerised and may not let that sysctl through. Prefer gai.conf.
 
 **3. Start a new Cloud Shell session** for a different VM. You will need to
 redo `gcloud auth application-default login` and the `env-exports` eval,
