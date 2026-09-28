@@ -142,7 +142,7 @@ module "lightcast" {
   # The jobs are still created, so their wiring is exercised here rather than
   # first tried in prod — they just never fire on their own.
   scheduler_job_iam_in_terraform = var.scheduler_job_iam_in_terraform
-  schedulers_paused              = true
+  schedulers_paused              = var.schedulers_paused
 
   schedules          = local.lightcast_schedules
   task_count_default = length(local.sql_datasets)
@@ -241,7 +241,7 @@ module "enrollment" {
   # The jobs are still created, so their wiring is exercised here rather than
   # first tried in prod — they just never fire on their own.
   scheduler_job_iam_in_terraform = var.scheduler_job_iam_in_terraform
-  schedulers_paused              = true
+  schedulers_paused              = var.schedulers_paused
 
   schedules = [{
     name       = "monthly"

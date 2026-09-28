@@ -36,5 +36,12 @@ snowflake_user = "analytics@tulsaforyou.com"
 # CI supplies this with -var; it has no default on purpose.
 # image_digest = "us-central1-docker.pkg.dev/owc-dpar-d/ar-owc-dpar-d-images-1/owcdata@sha256:..."
 
+# TEMPORARY — dev's schedulers are running so the scheduled path can be
+# exercised end to end. Put this back to true (or delete the line) before
+# owc-dpar-p goes live: both environments read the same pipelines.yml, so
+# two unpaused environments fire the same 35 Snowflake queries at the same
+# minute and bill Lightcast twice.
+schedulers_paused = false
+
 billing_budget_amount = 0
 # billing_account     = "0X0X0X-0X0X0X-0X0X0X"

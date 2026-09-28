@@ -44,10 +44,16 @@ fail=0
 # "appears nowhere" is a sound thing to test with it. A positive assertion
 # needs the member to be in that role's binding specifically, or a scheduler
 # holding some unrelated role would read as "can invoke".
+# Exit codes are three-valued on purpose: 0 present, 1 absent, 2 could not
+# read. Conflating 2 with 1 turns "I could not parse the policy" into "the
+# grant is missing", which is how a working deploy gets reported as broken.
 BINDING_MATCHER='
 import json, sys
 role, member = sys.argv[1], sys.argv[2]
-policy = json.load(sys.stdin)
+try:
+    policy = json.loads(sys.stdin.read())
+except Exception:
+    sys.exit(2)
 sys.exit(0 if any(
     b.get("role") == role and member in b.get("members", [])
     for b in policy.get("bindings", [])
@@ -111,25 +117,33 @@ done
 #
 # In prod that is 06:00 on the 1st, unattended, a month after the deploy.
 for job in "cr-${PREFIX}-lightcast-1" "cr-${PREFIX}-enrollment-1"; do
+  # stderr goes to its own file, NOT into $policy. Under impersonation
+  # gcloud prints "WARNING: This command is using service account
+  # impersonation" to stderr, and 2>&1 prepends that to the JSON, so the
+  # parse fails and the binding reads as absent.
+  polerr=$(mktemp)
   if policy=$(gcloud run jobs get-iam-policy "$job" \
-        --region "$REGION" --project "$PROJECT" --format=json 2>&1); then
+        --region "$REGION" --project "$PROJECT" --format=json 2>"$polerr"); then
     # run.developer, NOT run.invoker. The schedulers post an `overrides`
     # body, which needs run.jobs.runWithOverrides; run.invoker grants only
     # run.jobs.run. Asserting run.invoker here would pass on a project whose
     # every scheduled fire 403s, which is the exact failure this block exists
     # to catch.
-    if binding_has "$policy" roles/run.developer "serviceAccount:$(sa scheduler)"; then
-      pass "scheduler can run $job with overrides"
-    else
-      bad "scheduler CANNOT run $job with overrides — the schedule will 403 when it fires"
-      bad "  needs run.jobs.setIamPolicy, which the deploy account lacks; ask an admin:"
-      bad "  gcloud run jobs add-iam-policy-binding $job \\"
-      bad "    --region $REGION --project $PROJECT \\"
-      bad "    --member serviceAccount:$(sa scheduler) --role roles/run.developer"
-    fi
+    binding_has "$policy" roles/run.developer "serviceAccount:$(sa scheduler)"; rc=$?
+    case $rc in
+      0) pass "scheduler can run $job with overrides" ;;
+      1) bad "scheduler CANNOT run $job with overrides — the schedule will 403 when it fires"
+         bad "  needs run.jobs.setIamPolicy, which the deploy account lacks; ask an admin:"
+         bad "  gcloud run jobs add-iam-policy-binding $job \\"
+         bad "    --region $REGION --project $PROJECT \\"
+         bad "    --member serviceAccount:$(sa scheduler) --role roles/run.developer" ;;
+      *) err "could not parse $job's IAM policy — this is not a missing grant"
+         err "  $(head -2 "$polerr" | tr '\n' ' ')" ;;
+    esac
   else
-    err "could not read $job's IAM policy: $(tail -1 <<<"$policy")"
+    err "could not read $job's IAM policy: $(tail -1 "$polerr")"
   fi
+  rm -f "$polerr"
 done
 
 # --- POSITIVE CONTROL ------------------------------------------------------

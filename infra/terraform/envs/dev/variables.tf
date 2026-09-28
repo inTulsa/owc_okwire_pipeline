@@ -63,6 +63,24 @@ variable "snowflake_user" {
   }
 }
 
+variable "schedulers_paused" {
+  type        = bool
+  default     = true
+  description = <<-EOT
+    Whether dev's Cloud Scheduler jobs are created paused.
+
+    TRUE is the safe default and the one to return to. Both environments
+    read the same pipelines.yml, so an unpaused dev fires prod's exact
+    schedule — 35 Snowflake queries at 06:00 on the 1st, the same minute as
+    prod, every month. Those credits bill to Lightcast, and the two
+    environments contend for the same warehouse.
+
+    Set false ONLY while dev is deliberately being exercised, and only while
+    prod is not live. Turning it off is a decision with someone else's bill
+    attached.
+  EOT
+}
+
 variable "scheduler_job_iam_in_terraform" {
   type        = bool
   default     = true
