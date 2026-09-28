@@ -62,10 +62,35 @@ STATE_BUCKET ?= gcs-$(PROJECT)-tfstate-1
 # apply to another.
 TF_BACKEND = -backend-config="bucket=$(STATE_BUCKET)" -backend-config="prefix=env/$(ENV)"
 TF_VARS    = -var=project_id=$(PROJECT) -var=name_prefix=$(NAME_PREFIX)
-# Who runs terraform. Defaults to the active gcloud account, which is right
-# for a hand deploy; override when OMES attaches their own pipeline identity:
-#   make iam-check ENV=dev TF_PRINCIPAL=serviceAccount:tf@omes-proj.iam.gserviceaccount.com
-TF_PRINCIPAL ?= user:$(shell gcloud config get-value account 2>/dev/null)
+# The identity that runs the deploy. NOT a person.
+#
+# It holds every resource-admin role; a named human is granted
+# roles/iam.serviceAccountTokenCreator on this one account and impersonates
+# it. No human holds an admin-level role, every action is attributable to
+# whoever minted the token, and revoking is one binding.
+# Created by `make gcloud-admin`. See docs/deploy.md#deploy-identity.
+DEPLOY_SA    = sa-$(NAME_PREFIX)-deploy-1@$(PROJECT).iam.gserviceaccount.com
+TF_PRINCIPAL ?= serviceAccount:$(DEPLOY_SA)
+
+# The PERSON who will deploy. Used ONLY by the one-time privileged step, to
+# grant them roles/iam.serviceAccountTokenCreator on DEPLOY_SA. They never
+# receive a resource-admin role.
+#
+# Deliberately not defaulted to the active gcloud account: an admin running
+# the setup from their own shell would name themselves, which is the exact
+# mistake this model exists to remove. The script refuses without it.
+#   make gcloud-admin ENV=dev OPERATOR=user:someone@agency.ok.gov
+OPERATOR ?=
+
+# The google provider reads this and impersonates on every API call, so
+# terraform never runs as the person even if they forget to set anything.
+# `make env-exports` sets the gcloud equivalent for the same shell.
+#
+# Deploying as yourself — a rehearsal on a project you own, where you are
+# already roles/owner and no deploy account exists — is one override:
+#   make up ENV=dev PROJECT=my-test-project GOOGLE_IMPERSONATE_SERVICE_ACCOUNT=
+GOOGLE_IMPERSONATE_SERVICE_ACCOUNT ?= $(DEPLOY_SA)
+export GOOGLE_IMPERSONATE_SERVICE_ACCOUNT
 ORIGINAL   := tests/fixtures/primary_enrollment_data_script.original.py
 SCRAPE     := src/owcdata/pipelines/enrollment/scrape.py
 
@@ -83,7 +108,7 @@ endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check auth-check doctor \
         diff-enrollment derive-scrape derive-check lock lock-check docs-check shell-check base-digest build deploy set-image which-image image-digest tf-init tf-bootstrap preflight scheduler-debug verify-separation env-exports tf-output tf-plan tf-apply tf-fmt tf-validate clean \
-        access-check prep omes-request omes-script gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push \
+        access-check prep omes-request omes-script gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push deploy-identity \
         tf-check install-terraform
 
 help: ## Show this help
@@ -472,12 +497,48 @@ env-exports: ## Print the shell exports the docs' raw gcloud/bq commands use
 	@echo "export PROJECT=$(PROJECT)"
 	@echo "export PREFIX=$(NAME_PREFIX)"
 	@echo "export REGION=$(REGION)"
+	@echo "export CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT=$(DEPLOY_SA)"
+	@echo "export GOOGLE_IMPERSONATE_SERVICE_ACCOUNT=$(DEPLOY_SA)"
 	@echo ': "$${PROJECT:?env-exports produced nothing — are you in the repo root?}"'
+	@# The two impersonation variables are the whole deploy-identity model in
+	@# a shell: gcloud reads the first, the terraform google provider reads
+	@# the second, so every command in this session runs as the deploy
+	@# account rather than as the person. An admin running the one privileged
+	@# step never evals this, so their own step is unaffected.
+	@#
+	@# To deploy as yourself instead (a project you own):
+	@#   unset CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT GOOGLE_IMPERSONATE_SERVICE_ACCOUNT
 	@# Emitted so the eval'd block checks itself. If this target is run from
 	@# the wrong directory make fails, $$(...) is empty, and `eval ""`
 	@# succeeds — so the caller proceeds with blank names and builds things
 	@# like cr--lightcast-1. That cannot be caught after the fact, only
 	@# before, and only by something the successful path emits.
+
+deploy-identity: auth-check ## Check the deploy service account exists and that you can impersonate it
+	@test -n "$(PROJECT)"     || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@test -n "$(NAME_PREFIX)" || { echo "could not read name_prefix from $(TFVARS)" >&2; exit 1; }
+	@echo ">> $(ENV) deploy identity: $(DEPLOY_SA)"
+	@# Unset the impersonation for the existence check itself, or a missing
+	@# account reports as "cannot impersonate" and hides the real answer.
+	@if CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT= \
+	    gcloud iam service-accounts describe $(DEPLOY_SA) --project $(PROJECT) >/dev/null 2>&1; then \
+	  echo "   ok    it exists"; \
+	else \
+	  echo "   NO    it does not exist"; \
+	  echo "         An admin creates it: make gcloud-admin ENV=$(ENV)"; \
+	  echo "         or the standalone script: make omes-script ENV=$(ENV)"; \
+	  exit 1; \
+	fi
+	@if CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT= \
+	    gcloud auth print-access-token --impersonate-service-account=$(DEPLOY_SA) >/dev/null 2>&1; then \
+	  echo "   ok    you can impersonate it"; \
+	  echo ">> Ready. eval \"\$$(make -s env-exports ENV=$(ENV))\" points gcloud and terraform at it."; \
+	else \
+	  echo "   NO    you cannot impersonate it"; \
+	  echo "         Ask an admin for roles/iam.serviceAccountTokenCreator on"; \
+	  echo "         $(DEPLOY_SA) — that one binding, and nothing else."; \
+	  exit 1; \
+	fi
 
 tf-output: ## Show terraform outputs for $(ENV). Add NAME=<output> for one value.
 	@scripts/tf-output.sh $(TF_DIR) $(ENV) $(PROJECT) $(NAME)
@@ -555,7 +616,7 @@ access-check: auth-check ## Where do I stand on $(PROJECT), and what must I ask 
 omes-request: ## What to ask your project admin for, scoped to what is missing
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@infra/gcloud/03-admin-request.sh $(PROJECT) --prefix $(NAME_PREFIX) \
-	  --principal $(TF_PRINCIPAL)
+	  $(if $(OPERATOR),--principal $(OPERATOR),)
 
 # Everything the deploy account can already do: enabling APIs, provisioning
 # the Data Transfer agent, creating the two buckets. Doing this yourself
@@ -565,7 +626,7 @@ prep: auth-check ## Do the setup that needs no elevated rights (APIs, buckets)
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@tmp=$$(mktemp); \
 	  infra/gcloud/04-standalone.sh $(PROJECT) --prefix $(NAME_PREFIX) \
-	    --principal $(TF_PRINCIPAL) --location $(call tfvar,location) \
+	    $(if $(OPERATOR),--principal $(OPERATOR),) --location $(call tfvar,location) \
 	    --part operator > "$$tmp"; \
 	  gcloud config set project $(PROJECT) >/dev/null 2>&1; \
 	  bash "$$tmp"; rc=$$?; rm -f "$$tmp"; exit $$rc
@@ -576,17 +637,17 @@ prep: auth-check ## Do the setup that needs no elevated rights (APIs, buckets)
 omes-script: ## Write a standalone setup script for your project admin to run
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@infra/gcloud/04-standalone.sh $(PROJECT) --prefix $(NAME_PREFIX) \
-	  --principal $(TF_PRINCIPAL) --location $(call tfvar,location) --part admin
+	  $(if $(OPERATOR),--principal $(OPERATOR),) --location $(call tfvar,location) --part admin
 
 gcloud-admin-dry-run: ## Print every privileged command the one-time setup would run, and change nothing
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	infra/gcloud/01-admin-identities.sh $(PROJECT) --prefix $(NAME_PREFIX) \
-	  --principal $(TF_PRINCIPAL) --dry-run
+	  $(if $(OPERATOR),--principal $(OPERATOR),) --dry-run
 
 gcloud-admin: auth-check ## ONE TIME, PRIVILEGED: create the identities, project IAM and APIs
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	infra/gcloud/01-admin-identities.sh $(PROJECT) --prefix $(NAME_PREFIX) \
-	  --principal $(TF_PRINCIPAL)
+	  $(if $(OPERATOR),--principal $(OPERATOR),)
 
 # An apply that works as you says nothing about an apply that runs with the
 # reduced role set. This checks both halves, and also asserts the roles that

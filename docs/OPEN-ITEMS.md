@@ -118,51 +118,50 @@ have `public_access_prevention = "enforced"`.
 
 ---
 
-## 7. The deploy identity should be a service account, not a person {#deploy-identity}
+## 7. Create the deploy identity on each project {#deploy-identity}
 
-**This one blocks prod.** Settle it before the privileged step runs on
-`owc-dpar-p`, so that project is set up once, correctly.
+**Blocks prod, and dev is running without it.** This is no longer a design
+question — the model is in the repo and
+[documented](deploy.md#deploy-identity). What is left is running it.
 
-**Where:** [`names.sh`](../infra/gcloud/names.sh) (`TF_PRINCIPAL_ROLES`),
-`01-admin-identities.sh`, `04-standalone.sh`, `00-access-check.sh`,
-`02-verify-admin.sh`, and `TF_PRINCIPAL` in the [`Makefile`](../Makefile).
+Resource-admin roles belong to `sa-<prefix>-deploy-1`, which nobody logs in
+as. A named person gets `roles/iam.serviceAccountTokenCreator` on that one
+account and impersonates it to deploy.
 
-**The problem:** the one-time setup grants a deploy principal eleven
-resource-admin roles plus `actAs` on five service accounts, and defaults that
-principal to *whichever gcloud account is active when the script runs* — so an
-admin running it from their own shell grants themselves. OMES has separately
-said the deploy operator must not hold admin-level roles at all. Neither a
-person's account nor the admin's is a correct answer, so the current design
-has none.
+### `owc-dpar-d` — set up under the old model, needs migrating
 
-**Recommended:** an account nobody logs in as.
+An admin runs, from an up-to-date clone:
 
-```
-sa-<prefix>-deploy-1@<project>.iam.gserviceaccount.com
+```bash
+make gcloud-admin ENV=dev OPERATOR=user:THE-PERSON@agency.ok.gov
 ```
 
-- It holds the eleven resource-admin roles and `actAs` on the five runtime
-  accounts. No human holds any of it.
-- Whoever deploys is granted `roles/iam.serviceAccountTokenCreator` on **that
-  one account** — auditable, revocable, and not an admin role.
-- Terraform impersonates it with `GOOGLE_IMPERSONATE_SERVICE_ACCOUNT`, gcloud
-  with `--impersonate-service-account`.
+Idempotent: it skips what exists and adds the deploy account, its roles, its
+`actAs` bindings, and the operator's `tokenCreator`. Then the operator
+confirms with `make deploy-identity ENV=dev`.
 
-**Work it implies:** `names.sh` gains the account and decides where its roles
-live; the two setup scripts create it and stop granting anything to a user
-account; `TF_PRINCIPAL` becomes that account and the terraform targets export
-the impersonation variable; `00-access-check.sh` tests the **impersonated**
-identity rather than the caller's; `02-verify-admin.sh` asserts that no *user*
-account holds the eleven roles, which is a stronger claim than it makes today.
-The guard in `04-standalone.sh` that refuses when the principal equals the
-caller can then be removed — the two can never be equal.
+**Afterwards, the old grants should be removed** — until they are, the human
+account still holds eleven resource-admin roles and the migration has added
+a path rather than replaced one. `make iam-check ENV=dev STRICT=1` names what
+is still attached, and it is the receipt to send OMES.
 
-**Consequence of leaving it:** the operator cannot finish a deploy. Two
-permissions in the normal path sit outside the eleven roles —
-`run.jobs.setIamPolicy` (every `google_cloud_run_v2_job_iam_member`) and
-`iam.serviceAccounts.actAs` (any Cloud Scheduler job update, which re-attaches
-its service account). Both were hit on `owc-dpar-d`. The repo and the live
-project then drift, because only an admin can reconcile them.
+### `owc-dpar-p` — nothing exists yet, so get it right first time
+
+The same command with `ENV=prod`, run once, before anything else. No
+migration and no human ever holds the roles.
+
+### Why a service account rather than a person
+
+- **No human holds an admin-level role**, which is OMES's stated rule.
+- **Actions stay attributable** — an impersonated call records both the
+  service account and the person who minted the token.
+- **Revoking is one binding**, not eleven roles and five `actAs` grants.
+
+One role in the set is worth flagging to OMES: the deploy account holds
+`roles/run.admin` rather than `roles/run.developer`, because writing a Cloud
+Run job's IAM policy needs `run.jobs.setIamPolicy` and `run.developer` does
+not carry it. It is the one role broader than "administer the resource", and
+it is held by an account no person logs in as.
 
 ---
 

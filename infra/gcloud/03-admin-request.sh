@@ -83,20 +83,27 @@ WHY
   everything needing those rights is collected into one script, run once.
   After today nobody needs either role again.
 
-  $PRINCIPAL already holds the ten resource-admin roles the deploy needs.
-  The two above are the only gap.
+  Nobody is asking for admin roles on a person's account. The resource-admin
+  roles go to a service account this creates, sa-$PREFIX-deploy-1, which no
+  human logs in as. $PRINCIPAL gets one binding — tokenCreator on that
+  account — and deploys by impersonating it. Revoking is that one binding.
 
 WHAT THE ONE COMMAND CREATES
-  6 service accounts   one per job, so each holds only what it needs. The web
-                       scraper cannot read the Snowflake password; the
-                       Snowflake job cannot write the scraper's cache.
+  7 service accounts   six runtime, one per job, so each holds only what it
+                       needs — the web scraper cannot read the Snowflake
+                       password; the Snowflake job cannot write the scraper's
+                       cache. Plus sa-$PREFIX-deploy-1, which runs the deploy.
   10 project bindings  bigquery.jobUser / logging.logWriter /
-                       monitoring.metricWriter across those accounts.
-  5 actAs grants       so the deploy account may attach those identities to
-                       Cloud Run and Cloud Scheduler jobs. Per-account, not
-                       project-wide.
-  1 tokenCreator       for Google's BigQuery Data Transfer agent, on one
-                       account.
+                       monitoring.metricWriter across the runtime accounts.
+  11 deploy roles      on sa-$PREFIX-deploy-1, not on any person. Resource
+                       administration only: none of them can read or write
+                       the project IAM policy or touch a service account.
+  5 actAs grants       so the DEPLOY ACCOUNT may attach the runtime identities
+                       to Cloud Run and Cloud Scheduler jobs. Per-account,
+                       not project-wide.
+  2 tokenCreator       one for Google's BigQuery Data Transfer agent, and one
+                       letting $PRINCIPAL impersonate the deploy account.
+                       That second one is the only grant to a human.
   API enables          of the 16 needed.
   2 GCS buckets        Terraform state, and a source mirror.
 

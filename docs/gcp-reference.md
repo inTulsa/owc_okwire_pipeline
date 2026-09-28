@@ -225,21 +225,23 @@ Learned by hitting each one on `owc-dpar-d`. Assume all of it applies to
 | `constraints/gcp.resourceLocations` forbids `global` | Secret Manager refuses `replication { auto {} }` | `user_managed` replication pinned to `var.region` |
 | Default service-agent grants are stripped | The Cloud Scheduler agent has no `tokenCreator`, and the automatic `roles/cloudscheduler.serviceAgent` is absent | `01-admin-identities.sh` forces both agents into existence and grants them explicitly |
 | No `serviceAccountAdmin` / `projectIamAdmin` / `serviceUsageAdmin` for the deploy account | The whole split this repo is built around | Step 4 of [`deploy.md`](deploy.md), run once by an admin |
-| No admin-level roles on a human account **at all** | Stated after dev was stood up | **Unresolved** — [OPEN-ITEMS item 7](OPEN-ITEMS.md#deploy-identity) |
+| No admin-level roles on a human account **at all** | Stated after dev was stood up | The [deploy identity](deploy.md#deploy-identity): roles live on `sa-<prefix>-deploy-1`, a person holds only `tokenCreator` on it. Not yet applied to either project — [OPEN-ITEMS item 7](OPEN-ITEMS.md#deploy-identity) |
 | No project IAM policy reads for the deploy account | `iam-check` runs in REDUCED mode; `scheduler-debug` checks 3 and 4 are inconclusive | Reported as `????`, never as `NO` |
 | No log reads without `roles/logging.viewer` | Every runbook diagnostic silently returns nothing | `logging.viewer` is one of the eleven roles |
 | Cloud Shell ships a terraform **stub** | `make up` reports success having created nothing | `make install-terraform`; `tf-check` guards every `tf-*` target |
 
-Two permissions the eleven roles do **not** include, both of which the normal
-deploy path needs:
+Two permissions are easy to leave out and both stop a deploy partway:
 
-- `run.jobs.setIamPolicy` — every `google_cloud_run_v2_job_iam_member`
-- `iam.serviceAccounts.actAs` — updating a Cloud Scheduler job re-attaches its
-  service account, so even a body-only change is refused
+- `run.jobs.setIamPolicy` — every `google_cloud_run_v2_job_iam_member`. Not in
+  `roles/run.developer`, which is why the deploy identity holds
+  `roles/run.admin`.
+- `iam.serviceAccounts.actAs` on each attached account — updating a Cloud
+  Scheduler job re-attaches its service account, so even a body-only change
+  is refused without it.
 
-Until [OPEN-ITEMS item 7](OPEN-ITEMS.md#deploy-identity)
-is settled, those two steps belong to an admin, and Terraform cannot be
-reconciled with the live project by the operator alone.
+Both belong to `sa-<prefix>-deploy-1`. A person holding the eleven roles
+directly has neither, which is why a human-principal deploy cannot finish —
+see [OPEN-ITEMS item 7](OPEN-ITEMS.md#deploy-identity).
 
 ## What prod does differently
 

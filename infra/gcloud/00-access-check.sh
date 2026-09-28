@@ -28,7 +28,11 @@ head2() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 DEPLOY_PERMS=(
   "storage.buckets.create|roles/storage.admin"
   "bigquery.datasets.create|roles/bigquery.admin"
-  "run.jobs.create|roles/run.developer"
+  "run.jobs.create|roles/run.admin"
+  # Writing a Cloud Run job's IAM policy — modules/pipeline/job.tf grants the
+  # scheduler run.developer on each job. roles/run.developer cannot do this;
+  # roles/run.admin can, which is why the deploy identity holds the latter.
+  "run.jobs.setIamPolicy|roles/run.admin"
   "cloudscheduler.jobs.create|roles/cloudscheduler.admin"
   "secretmanager.secrets.create|roles/secretmanager.admin"
   "artifactregistry.repositories.create|roles/artifactregistry.admin"
@@ -42,19 +46,22 @@ ADMIN_PERMS=(
   "resourcemanager.projects.setIamPolicy|roles/resourcemanager.projectIamAdmin"
   "serviceusage.services.enable|roles/serviceusage.serviceUsageAdmin"
 )
-# Permissions the normal deploy path needs that NONE of the eleven roles
-# carries. A NO here is the expected state, not a misconfiguration — it says
-# which resources an admin has to touch. Listed because the deploy otherwise
-# reports itself ready and then fails partway through an apply.
-GAP_PERMS=(
-  "run.jobs.setIamPolicy|roles/run.developer does NOT include it"
-)
-
 all=()
-for e in "${DEPLOY_PERMS[@]}" "${ADMIN_PERMS[@]}" "${GAP_PERMS[@]}"; do all+=("${e%%|*}"); done
+for e in "${DEPLOY_PERMS[@]}" "${ADMIN_PERMS[@]}"; do all+=("${e%%|*}"); done
 
 printf '\n\033[1mAccess check — %s\033[0m\n' "$PROJECT"
 printf '  account: %s\n' "$(gcloud config get-value account 2>/dev/null)"
+# This answers for whoever the call is MADE AS, which under the deploy-identity
+# model is the impersonated service account, not the person at the keyboard.
+# Saying which makes a screenful of NO self-explanatory instead of alarming.
+if [[ -n "${CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT:-}" ]]; then
+  printf '  acting as: %s\n' "$CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT"
+  printf '  \033[2m%s\033[0m\n' "(impersonated — this is what the deploy will actually be)"
+else
+  printf '  acting as: itself — NOT impersonating the deploy account\n'
+  printf '  \033[2m%s\033[0m\n' "Deploy permissions below will read NO, which is correct for a"
+  printf '  \033[2m%s\033[0m\n' "person. Run: eval \"\$(make -s env-exports ENV=<env>)\""
+fi
 
 # projects.testIamPermissions, called directly.
 #
@@ -134,15 +141,6 @@ for e in "${ADMIN_PERMS[@]}"; do
   if has "$p"; then yes "$p" "$r"; admin_have=$((admin_have+1)); else no "$p" "$r"; fi
 done
 
-head2 "Known gaps — an admin does these even on a correct setup"
-for e in "${GAP_PERMS[@]}"; do
-  p="${e%%|*}"; r="${e##*|}"
-  if has "$p"; then yes "$p" "you have it; no admin needed"; else no "$p" "$r"; fi
-done
-printf '  \033[2m%s\033[0m\n' "A NO above is expected. modules/pipeline/job.tf grants the scheduler"
-printf '  \033[2m%s\033[0m\n' "run.developer on each Cloud Run job, and writing that binding needs"
-printf '  \033[2m%s\033[0m\n' "run.jobs.setIamPolicy. Without it 'make up' fails on that resource."
-printf '  \033[2m%s\033[0m\n' "See docs/OPEN-ITEMS.md item 7. actAs is checked by 'make iam-check'."
 fi
 
 # An organization may restrict where resources can live. Finding that out

@@ -147,15 +147,29 @@ if (( ! DRY_RUN )); then
   }
 fi
 
+# --principal is the PERSON who will deploy. It is never defaulted.
+#
+# It used to fall back to the active gcloud account, which meant an admin
+# running this from their own shell silently granted themselves — that is
+# exactly what happened on owc-dpar-d, and the operator got nothing. A
+# default that is wrong most of the time is worse than a prompt.
 if (( ! SKIP_PRINCIPAL )) && [[ -z "$PRINCIPAL" ]]; then
-  active=$(gcloud config get-value account 2>/dev/null || true)
-  [[ -n "$active" && "$active" != "(unset)" ]] || {
-    echo "No --principal given and no active gcloud account to fall back on." >&2
-    echo "Run 'gcloud auth login', or pass --principal / --no-principal." >&2
-    exit 1
-  }
-  PRINCIPAL="user:$active"
-  note "Terraform principal defaulted to the active account: $PRINCIPAL"
+  cat >&2 <<'NOPRINCIPAL'
+
+--principal is required, and is NOT defaulted to the account running this.
+
+It names the person who will deploy. They are granted exactly one thing:
+tokenCreator on the deploy service account, which they impersonate. They do
+NOT receive the resource-admin roles — those go to the service account.
+
+  --principal user:someone@agency.ok.gov
+
+If the deploying person is not decided yet, run with --no-principal. The
+deploy account and all its roles are still created; only the grant that lets
+a human use it is deferred.
+
+NOPRINCIPAL
+  exit 64
 fi
 
 # ---------------------------------------------------------------------------
@@ -300,6 +314,13 @@ create_sa build      "OWC Cloud Build"             "Runs container builds. Reads
 create_sa powerbi    "OWC PowerBI reader"          "Read-only on owc_marts. See docs/architecture.md ADR-006 for the JSON-key exception."
 create_sa freshness  "OWC freshness check"         "Runs the owc_ops.pipeline_runs freshness scheduled query. Read-only."
 
+# The seventh, and different in kind: it runs the deploy rather than being
+# created by it. Terraform never sees it and nothing attaches it to a
+# resource — which is why it is not in ALL_SAS and `make names-check` does
+# not expect it in naming.tf.
+say "Creating the deploy identity"
+create_sa deploy "OWC deploy" "Runs Terraform and the gcloud deploy steps. Impersonated by a named person; no human holds its roles."
+
 # ---------------------------------------------------------------------------
 # 5. Project-level IAM for the runtime identities.
 #
@@ -356,29 +377,50 @@ run gcloud iam service-accounts add-iam-policy-binding "$SA_SCHEDULER" \
   --member "serviceAccount:$SCHEDULER_AGENT" \
   --role roles/iam.serviceAccountTokenCreator --quiet
 
-if (( SKIP_PRINCIPAL )); then
-  say "Skipping all Terraform-principal grants (--no-principal)"
-  note "Re-run with --principal <member> once OMES names the identity that"
-  note "will run Terraform. Nothing else in this script depends on it."
-else
-  say "Granting $PRINCIPAL actAs on the ${#ATTACHED_SAS[@]} identities Terraform attaches"
-  for target in "${ATTACHED_SAS[@]}"; do
-    run gcloud iam service-accounts add-iam-policy-binding "$target" \
-      --project "$PROJECT" --member "$PRINCIPAL" \
-      --role roles/iam.serviceAccountUser --quiet
-  done
+# ---------------------------------------------------------------------------
+# 7. The deploy identity's roles, and the one grant a human gets.
+#
+# The resource-admin roles go to a SERVICE ACCOUNT, never to a person. A
+# named human is granted tokenCreator on that account and impersonates it.
+# Three properties follow:
+#
+#   auditable   every action is attributable to the person who minted the
+#               token, in the same audit log entry
+#   revocable   one binding removes all of it
+#   compliant   no human holds an admin-level role, which is what OMES asked
+#
+# These grants do not depend on knowing who deploys, so they run either way.
+# ---------------------------------------------------------------------------
+say "Granting the deploy identity actAs on the ${#ATTACHED_SAS[@]} identities it attaches"
+for target in "${ATTACHED_SAS[@]}"; do
+  run gcloud iam service-accounts add-iam-policy-binding "$target" \
+    --project "$PROJECT" --member "serviceAccount:$SA_DEPLOY" \
+    --role roles/iam.serviceAccountUser --quiet
+done
 
-  # -------------------------------------------------------------------------
-  # 7. The Terraform principal's own roles. This is the list OMES asked for.
-  # -------------------------------------------------------------------------
-  say "Granting $PRINCIPAL the ${#TF_PRINCIPAL_ROLES[@]} resource-admin roles Terraform needs"
-  for role in "${TF_PRINCIPAL_ROLES[@]}"; do
-    run gcloud projects add-iam-policy-binding "$PROJECT" \
-      --member "$PRINCIPAL" --role "$role" --condition=None --quiet
-  done
+say "Granting the deploy identity its ${#TF_PRINCIPAL_ROLES[@]} resource-admin roles"
+for role in "${TF_PRINCIPAL_ROLES[@]}"; do
+  run gcloud projects add-iam-policy-binding "$PROJECT" \
+    --member "serviceAccount:$SA_DEPLOY" --role "$role" --condition=None --quiet
+done
+note ""
+note "NOT granted to anyone, human or service account:"
+for role in "${TF_PRINCIPAL_FORBIDDEN_ROLES[@]}"; do note "  $role"; done
+
+if (( SKIP_PRINCIPAL )); then
   note ""
-  note "NOT granted, and not needed any more:"
-  for role in "${TF_PRINCIPAL_FORBIDDEN_ROLES[@]}"; do note "  $role"; done
+  say "No operator named (--no-principal) — nobody can impersonate it yet"
+  note "Re-run with --principal user:<address> once the deploying person is"
+  note "decided. Everything above is already in place."
+else
+  say "Granting $PRINCIPAL tokenCreator on the deploy identity, and nothing else"
+  run gcloud iam service-accounts add-iam-policy-binding "$SA_DEPLOY" \
+    --project "$PROJECT" --member "$PRINCIPAL" \
+    --role roles/iam.serviceAccountTokenCreator --quiet
+  note ""
+  note "$PRINCIPAL now holds exactly one binding in this project:"
+  note "  tokenCreator on $SA_DEPLOY"
+  note "They deploy by impersonating it. See docs/deploy.md#deploy-identity."
 fi
 
 # ---------------------------------------------------------------------------

@@ -97,17 +97,22 @@ emit "set -euo pipefail"
 emit ""
 emit "PROJECT=$PROJECT"
 emit "DEPLOYER=$PRINCIPAL"
+emit "DEPLOY_SA=$SA_DEPLOY"
 emit ""
-emit '# ^ CHECK THIS BEFORE RUNNING.'
+emit '# ^ CHECK DEPLOYER BEFORE RUNNING.'
 emit '#'
-emit '# DEPLOYER is the account that will run the deploys from here on. It is'
-emit '# NOT the account running this script — it is the person you are doing'
-emit '# this for. It gets actAs on the six accounts below so it can attach'
-emit '# them to Cloud Run and Scheduler jobs.'
+emit '# DEPLOYER is the PERSON who will run the deploys. It is NOT the account'
+emit '# running this script — it is the person you are doing this for.'
+emit '#'
+emit '# They receive exactly ONE binding in this project: tokenCreator on'
+emit '# DEPLOY_SA. Every resource-admin role goes to DEPLOY_SA instead, and'
+emit '# nobody logs in as that. So no human account holds an admin-level role,'
+emit '# every deploy action is attributable to whoever minted the token, and'
+emit '# revoking access is one binding.'
 emit '#'
 emit '# If that address is not the deploy operator, stop and ask them for the'
 emit '# right one. A wrong value here grants nothing useful to anybody and'
-emit '# surfaces as a permission error on their first apply, not on yours.'
+emit '# surfaces as a permission error on their first deploy, not on yours.'
 emit ""
 emit '# Refuse to run against the wrong project.'
 emit 'ACTIVE=$(gcloud config get-value project 2>/dev/null || true)'
@@ -136,7 +141,7 @@ emit '  [[ -n "${DEPLOYER_IS_ME:-}" ]] || exit 1'
 emit 'fi'
 emit ''
 
-if [[ "$PART" == "all" ]]; then TOTAL=6; else TOTAL=3; fi
+if [[ "$PART" == "all" ]]; then TOTAL=7; elif [[ "$PART" == "admin" ]]; then TOTAL=4; else TOTAL=3; fi
 n=0
 next_step() { n=$((n+1)); emit "step \"$n/$TOTAL  $1\""; }
 
@@ -180,7 +185,7 @@ emit ""
 fi   # end operator part
 
 if [[ "$PART" != "operator" ]]; then
-next_step "Creating ${#ALL_SAS[@]} service accounts"
+next_step "Creating $(( ${#ALL_SAS[@]} + 1 )) service accounts"
 emit '# One per job, so each holds only what it needs: the web scraper cannot'
 emit '# read the Snowflake password, and the Snowflake job cannot write the'
 emit "# scraper's cache."
@@ -200,6 +205,7 @@ add_sa scheduler  "OWC Cloud Scheduler invoker" "Invokes the Cloud Run jobs. run
 add_sa build      "OWC Cloud Build"             "Runs container builds. Reads build source, writes the image and logs. Nothing else."
 add_sa powerbi    "OWC PowerBI reader"          "Read-only on owc_marts."
 add_sa freshness  "OWC freshness check"         "Runs the owc_ops.pipeline_runs freshness scheduled query. Read-only."
+add_sa deploy     "OWC deploy"                  "Runs Terraform and the gcloud deploy steps. Impersonated by a named person; no human holds its roles."
 emit ""
 
 if [[ "$PART" == "admin" ]]; then
@@ -236,22 +242,29 @@ emit '  --project "$PROJECT" --member "serviceAccount:$SCHEDULER_AGENT" \'
 emit '  --role roles/iam.serviceAccountTokenCreator --quiet >/dev/null'
 emit ""
 
-next_step "Letting the deploy account attach those identities (${#ATTACHED_SAS[@]})"
+next_step "Letting the DEPLOY ACCOUNT attach those identities (${#ATTACHED_SAS[@]})"
 emit '# Setting a service account on a Cloud Run job, a Scheduler job, a build'
 emit '# or a scheduled query requires actAs ON THAT ACCOUNT. Granted per'
-emit '# account, never project-wide.'
+emit '# account, never project-wide — and to the deploy service account, not'
+emit '# to a person.'
 for t in "${ATTACHED_SAS[@]}"; do
   emit "gcloud iam service-accounts add-iam-policy-binding $t \\"
-  emit "  --project \"\$PROJECT\" --member \"\$DEPLOYER\" \\"
+  emit "  --project \"\$PROJECT\" --member \"serviceAccount:\$DEPLOY_SA\" \\"
   emit "  --role roles/iam.serviceAccountUser --quiet >/dev/null"
 done
 emit ""
-emit '# The ten resource-admin roles the deploy needs. Harmless to re-run if'
-emit '# the account already has them.'
+emit "# The ${#TF_PRINCIPAL_ROLES[@]} resource-admin roles the deploy needs. Harmless to re-run."
 for r in "${TF_PRINCIPAL_ROLES[@]}"; do
   emit "gcloud projects add-iam-policy-binding \"\$PROJECT\" \\"
-  emit "  --member \"\$DEPLOYER\" --role $r --condition=None --quiet >/dev/null"
+  emit "  --member \"serviceAccount:\$DEPLOY_SA\" --role $r --condition=None --quiet >/dev/null"
 done
+emit ""
+next_step "Letting the named person use the deploy account (one binding)"
+emit '# The only thing a human gets. They impersonate the deploy account;'
+emit '# they never hold its roles.'
+emit 'gcloud iam service-accounts add-iam-policy-binding "$DEPLOY_SA" \'
+emit '  --project "$PROJECT" --member "$DEPLOYER" \'
+emit '  --role roles/iam.serviceAccountTokenCreator --quiet >/dev/null'
 emit ""
 fi   # end admin part
 

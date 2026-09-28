@@ -12,9 +12,9 @@ Two production data pipelines, one schedule, one warehouse, one runbook.
 Both land in BigQuery (`owc_marts`), which PowerBI reads directly. Schedules
 live in [`pipelines.yml`](pipelines.yml).
 
-> **One thing is open and it blocks production.** The deploy principal is a
-> person's account when it should be a service account —
-> [`OPEN-ITEMS.md` item 7](docs/OPEN-ITEMS.md#deploy-identity).
+> **One thing is open and it blocks production.** Deploys should run as
+> `sa-<prefix>-deploy-1`, impersonated by a named person, and no project has
+> that account yet — [`OPEN-ITEMS.md` item 7](docs/OPEN-ITEMS.md#deploy-identity).
 
 ## Start here
 

@@ -38,6 +38,20 @@ ATTACHED_SAS=("$SA_LIGHTCAST" "$SA_ENROLLMENT" "$SA_SCHEDULER" "$SA_BUILD" "$SA_
 # All six, for existence checks.
 ALL_SAS=("${ATTACHED_SAS[@]}" "$SA_POWERBI")
 
+# The identity that RUNS the deploy, as opposed to the six the deploy
+# creates. Deliberately outside ALL_SAS and ATTACHED_SAS: nothing attaches it
+# to a resource, Terraform never sees it, and `make names-check` compares
+# ALL_SAS against the Terraform naming convention — which does not and should
+# not know about it.
+#
+# It exists so that no human holds resource-admin roles. It carries them all;
+# a named person is granted roles/iam.serviceAccountTokenCreator on this one
+# account and impersonates it to deploy. That is auditable (every action is
+# attributable to the person who minted the token), revocable with one
+# binding, and satisfies OMES's rule that an operator hold no admin-level
+# role. See docs/deploy.md#deploy-identity.
+SA_DEPLOY=$(sa_email deploy)
+
 BUCKET_RAW="gcs-${PREFIX}-raw-1"
 BUCKET_ENROLLMENT_STATE="gcs-${PREFIX}-enrollment-state-1"
 BUCKET_STATE="gcs-${PROJECT}-tfstate-1"
@@ -80,7 +94,16 @@ TF_PRINCIPAL_ROLES=(
   # Datasets, tables, views, and the freshness scheduled query (a Data
   # Transfer Service resource).
   roles/bigquery.admin
-  roles/run.developer
+  # run.ADMIN, not run.developer. modules/pipeline/job.tf grants the scheduler
+  # run.developer on each job, and writing that binding needs
+  # run.jobs.setIamPolicy — which run.developer does not carry and run.admin
+  # does. With run.developer here the apply dies on that one resource and the
+  # schedulers 403 forever. Confirm with:
+  #   gcloud iam roles describe roles/run.admin
+  # This is the one role in this list that is broader than "administer the
+  # resource". It is acceptable because it is held by SA_DEPLOY, which no
+  # human logs in as — it would not be acceptable on a person's account.
+  roles/run.admin
   roles/cloudscheduler.admin
   # The secret CONTAINER. The value is added by hand and never enters state.
   roles/secretmanager.admin

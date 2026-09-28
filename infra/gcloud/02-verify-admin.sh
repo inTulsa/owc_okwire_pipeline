@@ -213,6 +213,33 @@ else
       err "could not read ${target%%@*}'s policy: $(tail -1 <<<"$pol")"
     fi
   done
+
+  # The one binding the whole model rests on. A deploy account nobody can
+  # impersonate blocks every deploy; one that too many people can impersonate
+  # quietly gives them all of the roles above.
+  head2 "Deploy identity ${SA_DEPLOY%%@*} — who may impersonate it"
+  if pol=$(gcloud iam service-accounts get-iam-policy "$SA_DEPLOY" \
+       --project "$PROJECT" --format=json 2>&1); then
+    holders=$(python3 -c '
+import json, sys
+pol = json.load(sys.stdin)
+print("\n".join(sorted(
+    m for b in pol.get("bindings", [])
+    if b.get("role") == "roles/iam.serviceAccountTokenCreator"
+    for m in b.get("members", []))))
+' <<<"$pol")
+    if [[ -z "$holders" ]]; then
+      bad "nobody can impersonate it — no deploy is possible"
+      bad "  gcloud iam service-accounts add-iam-policy-binding $SA_DEPLOY \\"
+      bad "    --project $PROJECT --member user:<address> \\"
+      bad "    --role roles/iam.serviceAccountTokenCreator"
+    else
+      while read -r m; do [[ -n "$m" ]] && pass "may impersonate: $m"; done <<<"$holders"
+      printf '  \033[2m%s\033[0m\n' "Each of these acts with every role above. Keep the list short."
+    fi
+  else
+    err "could not read the deploy account's policy: $(tail -1 <<<"$pol")"
+  fi
 fi
 
 # --- APIs -------------------------------------------------------------------

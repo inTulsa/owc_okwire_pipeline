@@ -62,16 +62,73 @@ mkdir -p ~/owc && cd ~/owc \
 Cloud Shell logs `gcloud` in for you. It does **not** log Terraform in, and
 that is the half people skip.
 
+Order matters here: authenticate **as yourself** first, then switch the shell
+onto the deploy identity.
+
+```bash
+gcloud auth application-default login
+```
+
 ```bash
 eval "$(make -s env-exports ENV=dev)"
+```
+
+```bash
 gcloud config set project $PROJECT
-gcloud auth application-default login
 gcloud auth application-default set-quota-project $PROJECT
 ```
 
 `env-exports` sets `$PROJECT`, `$PREFIX`, `$REGION` from that environment's
-`terraform.tfvars`, so they cannot drift from what Terraform builds. `make`
+`terraform.tfvars`, so they cannot drift from what Terraform builds. It also
+sets the two variables that put this shell on the deploy identity. `make`
 targets read the project themselves and need none of it.
+
+### You deploy as a service account, not as yourself {#deploy-identity}
+
+Nobody holds the resource-admin roles. They belong to
+
+```
+sa-<prefix>-deploy-1@<project>.iam.gserviceaccount.com
+```
+
+and you are granted exactly one thing — `roles/iam.serviceAccountTokenCreator`
+on that account. You deploy by impersonating it.
+
+Three things follow, and they are the reason it is built this way:
+
+- **No human holds an admin-level role**, which is OMES's rule. Your own
+  account has one binding in the project.
+- **Every action stays attributable.** An impersonated call records both the
+  service account and the person who minted the token, so "who ran this
+  apply" is still answerable.
+- **Revoking is one binding.** Removing someone's `tokenCreator` removes all
+  of it at once, with nothing to unpick across eleven roles and five
+  accounts.
+
+`env-exports` sets both halves — gcloud reads
+`CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT`, and the Terraform google
+provider reads `GOOGLE_IMPERSONATE_SERVICE_ACCOUNT` — so every command in
+that shell runs as the deploy account. Nothing else has to be passed.
+
+Confirm it before going further:
+
+```bash
+make deploy-identity ENV=dev
+```
+
+It answers two questions separately: does the account exist, and can you
+impersonate it. A missing account is an admin step; a missing `tokenCreator`
+is one binding to ask for.
+
+**To deploy as yourself instead** — a rehearsal on a project you own, where
+you are already `roles/owner` and no deploy account exists:
+
+```bash
+unset CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT GOOGLE_IMPERSONATE_SERVICE_ACCOUNT
+```
+
+An admin running the one privileged step never evals `env-exports`, so their
+step is unaffected by any of this.
 
 The quota project is not optional. Terraform's GCS backend bills every call to
 whatever `quota_project_id` sits in your ADC; an inactive one makes every call
@@ -188,12 +245,16 @@ You cannot run it yourself — it fails at the fourth step with a 403 on
 split exists to avoid needing. It stops there rather than half-finishing,
 and the steps before it are idempotent, so a mistaken run costs nothing.
 
-Three steps, and nothing but identities: create the six service accounts,
-grant them their project roles, and grant **you** `actAs` on the five the
-deploy attaches. It refuses to run against the wrong project, skips anything
-that already exists, and is safe to re-run.
+Four steps, and nothing but identities: create the seven service accounts
+(six runtime, one deploy), grant the runtime ones their project roles, give
+the **deploy account** the resource-admin roles and `actAs` on the five it
+attaches, and grant **you** `tokenCreator` on the deploy account. It refuses
+to run against the wrong project, skips anything that already exists, and is
+safe to re-run.
 
-Nothing in it grants you anything that can administer IAM.
+The only thing it grants a human is the right to impersonate one service
+account. Nothing in it gives you a role that can administer IAM, or any
+resource-admin role at all — see [the deploy identity](#deploy-identity).
 
 ### They grant you the two roles for the call
 
@@ -261,7 +322,7 @@ Two levels, and only the first is hard to get.
 | Access | Scope | Needed for |
 |---|---|---|
 | **GCP, privileged** | `roles/iam.serviceAccountAdmin` + `roles/resourcemanager.projectIamAdmin` + `roles/serviceusage.serviceUsageAdmin` | `make gcloud-admin`, **once per project**, and `make iam-check STRICT=1` afterwards. In an OMES project this is theirs to run, from `make gcloud-admin-dry-run` output. |
-| **GCP, day to day** | the eleven resource-admin roles `make gcloud-admin` grants, plus `serviceAccountUser` on five accounts | Everything else: `make up`, `make build`, `make tf-apply`, `make smoke`. Deliberately cannot read or write the project IAM policy. |
+| **GCP, day to day** | `roles/iam.serviceAccountTokenCreator` on `sa-<prefix>-deploy-1` — **one binding, and the only one you hold** | Everything else: `make up`, `make build`, `make tf-apply`, `make smoke`, by impersonating that account. The eleven resource-admin roles live on it, not on you, and none of them can read or write the project IAM policy. See [the deploy identity](#deploy-identity). |
 | **Snowflake** | the reader account login + password | The lightcast pipeline. Password goes to Secret Manager, never into Terraform. |
 | **Alert distribution list** | an address you can add members to | `alert_emails`. Use a list, not a person, so the rotation changes without a Terraform change. |
 | **Billing account** | `roles/billing.costsManager` | **Only** if you enable the budget alert. It is off by default. |
@@ -332,20 +393,19 @@ make gcloud-admin-dry-run ENV=dev
 Send that output to OMES. It is every command, shell-quoted, with nothing
 inferred — they can read it, run it, or run the script themselves.
 
-**`--principal` must be passed explicitly.** It defaults to whichever gcloud
-account is active, so an admin running the script from their own shell grants
-*themselves* the eleven roles and the five `actAs` bindings, and the operator
-gets nothing. That is what happened on `owc-dpar-d`. Name the account that
-will actually deploy:
+**`--principal` is required and is never defaulted.** It names the *person*
+who will deploy, and the only thing they get is `tokenCreator` on the deploy
+service account. The script used to fall back to whichever gcloud account was
+active, which meant an admin running it from their own shell silently granted
+themselves — so it now refuses rather than guess:
 
 ```bash
-./infra/gcloud/01-admin-identities.sh owc-dpar-d --principal user:THE-DEPLOY-ACCOUNT@agency.ok.gov
+./infra/gcloud/01-admin-identities.sh owc-dpar-d --principal user:THE-PERSON@agency.ok.gov
 ```
 
-Which account that should be is
-[OPEN-ITEMS item 7](OPEN-ITEMS.md#deploy-identity),
-and the answer should be a service account rather than a person. Settle it
-before running this on prod.
+If the deploying person is not decided yet, pass `--no-principal`. The deploy
+account and all its roles are still created; only the grant that lets a human
+use it is deferred.
 
 If OMES is hosting Terraform state — *"we can hook up your instance with the
 state"* — they add `--no-state-bucket`, tell you the bucket, and you set it in
@@ -410,7 +470,7 @@ mistake costs.
 | | |
 |---|---|
 | **`snowflake_user` is a placeholder** | `envs/prod/terraform.tfvars` ships `REPLACE_ME@…` and the plan rejects it on purpose. Put the real reader account in first. |
-| **The deploy identity** | [OPEN-ITEMS item 7](OPEN-ITEMS.md#deploy-identity). The privileged step runs **once** per project; deciding afterwards means unpicking IAM a person already holds. |
+| **Who deploys prod** | The privileged step runs **once** per project. Decide which person gets `tokenCreator` on `sa-owc-dpar-p-deploy-1` before it runs — see [the deploy identity](#deploy-identity). Adding someone later is one binding; taking resource-admin roles back off a person is not. |
 | **Terraform state hosting** | [OPEN-ITEMS item 8](OPEN-ITEMS.md#state-hosting). Cheaper to answer now than to migrate state later. |
 
 `owc-dpar-p` has none of its six service accounts yet, so the privileged step
@@ -525,20 +585,20 @@ reads or writes the project IAM policy.**
 |---|---|---|
 | APIs, service accounts, project IAM, `actAs`, state + source buckets | step 4, in gcloud | `serviceAccountAdmin`, `projectIamAdmin`, `serviceUsageAdmin` |
 | Buckets, datasets, tables, registry, secret, jobs, schedulers, alerts | Terraform | resource admin only |
-| **Resource-scoped** IAM — bucket prefix, dataset `dataEditor`, secret accessor, registry reader, job `run.developer` | Terraform | `run.jobs.setIamPolicy`, which the eleven roles do **not** include |
+| **Resource-scoped** IAM — bucket prefix, dataset `dataEditor`, secret accessor, registry reader, job `run.developer` | Terraform | resource admin only |
 
 That last row is the only IAM Terraform still writes. It lives in the policy
 of a resource Terraform just created, and for most of those the resource-admin
 role already carries it: `storage.admin` on a bucket contains `setIamPolicy`
 on that bucket — you cannot create the bucket without it.
 
-**Cloud Run jobs are the exception, and it is load-bearing.**
-`roles/run.developer` does *not* contain `run.jobs.setIamPolicy`, so the
-scheduler binding in `modules/pipeline/job.tf` cannot be applied by the deploy
-account. Today that one resource needs an admin. Confirm it with
-`gcloud iam roles describe roles/run.developer` rather than assuming, and see
-[OPEN-ITEMS item 7](OPEN-ITEMS.md#deploy-identity)
-for the fix. It also cannot move to step 4 without breaking ordering: the build
+**Cloud Run jobs are the exception, and it decided one of the eleven roles.**
+`roles/run.developer` does *not* contain `run.jobs.setIamPolicy`, so it cannot
+write the scheduler binding in `modules/pipeline/job.tf` — an apply dies on
+that one resource and the schedulers 403 forever. The deploy identity holds
+`roles/run.admin` instead, which does. That is the one role in the list
+broader than "administer the resource", and it is acceptable only because
+[a service account holds it](#deploy-identity) rather than a person. It also cannot move to step 4 without breaking ordering: the build
 identity needs `artifactregistry.writer` on a registry that does not exist
 yet, and the lightcast job will not *create* unless its runtime identity can
 already read the secret.
@@ -549,16 +609,20 @@ negotiable.
 
 ### The roles, before and after
 
-**Terraform needs** — all resource administration, nothing about IAM policy:
+**The deploy service account holds** — all resource administration, nothing
+that reads or writes the *project* IAM policy:
 
 ```
 roles/serviceusage.serviceUsageConsumer   roles/cloudscheduler.admin
 roles/storage.admin                       roles/secretmanager.admin
 roles/bigquery.admin                      roles/artifactregistry.admin
-roles/run.developer                       roles/monitoring.editor
+roles/run.admin                           roles/monitoring.editor
 roles/cloudbuild.builds.editor            roles/logging.configWriter
 roles/logging.viewer
 ```
+
+**A person holds** one binding: `roles/iam.serviceAccountTokenCreator` on
+that account.
 
 `logging.viewer` is there because the alerting in this system is log-based
 and the runbook's diagnostics are `gcloud logging read`. `configWriter`
