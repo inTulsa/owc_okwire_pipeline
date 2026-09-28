@@ -12,15 +12,19 @@
 #
 # So every identity, every project-level IAM binding, every API enable, and
 # the state and source buckets are created here, in gcloud, once. Terraform
-# is then left with resources only, and runs with the ten resource-admin
-# roles in TF_PRINCIPAL_ROLES (see names.sh) — no projectIamAdmin, no
-# serviceAccountAdmin, no serviceUsageAdmin.
+# is then left with resources only, and runs as a DEPLOY SERVICE ACCOUNT
+# holding the resource-admin roles in TF_PRINCIPAL_ROLES (see names.sh) —
+# no projectIamAdmin, no serviceAccountAdmin, no serviceUsageAdmin.
+#
+# --principal names the PERSON who will deploy. They get exactly one binding:
+# tokenCreator on that deploy account, which they impersonate. No human ever
+# holds a resource-admin role.
 #
 # Idempotent: safe to re-run, and re-running is how you repair a partial run.
 #
 #   ./infra/gcloud/01-admin-identities.sh owc-dpar-d --dry-run
 #   ./infra/gcloud/01-admin-identities.sh owc-dpar-d \
-#       --principal user:gabriel.torianyk@tulsaforyou.com
+#       --principal user:someone@agency.ok.gov
 #
 # --dry-run prints every gcloud command and changes nothing. Send that output
 # to OMES if they would rather run the commands themselves than a script.
@@ -42,14 +46,25 @@ usage() {
 usage: $0 <project-id> [options]
 
   --prefix P          OMES name prefix (default: the project id)
-  --principal P       Who will run Terraform, as a full IAM member string:
-                        user:someone@example.com
-                        serviceAccount:tf@proj.iam.gserviceaccount.com
-                        group:owc-platform@example.com
-                      Default: the active gcloud account, as user:<email>.
-  --no-principal      Create identities and their grants, but grant the
-                      Terraform principal nothing. Use when OMES will attach
-                      their own pipeline identity later.
+  --principal P       WHO MAY DEPLOY, as a full IAM member string. Their only
+                      binding is tokenCreator on the deploy service account,
+                      which they impersonate — never a resource-admin role.
+                        user:someone@agency.ok.gov
+                        group:owc-deployers@agency.ok.gov
+                      REQUIRED, and never defaulted: it used to fall back to
+                      the active gcloud account, so an admin running this
+                      named themselves and the operator got nothing.
+                      A group is the better answer for more than one person.
+  --no-principal      Create the deploy account and all its roles, but grant
+                      no human the right to impersonate it. Use when the
+                      deploying person is not decided yet; re-run with
+                      --principal later to add them.
+  --no-run-admin      Grant the deploy account roles/run.developer instead of
+                      roles/run.admin. Only if your organization will not
+                      allow run.admin — it means an admin must return once,
+                      after the first deploy, to grant the scheduler its
+                      binding on each job. The script tries run.admin and
+                      falls back on its own, so this is rarely needed.
   --no-state-bucket   Skip the Terraform state bucket (OMES is hosting state).
   --location L        State bucket location (default US)
   --dry-run           Print every command; change nothing.
