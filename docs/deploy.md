@@ -62,8 +62,21 @@ mkdir -p ~/owc && cd ~/owc \
 Cloud Shell logs `gcloud` in for you. It does **not** log Terraform in, and
 that is the half people skip.
 
-Order matters here: authenticate **as yourself** first, then switch the shell
-onto the deploy identity.
+**Order matters, and getting it wrong gives a misleading error.** Both
+`application-default` commands must run as yourself, before the shell is put
+on the deploy identity. Run them after `env-exports` and gcloud reads ADC
+through the impersonation and refuses:
+
+```text
+ERROR: (gcloud.auth.application-default.set-quota-project) The application
+default credentials are not user credentials, quota project cannot be added.
+```
+
+Nothing is wrong with the credentials — the shell is just wearing the wrong
+identity for that one command. `unset CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT
+GOOGLE_IMPERSONATE_SERVICE_ACCOUNT`, run it, then re-run `env-exports`.
+
+So: authenticate **as yourself** first, then switch onto the deploy identity.
 
 ```bash
 gcloud auth application-default login

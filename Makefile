@@ -508,7 +508,9 @@ env-exports: ## Print the shell exports the docs' raw gcloud/bq commands use
 	@# account rather than as the person. An admin running the one privileged
 	@# step never evals this, so their own step is unaffected.
 	@#
-	@# To deploy as yourself instead (a project you own):
+	@# To deploy as yourself instead (a project you own), or to run the
+	@# `gcloud auth application-default` commands, which must be done as the
+	@# person and fail with "not user credentials" through an impersonation:
 	@#   unset CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT GOOGLE_IMPERSONATE_SERVICE_ACCOUNT
 	@# Emitted so the eval'd block checks itself. If this target is run from
 	@# the wrong directory make fails, $$(...) is empty, and `eval ""`
