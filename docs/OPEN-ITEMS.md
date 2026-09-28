@@ -188,36 +188,45 @@ prod's first apply than to migrate state afterwards.
 
 ---
 
-## 9. The six tables dropped by the SQL consolidation still exist in BigQuery {#orphaned-marts}
+## 9. A full lightcast sync has never been run {#first-full-sync}
 
-`sql/owc/` went from 41 files to 35 when the queries were consolidated
-upstream. `fact_emp_2` and `fact_emp_lagged_2` were folded into `fact_emp`
-and `fact_emp_lagged`; `fact_jobs`, `fact_jobs_lagged`, `fact_skills` and
-`fact_skills_lagged` were folded into their `_qoq` counterparts.
+`make smoke` publishes `dim_area` only — 78 rows, unlimited, so it genuinely
+publishes without paying for a full extract. Every other lightcast dataset
+has been parse-validated (`make validate`, and `LIMIT 0` in the live
+integration test) and never actually run. `owc_marts` holds `dim_area` and
+nothing else from lightcast.
 
-**The pipeline no longer refreshes them. It does not drop them either.** Six
-tables in `owc_marts` will sit there looking current and quietly age. If
-PowerBI reads any of them, that is stale data with no error attached — the
-worst failure mode this project has.
+Three things follow, and the first two are why this is short rather than a
+cleanup task:
 
-**Decide before the next prod publish:** drop them, or keep them and record
-somewhere visible that they are frozen. Dropping is the safer default; check
-the PowerBI semantic model first.
+- **The SQL consolidation orphaned nothing.** The six datasets it removed
+  had never published, so there are no stale tables to drop. `dim_area` was
+  not one of the files it changed.
+- **The quality gate will not block the first real run.** `row_count_drift`
+  compares against the previous successful run and 34 of the 35 datasets
+  have none, so the check is skipped rather than failed. The first full sync
+  *is* the baseline it will compare against afterwards.
+- **The 35-way fan-out is untested at scale.** Parallelism 4 against
+  Lightcast's warehouse, the 30-minute task timeout and the in-memory
+  filesystem have been exercised by one small dimension table. Watch the
+  first full run instead of scheduling it and walking away.
 
-```sql
--- what is in marts that the pipeline no longer produces
-SELECT table_name FROM `owc_marts.INFORMATION_SCHEMA.TABLES`
-WHERE table_name IN ('fact_emp_2','fact_emp_lagged_2','fact_jobs',
-                     'fact_jobs_lagged','fact_skills','fact_skills_lagged');
+Do it in dev, deliberately. It bills Lightcast either way, so it is better
+spent finding out somewhere a failure costs nothing else:
+
+```bash
+cd ~/owc && eval "$(make -s env-exports ENV=dev)" && echo "$PROJECT $PREFIX $REGION"
 ```
 
-**Also expect the quality gate to block the first run.**
-`row_count_drift_pct` is 20% against the previous successful run, and a
-consolidated `fact_emp` or `dim_ind` will move far more than that. That is
-the gate working: the publish is refused and staging is kept to diff
-against. Confirm the new numbers are right, then let it through — the
-procedure is [ALERT 5](runbook.md#alert-5-drift). Do not raise the threshold
-to get past it.
+```bash
+gcloud run jobs execute cr-$PREFIX-lightcast-1 --region $REGION --project $PROJECT --args="run,lightcast,--group,monthly" --tasks=35 --wait
+```
+
+Then read the manifest — every dataset should be `success`:
+
+```bash
+bq query --project_id=$PROJECT --use_legacy_sql=false --format=pretty 'SELECT status, COUNT(*) AS n FROM `owc_ops.pipeline_runs` WHERE pipeline = "lightcast" GROUP BY status'
+```
 
 ---
 
