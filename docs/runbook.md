@@ -175,39 +175,33 @@ falls back to IPv4 cleanly; Terraform is Go, and Go's dialer will keep
 choosing an AAAA record it cannot route to. So every `make` target that
 shells out to gcloud works while `terraform apply` fails.
 
-Retrying is worth one attempt and no more — if the VM has no IPv6 route,
-the next run fails on more resources, not fewer. Escalate instead:
+**Two fixes that look right and do nothing.** Terraform's official binary is
+built `CGO_ENABLED=0` — pure Go, statically linked. So:
 
-**1. Make Go use the system resolver.** getaddrinfo applies RFC 6724
-sorting, which deprioritises IPv6 when the host has no global IPv6 address.
-No sudo, fixes it most of the time:
+- `GODEBUG=netdns=cgo` is **ignored**. The cgo resolver is not compiled in.
+- `/etc/gai.conf` is **never read**, because only `getaddrinfo` reads it.
 
-```bash
-export GODEBUG=netdns=cgo
-```
+`getent ahosts` will happily show IPv4 first after a gai.conf edit while
+Terraform carries on dialling IPv6. Do not take `getent` as evidence the
+problem is fixed — it is testing a resolver Terraform does not use.
 
-**2. Tell the resolver to prefer IPv4.** This is the reliable one, and it
-only works with step 1 in place — `getaddrinfo` reads `/etc/gai.conf`, Go's
-own resolver does not. Raising the precedence of IPv4-mapped addresses puts
-A records ahead of AAAA for every lookup:
+**What does work: `/etc/hosts`.** Go's own resolver reads it, so pinning the
+API hostnames to their IPv4 addresses forces the issue for every endpoint
+Terraform touches:
 
 ```bash
-echo 'precedence ::ffff:0:0/96  100' | sudo tee -a /etc/gai.conf
+for h in bigquery.googleapis.com storage.googleapis.com cloudresourcemanager.googleapis.com artifactregistry.googleapis.com logging.googleapis.com secretmanager.googleapis.com monitoring.googleapis.com cloudscheduler.googleapis.com run.googleapis.com iam.googleapis.com iamcredentials.googleapis.com serviceusage.googleapis.com bigquerydatatransfer.googleapis.com sts.googleapis.com oauth2.googleapis.com; do ip=$(getent ahostsv4 "$h" | awk 'NR==1{print $1}'); [ -n "$ip" ] && echo "$ip $h"; done | sudo tee -a /etc/hosts
 ```
 
-Check it took — the first line should be an IPv4 address:
+It is a blunt instrument: it pins one IP per host and bypasses DNS load
+balancing, so treat it as a workaround for the length of a deploy, not a
+setting. Cloud Shell sessions are disposable, so it disappears on its own.
 
-```bash
-getent ahosts storage.googleapis.com | head -3
-```
-
-Disabling IPv6 with `sysctl net.ipv6.conf.all.disable_ipv6=1` is the more
-obvious move and frequently does nothing in Cloud Shell, which is
-containerised and may not let that sysctl through. Prefer gai.conf.
-
-**3. Start a new Cloud Shell session** for a different VM. You will need to
-redo `gcloud auth application-default login` and the `env-exports` eval,
-because the gcloud config lives in a per-session `/tmp` directory.
+**Or start a new Cloud Shell session**, which is often quicker. You get a
+different VM that may have no IPv6 address at all, in which case Go skips
+AAAA by itself. You will need to redo `gcloud auth application-default
+login` and the `env-exports` eval, because the gcloud config lives in a
+per-session `/tmp` directory.
 
 Then re-run the apply:
 
