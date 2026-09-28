@@ -119,8 +119,9 @@ TF_PRINCIPAL_FORBIDDEN_ROLES=(
 
 # Project-level grants for the runtime identities, "<sa-key>|<role>".
 #
-# Scheduler is absent on purpose: it holds run.invoker on the two jobs
-# specifically, which is resource-scoped and stays in Terraform.
+# Scheduler is absent on purpose: it holds run.developer on the two jobs
+# specifically, which is resource-scoped and stays in Terraform. Not
+# run.invoker — the schedulers post an overrides body. See job.tf.
 RUNTIME_PROJECT_GRANTS=(
   "lightcast|roles/bigquery.jobUser"
   "lightcast|roles/logging.logWriter"

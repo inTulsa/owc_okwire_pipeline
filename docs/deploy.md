@@ -330,12 +330,22 @@ make gcloud-admin-dry-run ENV=dev
 ```
 
 Send that output to OMES. It is every command, shell-quoted, with nothing
-inferred — they can read it, run it, or run the script themselves. Ask them
-to name you as the Terraform principal:
+inferred — they can read it, run it, or run the script themselves.
+
+**`--principal` must be passed explicitly.** It defaults to whichever gcloud
+account is active, so an admin running the script from their own shell grants
+*themselves* the eleven roles and the five `actAs` bindings, and the operator
+gets nothing. That is what happened on `owc-dpar-d`. Name the account that
+will actually deploy:
 
 ```bash
-./infra/gcloud/01-admin-identities.sh owc-dpar-d   --principal user:gabriel.torianyk@tulsaforyou.com
+./infra/gcloud/01-admin-identities.sh owc-dpar-d --principal user:THE-DEPLOY-ACCOUNT@agency.ok.gov
 ```
+
+Which account that should be is
+[OPEN-ITEMS item 7](OPEN-ITEMS.md#deploy-identity),
+and the answer should be a service account rather than a person. Settle it
+before running this on prod.
 
 If OMES is hosting Terraform state — *"we can hook up your instance with the
 state"* — they add `--no-state-bucket`, tell you the bucket, and you set it in
@@ -389,11 +399,68 @@ To close that gap before handing over, have OMES run step 4 on a project
 where you are not owner, or drop owner on the test project *after* step 4 —
 carefully, and only if someone else can still administer it.
 
-## Then prod
+## Then prod {#prod}
 
-The same six steps with `ENV=prod`. The two environments differ in exactly
-four settings, listed in
-[`gcp-reference.md`](gcp-reference.md#what-prod-does-differently).
+Prod runs the same steps with `ENV=prod`, but it is not a replay of dev. Three
+things have to be settled first, and two of prod's differences change what a
+mistake costs.
+
+### Settle these before step 5
+
+| | |
+|---|---|
+| **`snowflake_user` is a placeholder** | `envs/prod/terraform.tfvars` ships `REPLACE_ME@…` and the plan rejects it on purpose. Put the real reader account in first. |
+| **The deploy identity** | [OPEN-ITEMS item 7](OPEN-ITEMS.md#deploy-identity). The privileged step runs **once** per project; deciding afterwards means unpicking IAM a person already holds. |
+| **Terraform state hosting** | [OPEN-ITEMS item 8](OPEN-ITEMS.md#state-hosting). Cheaper to answer now than to migrate state later. |
+
+`owc-dpar-p` has none of its six service accounts yet, so the privileged step
+there creates everything from nothing.
+
+### Two differences that change the procedure
+
+The [full four](gcp-reference.md#what-prod-does-differently) are in the
+reference. These two matter while you are deploying:
+
+- **`schedulers_paused = false` — the schedulers come up live.** `tf-apply`
+  creates schedulers that fire on `pipelines.yml`'s real cron. A permissions
+  mistake does not surface at your terminal; it surfaces as a 403 on the 1st
+  of the month. This is why the proof below is not optional in prod.
+- **`freshness_check_enabled = true`** — the freshness alert is armed from the
+  first apply, so a pipeline that never runs starts alerting inside its grace
+  window instead of sitting quietly.
+
+### Prove the scheduler, not just the pipelines {#prove-the-scheduler}
+
+`make smoke` runs each pipeline **as you**. Cloud Scheduler runs them as
+`sa-<prefix>-scheduler-1`, which is a different identity needing a different
+permission. A green smoke test and a scheduler that cannot start anything look
+identical from outside — that is exactly what dev looked like for five days.
+
+```bash
+gcloud scheduler jobs run cs-$PREFIX-enrollment-monthly-1 --location $REGION --project $PROJECT
+```
+
+```bash
+gcloud run jobs executions list --job cr-$PREFIX-enrollment-1 --region $REGION --project $PROJECT --limit 3
+```
+
+Read the **`RUN BY`** column, not the timestamp:
+
+```text
+RUN BY: sa-owc-dpar-p-scheduler-1@owc-dpar-p.iam.gserviceaccount.com   <- the scheduler started it
+RUN BY: someone@agency.ok.gov                                          <- you started it
+```
+
+Only the first proves anything. Use **enrollment**: it short-circuits on its
+cache, while lightcast fans out to 41 tasks and bills Lightcast's warehouse.
+
+Prod's schedulers are already enabled, so `jobs run` works directly. In dev
+they are paused and `jobs run` refuses with
+`FAILED_PRECONDITION: Job.state must be ENABLED` — resume first, then pause
+back afterwards.
+
+If it returns 403, go to [ALERT 3](runbook.md#scheduler-403) and start with
+the job's own IAM policy.
 
 ## Rehearsing against your own project
 
@@ -458,12 +525,20 @@ reads or writes the project IAM policy.**
 |---|---|---|
 | APIs, service accounts, project IAM, `actAs`, state + source buckets | step 4, in gcloud | `serviceAccountAdmin`, `projectIamAdmin`, `serviceUsageAdmin` |
 | Buckets, datasets, tables, registry, secret, jobs, schedulers, alerts | Terraform | resource admin only |
-| **Resource-scoped** IAM — bucket prefix, dataset `dataEditor`, secret accessor, registry reader, job `run.invoker` | Terraform | nothing extra |
+| **Resource-scoped** IAM — bucket prefix, dataset `dataEditor`, secret accessor, registry reader, job `run.developer` | Terraform | `run.jobs.setIamPolicy`, which the eleven roles do **not** include |
 
 That last row is the only IAM Terraform still writes. It lives in the policy
-of a resource Terraform just created, and `storage.admin` on a bucket already
-contains `setIamPolicy` on that bucket — you cannot create the bucket without
-it. It also cannot move to step 4 without breaking ordering: the build
+of a resource Terraform just created, and for most of those the resource-admin
+role already carries it: `storage.admin` on a bucket contains `setIamPolicy`
+on that bucket — you cannot create the bucket without it.
+
+**Cloud Run jobs are the exception, and it is load-bearing.**
+`roles/run.developer` does *not* contain `run.jobs.setIamPolicy`, so the
+scheduler binding in `modules/pipeline/job.tf` cannot be applied by the deploy
+account. Today that one resource needs an admin. Confirm it with
+`gcloud iam roles describe roles/run.developer` rather than assuming, and see
+[OPEN-ITEMS item 7](OPEN-ITEMS.md#deploy-identity)
+for the fix. It also cannot move to step 4 without breaking ordering: the build
 identity needs `artifactregistry.writer` on a registry that does not exist
 yet, and the lightcast job will not *create* unless its runtime identity can
 already read the secret.

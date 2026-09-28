@@ -14,6 +14,7 @@ why a bucket is configured a particular way.
 - [Region co-location is mandatory](#region-co-location-is-mandatory)
 - [Identity separation](#identity-separation)
 - [Terraform guardrails](#terraform-guardrails)
+- [What an OMES project enforces](#omes-constraints)
 - [What prod does differently](#what-prod-does-differently)
 
 ## What has to exist before anything here runs
@@ -213,6 +214,32 @@ not a quota.
 The state and source buckets are created by `01-admin-identities.sh` rather
 than by Terraform, so a `terraform destroy` on a scratch dev environment cannot
 take either the state or the source code with it.
+
+## What an OMES project enforces {#omes-constraints}
+
+Learned by hitting each one on `owc-dpar-d`. Assume all of it applies to
+`owc-dpar-p`, and design around it rather than discovering it mid-deploy.
+
+| Constraint | How it shows up | Handled by |
+|---|---|---|
+| `constraints/gcp.resourceLocations` forbids `global` | Secret Manager refuses `replication { auto {} }` | `user_managed` replication pinned to `var.region` |
+| Default service-agent grants are stripped | The Cloud Scheduler agent has no `tokenCreator`, and the automatic `roles/cloudscheduler.serviceAgent` is absent | `01-admin-identities.sh` forces both agents into existence and grants them explicitly |
+| No `serviceAccountAdmin` / `projectIamAdmin` / `serviceUsageAdmin` for the deploy account | The whole split this repo is built around | Step 4 of [`deploy.md`](deploy.md), run once by an admin |
+| No admin-level roles on a human account **at all** | Stated after dev was stood up | **Unresolved** — [OPEN-ITEMS item 7](OPEN-ITEMS.md#deploy-identity) |
+| No project IAM policy reads for the deploy account | `iam-check` runs in REDUCED mode; `scheduler-debug` checks 3 and 4 are inconclusive | Reported as `????`, never as `NO` |
+| No log reads without `roles/logging.viewer` | Every runbook diagnostic silently returns nothing | `logging.viewer` is one of the eleven roles |
+| Cloud Shell ships a terraform **stub** | `make up` reports success having created nothing | `make install-terraform`; `tf-check` guards every `tf-*` target |
+
+Two permissions the eleven roles do **not** include, both of which the normal
+deploy path needs:
+
+- `run.jobs.setIamPolicy` — every `google_cloud_run_v2_job_iam_member`
+- `iam.serviceAccounts.actAs` — updating a Cloud Scheduler job re-attaches its
+  service account, so even a body-only change is refused
+
+Until [OPEN-ITEMS item 7](OPEN-ITEMS.md#deploy-identity)
+is settled, those two steps belong to an admin, and Terraform cannot be
+reconciled with the live project by the operator alone.
 
 ## What prod does differently
 

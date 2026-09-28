@@ -42,9 +42,16 @@ ADMIN_PERMS=(
   "resourcemanager.projects.setIamPolicy|roles/resourcemanager.projectIamAdmin"
   "serviceusage.services.enable|roles/serviceusage.serviceUsageAdmin"
 )
+# Permissions the normal deploy path needs that NONE of the eleven roles
+# carries. A NO here is the expected state, not a misconfiguration — it says
+# which resources an admin has to touch. Listed because the deploy otherwise
+# reports itself ready and then fails partway through an apply.
+GAP_PERMS=(
+  "run.jobs.setIamPolicy|roles/run.developer does NOT include it"
+)
 
 all=()
-for e in "${DEPLOY_PERMS[@]}" "${ADMIN_PERMS[@]}"; do all+=("${e%%|*}"); done
+for e in "${DEPLOY_PERMS[@]}" "${ADMIN_PERMS[@]}" "${GAP_PERMS[@]}"; do all+=("${e%%|*}"); done
 
 printf '\n\033[1mAccess check — %s\033[0m\n' "$PROJECT"
 printf '  account: %s\n' "$(gcloud config get-value account 2>/dev/null)"
@@ -126,6 +133,16 @@ for e in "${ADMIN_PERMS[@]}"; do
   p="${e%%|*}"; r="${e##*|}"
   if has "$p"; then yes "$p" "$r"; admin_have=$((admin_have+1)); else no "$p" "$r"; fi
 done
+
+head2 "Known gaps — an admin does these even on a correct setup"
+for e in "${GAP_PERMS[@]}"; do
+  p="${e%%|*}"; r="${e##*|}"
+  if has "$p"; then yes "$p" "you have it; no admin needed"; else no "$p" "$r"; fi
+done
+printf '  \033[2m%s\033[0m\n' "A NO above is expected. modules/pipeline/job.tf grants the scheduler"
+printf '  \033[2m%s\033[0m\n' "run.developer on each Cloud Run job, and writing that binding needs"
+printf '  \033[2m%s\033[0m\n' "run.jobs.setIamPolicy. Without it 'make up' fails on that resource."
+printf '  \033[2m%s\033[0m\n' "See docs/OPEN-ITEMS.md item 7. actAs is checked by 'make iam-check'."
 fi
 
 # An organization may restrict where resources can live. Finding that out

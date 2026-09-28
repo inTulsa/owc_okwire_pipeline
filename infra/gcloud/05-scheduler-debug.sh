@@ -34,25 +34,61 @@ sys.exit(0 if any(b.get("role")==role and member in b.get("members",[])
                   for b in policy.get("bindings", [])) else 1)
 '
 
+# Every role one member holds on a resource, space-separated. Check 1 needs
+# the whole set, not a yes/no on one role: the question is not "is this
+# binding present" but "does anything here permit running WITH OVERRIDES".
+ROLES_FOR_MEMBER='
+import json, sys
+member = sys.argv[1]
+policy = json.load(sys.stdin)
+print(" ".join(sorted(b.get("role","") for b in policy.get("bindings", [])
+                      if member in b.get("members", []))))
+'
+
 printf '\n\033[1mScheduler 403 diagnosis — %s\033[0m\n' "$PROJECT"
 
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)' 2>/dev/null)
 SCHED_AGENT="service-${PROJECT_NUMBER}@gcp-sa-cloudscheduler.iam.gserviceaccount.com"
 
 # --- 1. the grant the job itself carries -----------------------------------
-head2 "1. run.invoker on each job, exact binding"
+#
+# The question is NOT "is run.invoker present". scheduler.tf posts an
+# `overrides` body, and running a job with overrides needs
+# run.jobs.runWithOverrides, which roles/run.invoker does not grant — it
+# carries only run.instances.invoke, run.jobs.run and run.routes.invoke.
+# An exact, correct-looking run.invoker binding therefore 403s on every fire.
+# Asserting run.invoker here reported ok for five days on owc-dpar-d while
+# nothing could start.
+head2 "1. Can the scheduler run each job WITH OVERRIDES?"
 for job in "$JOB_LIGHTCAST" "$JOB_ENROLLMENT"; do
   if pol=$(gcloud run jobs get-iam-policy "$job" --region "$REGION" \
         --project "$PROJECT" --format=json 2>&1); then
-    if python3 -c "$BINDING_MATCHER" roles/run.invoker \
-         "serviceAccount:$SA_SCHEDULER" <<<"$pol"; then
-      ok "$job: scheduler is in the run.invoker binding"
-    else
-      bad "$job: scheduler is NOT in the run.invoker binding"
-      note "gcloud run jobs add-iam-policy-binding $job --region $REGION \\"
-      note "  --project $PROJECT --member serviceAccount:$SA_SCHEDULER \\"
-      note "  --role roles/run.invoker"
-    fi
+    roles=$(python3 -c "$ROLES_FOR_MEMBER" "serviceAccount:$SA_SCHEDULER" <<<"$pol")
+    case " $roles " in
+      *" roles/run.developer "*|*" roles/run.admin "*)
+        ok "$job: scheduler has${roles:+ }$roles" ;;
+      *"projects/"*"/roles/"*)
+        huh "$job: scheduler has a custom role — $roles"
+        note "Custom role contents are not readable from the binding."
+        note "Confirm it holds run.jobs.runWithOverrides:"
+        note "  gcloud iam roles describe ${roles##* } --project $PROJECT" ;;
+      *" roles/run.invoker "*)
+        bad "$job: scheduler has ONLY run.invoker — cannot run with overrides"
+        note "run.invoker = run.instances.invoke, run.jobs.run,"
+        note "run.routes.invoke. No run.jobs.runWithOverrides, and"
+        note "scheduler.tf posts an overrides body. This is the 403."
+        note ""
+        note "Needs run.jobs.setIamPolicy, which the deploy account does"
+        note "NOT hold. Ask an admin to run, for each job:"
+        note "  gcloud run jobs add-iam-policy-binding $job \\"
+        note "    --region $REGION --project $PROJECT \\"
+        note "    --member serviceAccount:$SA_SCHEDULER \\"
+        note "    --role roles/run.developer" ;;
+      "  ")
+        bad "$job: scheduler holds NO role on this job at all" ;;
+      *)
+        bad "$job: scheduler has $roles — none of which runs with overrides" ;;
+    esac
   else
     bad "$job: cannot read its IAM policy"
     note "$(tail -1 <<<"$pol")"
@@ -103,11 +139,17 @@ else
     *)
       huh "cannot tell whether $SCHED_AGENT exists"
       note "$(tail -1 <<<"$out")"
-      note "Google-managed agents are often invisible to a project member,"
-      note "so this is not evidence either way."
+      note "Google-managed agents live outside this project and are not"
+      note "describable by anyone, including a project admin. Expect ????"
+      note "here permanently; read check 4 instead, which does resolve for"
+      note "an admin."
       note ""
-      note "RUN THIS. You have the rights, it is idempotent, and it prints"
-      note "the agent's real address:"
+      note "A 403 carrying 'Original HTTP response code number' in check 5"
+      note "already proves the agent exists and minted a token: the call"
+      note "reached Cloud Run and was refused there. Look at check 1."
+      note ""
+      note "To force the agent into existence anyway — idempotent, and it"
+      note "prints the real address:"
       note "  gcloud beta services identity create \\"
       note "    --service=cloudscheduler.googleapis.com --project $PROJECT"
       note ""

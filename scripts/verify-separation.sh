@@ -113,13 +113,19 @@ done
 for job in "cr-${PREFIX}-lightcast-1" "cr-${PREFIX}-enrollment-1"; do
   if policy=$(gcloud run jobs get-iam-policy "$job" \
         --region "$REGION" --project "$PROJECT" --format=json 2>&1); then
-    if binding_has "$policy" roles/run.invoker "serviceAccount:$(sa scheduler)"; then
-      pass "scheduler can invoke $job"
+    # run.developer, NOT run.invoker. The schedulers post an `overrides`
+    # body, which needs run.jobs.runWithOverrides; run.invoker grants only
+    # run.jobs.run. Asserting run.invoker here would pass on a project whose
+    # every scheduled fire 403s, which is the exact failure this block exists
+    # to catch.
+    if binding_has "$policy" roles/run.developer "serviceAccount:$(sa scheduler)"; then
+      pass "scheduler can run $job with overrides"
     else
-      bad "scheduler CANNOT invoke $job — the schedule will 403 when it fires"
+      bad "scheduler CANNOT run $job with overrides — the schedule will 403 when it fires"
+      bad "  needs run.jobs.setIamPolicy, which the deploy account lacks; ask an admin:"
       bad "  gcloud run jobs add-iam-policy-binding $job \\"
       bad "    --region $REGION --project $PROJECT \\"
-      bad "    --member serviceAccount:$(sa scheduler) --role roles/run.invoker"
+      bad "    --member serviceAccount:$(sa scheduler) --role roles/run.developer"
     fi
   else
     err "could not read $job's IAM policy: $(tail -1 <<<"$policy")"

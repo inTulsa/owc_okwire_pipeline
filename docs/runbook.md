@@ -153,12 +153,28 @@ gcloud run jobs execute cr-$PREFIX-lightcast-1 --region=$REGION --project=$PROJE
 
 ### `PERMISSION_DENIED` 403 on `jobs/...:run` {#scheduler-403}
 
-> **This entry's diagnosis is incomplete.** On `owc-dpar-d` every check below
-> passes and the 403 persists. The leading explanation is that the scheduler
-> posts an `overrides` body, which needs `run.jobs.runWithOverrides` —
-> a permission `roles/run.invoker` does not grant. See
-> [`HANDOFF.md`](HANDOFF.md#open-issue-1-the-scheduler-403) for the test and
-> the fix options before working through the rest of this.
+> **Check this first — it is the cause that passes every other check.** The
+> scheduler posts an `overrides` body, and running a job with overrides needs
+> `run.jobs.runWithOverrides`. `roles/run.invoker` grants only
+> `run.instances.invoke`, `run.jobs.run` and `run.routes.invoke`, so the
+> binding reads as correct and every fire still 403s.
+>
+> `modules/pipeline/job.tf` grants `roles/run.developer` for this reason. A
+> project built before that change, or one whose binding was set by hand, can
+> still carry the old grant:
+>
+> ```bash
+> gcloud run jobs get-iam-policy cr-$PREFIX-lightcast-1 --region $REGION --project $PROJECT
+> ```
+>
+> If the scheduler account appears under `roles/run.invoker` and not
+> `roles/run.developer`, that is the bug. Correcting it needs
+> `run.jobs.setIamPolicy`, which the deploy account does not hold — it is an
+> admin task, on each job:
+>
+> ```bash
+> gcloud run jobs add-iam-policy-binding cr-$PREFIX-lightcast-1 --region $REGION --project $PROJECT --member serviceAccount:sa-$PREFIX-scheduler-1@$PROJECT.iam.gserviceaccount.com --role roles/run.developer
+> ```
 
 ```json
 "status": "PERMISSION_DENIED",
@@ -173,10 +189,11 @@ this before the checks existed:
 make scheduler-debug ENV=$ENV
 ```
 
-Five checks in one pass: the exact `run.invoker` binding on each job, what
-each scheduler is configured to send, whether the **Cloud Scheduler service
-agent** exists, whether that agent can impersonate the scheduler account, and
-the most recent attempt in full rather than truncated.
+Six checks in one pass: whether each job's binding actually permits a run
+**with overrides**, what each scheduler is configured to send, whether the
+**Cloud Scheduler service agent** exists, whether that agent can impersonate
+the scheduler account, the most recent attempt in full rather than truncated,
+and the most recent execution of each job.
 
 **The agent is the one that surprises people.** Cloud Scheduler does not call
 Cloud Run as the scheduler account directly — its service agent
@@ -194,8 +211,7 @@ Transfer agent; a project set up before that may not have either.
 **The order is load-bearing.** IAM accepts a binding for a principal that
 does not exist yet: the grant is recorded, reports success, and does nothing.
 So a `tokenCreator` grant applied before the agent was provisioned looks
-exactly like a fix and is not — which is what happened on `owc-dpar-d`, where
-the grant succeeded and the next fire was still `PERMISSION_DENIED`.
+exactly like a fix and is not.
 
 Create the agent first. The deploy account can do this itself:
 
@@ -207,28 +223,62 @@ It is idempotent and prints the agent's real address. **Then** have the
 `tokenCreator` grant re-applied, and fire the scheduler again. The script
 does these in that order; a hand-run grant on its own may not have.
 
-**Checks 3 and 4 can come back `????`, and that is not a failure.** Reading a
-service account's IAM policy needs `iam.serviceAccounts.getIamPolicy`, and
-Google-managed service agents are often not describable by a project member —
-neither of which the deploy account has. When the script cannot see something
-it says so rather than reporting NO, because an inconclusive check reported as
-a failure sends an admin to fix what was never broken.
+**Checks 3 and 4 can come back `????`, and that is not a failure.** When the
+script cannot see something it says so rather than reporting NO, because an
+inconclusive check reported as a failure sends an admin to fix what was never
+broken.
+
+- **Check 3 does not resolve for anyone**, including a project admin.
+  Google-managed service agents live outside the project and are not
+  describable. Treat `????` there as normal and read check 4 instead.
+- **Check 4 resolves for an admin**, who has `iam.serviceAccounts.getIamPolicy`.
+  If you need it answered, that is the person to ask.
+
+A 403 carrying `Original HTTP response code number` is itself evidence the
+impersonation worked: the token was minted and the call reached Cloud Run,
+which then refused it. That points at the job's binding, not the agent.
 
 When those two are inconclusive, **fire the scheduler — that is the
 definitive test**:
 
 ```bash
-gcloud scheduler jobs run cs-$PREFIX-lightcast-monthly-1 --location $REGION --project $PROJECT
+gcloud scheduler jobs run cs-$PREFIX-enrollment-monthly-1 --location $REGION --project $PROJECT
 ```
 
-then read checks 5 and 6 together. The scheduler's own history shows success
+**In dev the schedulers are paused, and `jobs run` refuses a paused job** with
+`FAILED_PRECONDITION: Job.state must be ENABLED`. Resume it, fire, then pause
+it back — and pause it back even if the test fails, or it will fire on its own
+at the next cron:
+
+```bash
+gcloud scheduler jobs resume cs-$PREFIX-enrollment-monthly-1 --location $REGION --project $PROJECT
+```
+
+```bash
+gcloud scheduler jobs pause cs-$PREFIX-enrollment-monthly-1 --location $REGION --project $PROJECT
+```
+
+Use **enrollment**, not lightcast: enrollment short-circuits on its cache,
+while lightcast fans out to 41 tasks and bills Lightcast's warehouse.
+
+Then read checks 5 and 6 together. The scheduler's own history shows success
 either way, because `jobs:run` returns an Operation.
 
 **An execution in check 6 does not prove the scheduler worked.** `make smoke`
 and `gcloud run jobs execute` create executions too. A scheduler fire that
 succeeded has an execution within seconds of its attempt in check 5; if the
-newest execution predates the newest attempt, the scheduler is still
-failing.
+newest execution predates the newest attempt, the scheduler is still failing.
+
+**The `RUN BY` column settles it without comparing timestamps at all:**
+
+```bash
+gcloud run jobs executions list --job cr-$PREFIX-enrollment-1 --region $REGION --project $PROJECT --limit 3
+```
+
+A scheduler-started execution reads
+`RUN BY: sa-$PREFIX-scheduler-1@$PROJECT.iam.gserviceaccount.com`. One a human
+started reads their address. That is the definitive test for this whole
+entry.
 
 Propagation is the other common cause: resource-level IAM takes a minute or
 two, so a forced run fired straight after `tf-apply` can beat it. Retry once

@@ -45,7 +45,7 @@ variable "service_account_email" {
 
 variable "scheduler_service_account_email" {
   type        = string
-  description = "Identity Cloud Scheduler uses. Gets run.invoker on THIS job only."
+  description = "Identity Cloud Scheduler uses. Gets run.developer on THIS job only — see job.tf for why not run.invoker."
 }
 
 # -- schedules ---------------------------------------------------------------

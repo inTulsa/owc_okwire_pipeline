@@ -118,6 +118,68 @@ have `public_access_prevention = "enforced"`.
 
 ---
 
+## 7. The deploy identity should be a service account, not a person {#deploy-identity}
+
+**This one blocks prod.** Settle it before the privileged step runs on
+`owc-dpar-p`, so that project is set up once, correctly.
+
+**Where:** [`names.sh`](../infra/gcloud/names.sh) (`TF_PRINCIPAL_ROLES`),
+`01-admin-identities.sh`, `04-standalone.sh`, `00-access-check.sh`,
+`02-verify-admin.sh`, and `TF_PRINCIPAL` in the [`Makefile`](../Makefile).
+
+**The problem:** the one-time setup grants a deploy principal eleven
+resource-admin roles plus `actAs` on five service accounts, and defaults that
+principal to *whichever gcloud account is active when the script runs* — so an
+admin running it from their own shell grants themselves. OMES has separately
+said the deploy operator must not hold admin-level roles at all. Neither a
+person's account nor the admin's is a correct answer, so the current design
+has none.
+
+**Recommended:** an account nobody logs in as.
+
+```
+sa-<prefix>-deploy-1@<project>.iam.gserviceaccount.com
+```
+
+- It holds the eleven resource-admin roles and `actAs` on the five runtime
+  accounts. No human holds any of it.
+- Whoever deploys is granted `roles/iam.serviceAccountTokenCreator` on **that
+  one account** — auditable, revocable, and not an admin role.
+- Terraform impersonates it with `GOOGLE_IMPERSONATE_SERVICE_ACCOUNT`, gcloud
+  with `--impersonate-service-account`.
+
+**Work it implies:** `names.sh` gains the account and decides where its roles
+live; the two setup scripts create it and stop granting anything to a user
+account; `TF_PRINCIPAL` becomes that account and the terraform targets export
+the impersonation variable; `00-access-check.sh` tests the **impersonated**
+identity rather than the caller's; `02-verify-admin.sh` asserts that no *user*
+account holds the eleven roles, which is a stronger claim than it makes today.
+The guard in `04-standalone.sh` that refuses when the principal equals the
+caller can then be removed — the two can never be equal.
+
+**Consequence of leaving it:** the operator cannot finish a deploy. Two
+permissions in the normal path sit outside the eleven roles —
+`run.jobs.setIamPolicy` (every `google_cloud_run_v2_job_iam_member`) and
+`iam.serviceAccounts.actAs` (any Cloud Scheduler job update, which re-attaches
+its service account). Both were hit on `owc-dpar-d`. The repo and the live
+project then drift, because only an admin can reconcile them.
+
+---
+
+## 8. Ask OMES whether they will host the Terraform state bucket {#state-hosting}
+
+**Raised and never resolved** — *"we can hook up your instance with the
+state."* Today both state buckets live in their own project.
+
+**If they will:** they add `--no-state-bucket` to the setup script, tell you
+the bucket name, and you set it in **both** `terraform.tfvars` and
+`backend.tf` before the first apply, or pass `STATE_BUCKET=` on every command.
+
+**Consequence of leaving it:** nothing breaks. It is cheaper to answer before
+prod's first apply than to migrate state afterwards.
+
+---
+
 ## Also worth knowing
 
 **The PowerBI JSON key exception.** The PowerBI BigQuery connector

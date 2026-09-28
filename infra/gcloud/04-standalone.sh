@@ -196,7 +196,7 @@ add_sa() {
 }
 add_sa lightcast  "OWC lightcast pipeline"      "Runs the lightcast Cloud Run job. Holds the Snowflake secret."
 add_sa enrollment "OWC enrollment pipeline"     "Runs the enrollment Cloud Run job. No secret access: the source is a public webpage."
-add_sa scheduler  "OWC Cloud Scheduler invoker" "Invokes the Cloud Run jobs. run.invoker on the specific jobs only."
+add_sa scheduler  "OWC Cloud Scheduler invoker" "Invokes the Cloud Run jobs. run.developer on the specific jobs only."
 add_sa build      "OWC Cloud Build"             "Runs container builds. Reads build source, writes the image and logs. Nothing else."
 add_sa powerbi    "OWC PowerBI reader"          "Read-only on owc_marts."
 add_sa freshness  "OWC freshness check"         "Runs the owc_ops.pipeline_runs freshness scheduled query. Read-only."
