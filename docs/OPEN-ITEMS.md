@@ -125,15 +125,21 @@ question — the model is in the repo and
 [documented](deploy.md#deploy-identity). What is left is running it.
 
 Resource-admin roles belong to `sa-<prefix>-deploy-1`, which nobody logs in
-as. A named person gets `roles/iam.serviceAccountTokenCreator` on that one
-account and impersonates it to deploy.
+as. Whoever deploys gets `roles/iam.serviceAccountTokenCreator` on that one
+account and impersonates it.
+
+**Ask for a group, not a person** — more than one person will deploy, and a
+group means adding the next one is a membership change rather than another
+IAM request. It has to be created in the organization's directory first;
+this repo cannot create it and does not try. Two traps and the test that
+catches both are in [deploy.md](deploy.md#deployer-group).
 
 ### `owc-dpar-d` — set up under the old model, needs migrating
 
 An admin runs, from an up-to-date clone:
 
 ```bash
-make gcloud-admin ENV=dev OPERATOR=user:THE-PERSON@agency.ok.gov
+make gcloud-admin ENV=dev OPERATOR=group:THE-GROUP@agency.ok.gov
 ```
 
 Idempotent: it skips what exists and adds the deploy account, its roles, its
@@ -147,8 +153,9 @@ is still attached, and it is the receipt to send OMES.
 
 ### `owc-dpar-p` — nothing exists yet, so get it right first time
 
-The same command with `ENV=prod`, run once, before anything else. No
-migration and no human ever holds the roles.
+The same command with `ENV=prod`, run once, before anything else — same
+group, or a separate one if prod deploys should be a narrower list. No
+migration, and no human ever holds the roles.
 
 ### Why a service account rather than a person
 

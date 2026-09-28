@@ -130,6 +130,40 @@ unset CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT GOOGLE_IMPERSONATE_SERVICE_ACCOU
 An admin running the one privileged step never evals `env-exports`, so their
 step is unaffected by any of this.
 
+### More than one person deploying {#deployer-group}
+
+Grant the `tokenCreator` binding to a **group**, not to each person:
+
+```bash
+make gcloud-admin ENV=dev OPERATOR=group:owc-deployers@agency.ok.gov
+```
+
+Adding or removing a deployer is then a group membership change. No IAM
+edit, no admin round-trip, and the project's policy never mentions a person
+— which is also what makes offboarding a one-line job instead of an audit.
+
+**The repo cannot create the group, and deliberately does not try.** A Google
+Group lives in the organization's directory, not in the GCP project: it needs
+Workspace or Cloud Identity admin rights, which are usually a different team
+from whoever holds `projectIamAdmin` here. Scripting it would cross the line
+this whole setup is built around — the repo touches one project and nothing
+above it.
+
+So ask for the group in the same conversation as the deploy account, and
+note two things that will not announce themselves:
+
+- **Create the group first.** IAM accepts a binding for a principal that does
+  not exist, records it, and does nothing — the same trap that made a
+  `tokenCreator` grant on the Cloud Scheduler agent look successful when it
+  was not. Group, then binding.
+- **Check the domain is allowed.** If the organization enforces
+  `constraints/iam.allowedPolicyMemberDomains`, a group outside the permitted
+  domains is refused. An `agency.ok.gov` group is the safe assumption.
+
+`make deploy-identity ENV=dev` is the test that settles both: it tries to
+mint a token as the deploy account, which only works if the group exists,
+the binding landed, and you are in it.
+
 ### The one decision an admin has to make {#run-admin-decision}
 
 The deploy account needs eleven roles. Ten are uncontroversial —

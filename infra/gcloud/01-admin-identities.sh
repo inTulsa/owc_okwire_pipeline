@@ -459,6 +459,27 @@ if (( SKIP_PRINCIPAL )); then
   note "Re-run with --principal user:<address> once the deploying person is"
   note "decided. Everything above is already in place."
 else
+    # A group is the right answer for more than one deployer, and it has one
+  # trap: IAM accepts a binding for a principal that does not exist, records
+  # it, and does nothing — the same failure this project already hit with the
+  # Cloud Scheduler service agent. Nothing here can tell the difference,
+  # because reading a group needs Cloud Identity, not project IAM.
+  if [[ "$PRINCIPAL" == group:* ]]; then
+    note ""
+    note "$PRINCIPAL is a group. Two things to confirm, because neither"
+    note "this script nor IAM will tell you:"
+    note ""
+    note "  1. The group EXISTS before this binding is made. IAM accepts a"
+    note "     binding for a principal that does not exist yet — it records"
+    note "     it, reports success, and does nothing."
+    note "  2. Its domain is allowed by constraints/iam.allowedPolicyMemberDomains,"
+    note "     if your organization enforces domain-restricted sharing. A"
+    note "     group outside the allowed domains is refused outright."
+    note ""
+    note "The definitive test is the operator running, from the repo:"
+    note "  make deploy-identity ENV=<env>"
+    note ""
+  fi
   say "Granting $PRINCIPAL tokenCreator on the deploy identity, and nothing else"
   run gcloud iam service-accounts add-iam-policy-binding "$SA_DEPLOY" \
     --project "$PROJECT" --member "$PRINCIPAL" \
