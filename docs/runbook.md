@@ -149,6 +149,40 @@ gcloud run jobs execute cr-$PREFIX-lightcast-1 --region=$REGION --project=$PROJE
 
 ---
 
+## `terraform apply` fails with "cannot assign requested address"
+
+```text
+Error: Error when reading or editing BigQueryDataset "...owc_staging":
+  dial tcp [2607:f8b0:4001:c2f::5f]:443: connect: cannot assign requested address
+```
+
+**Networking, not IAM.** Terraform resolved the API to an IPv6 address and
+the machine has no usable IPv6 route, so the socket could not be opened
+locally — Google never saw the request. Cloud Shell frequently has no IPv6,
+and Go falls back to IPv4 on some code paths and not others, which is why
+this is intermittent and why it hits some resources and not their
+neighbours.
+
+**Nothing was changed.** These are refresh-phase errors, raised before any
+resource is modified, so the apply aborts having written nothing. The plan
+summary printed above them is partial for the same reason: refresh stopped
+early, so modules that depend on it were never evaluated. A
+"Changes to Outputs" block with no resource changes does **not** mean there
+is nothing to do.
+
+Re-run it. It usually succeeds on the next attempt:
+
+```bash
+make tf-apply ENV=$ENV TF_ARGS="-var=image_digest=<the digest make build printed>"
+```
+
+There is no need to re-run `make up` — the build is the slow part and the
+image it pushed is still good. If it fails repeatedly, start a new Cloud
+Shell session: you get a different VM, and the one you are on may have lost
+its IPv6 route entirely.
+
+---
+
 ## `tf-bootstrap` fails with "Moved resource instances excluded by targeting"
 
 ```text
