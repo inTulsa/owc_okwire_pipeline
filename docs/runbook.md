@@ -149,6 +149,35 @@ gcloud run jobs execute cr-$PREFIX-lightcast-1 --region=$REGION --project=$PROJE
 
 ---
 
+## `tf-bootstrap` fails with "Moved resource instances excluded by targeting"
+
+```text
+Error: Moved resource instances excluded by targeting
+  -target="module.enrollment.google_cloud_run_v2_job_iam_member.scheduler_invoker"
+  -target="module.lightcast.google_cloud_run_v2_job_iam_member.scheduler_invoker"
+```
+
+One-time, and only on a project whose state predates
+`scheduler_job_iam_in_terraform`. That variable gave the scheduler binding a
+`count`, which moves its address from `...scheduler_invoker` to
+`...scheduler_invoker[0]`. `tf-bootstrap` runs with `-target`, and Terraform
+will not plan a targeted run while a move is outstanding.
+
+Move the two state entries once, then re-run `make up`:
+
+```bash
+cd infra/terraform/envs/$ENV && terraform state mv 'module.lightcast.google_cloud_run_v2_job_iam_member.scheduler_invoker' 'module.lightcast.google_cloud_run_v2_job_iam_member.scheduler_invoker[0]'
+```
+
+```bash
+cd infra/terraform/envs/$ENV && terraform state mv 'module.enrollment.google_cloud_run_v2_job_iam_member.scheduler_invoker' 'module.enrollment.google_cloud_run_v2_job_iam_member.scheduler_invoker[0]'
+```
+
+Nothing in the project changes — this only renames the entries Terraform
+uses to track two bindings that already exist.
+
+---
+
 ## ALERT 3: scheduler failing {#alert-3-scheduler-failing}
 
 ### `PERMISSION_DENIED` 403 on `jobs/...:run` {#scheduler-403}

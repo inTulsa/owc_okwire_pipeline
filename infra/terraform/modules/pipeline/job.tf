@@ -111,6 +111,18 @@ resource "google_cloud_run_v2_job" "this" {
 # Skipped entirely when the deploy identity cannot write a job's IAM policy
 # (run.developer rather than run.admin). An admin then grants the same thing
 # by hand — `make scheduler-grant` prints the commands.
+# Giving this resource a count changed its address from
+# ...scheduler_invoker to ...scheduler_invoker[0]. Terraform treats that as a
+# move, and refuses to plan a -target'ed run (which `make tf-bootstrap` is)
+# until the move is included. A project whose state predates this needs the
+# entries moved once, from infra/terraform/envs/<env>:
+#
+#   terraform state mv 'module.lightcast.google_cloud_run_v2_job_iam_member.scheduler_invoker' \
+#                      'module.lightcast.google_cloud_run_v2_job_iam_member.scheduler_invoker[0]'
+#   terraform state mv 'module.enrollment.google_cloud_run_v2_job_iam_member.scheduler_invoker' \
+#                      'module.enrollment.google_cloud_run_v2_job_iam_member.scheduler_invoker[0]'
+#
+# A project with no state yet is unaffected.
 resource "google_cloud_run_v2_job_iam_member" "scheduler_invoker" {
   count = var.scheduler_job_iam_in_terraform ? 1 : 0
 
