@@ -90,8 +90,19 @@ resource "google_cloud_run_v2_job" "this" {
 
 # run.invoker on THIS job only, not project-wide.
 #
-# roles/run.invoker is correct and sufficient — it contains run.jobs.run.
-# roles/run.developer would also work and is over-privileged.
+# >> SUSPECTED INSUFFICIENT. See docs/HANDOFF.md, open issue 1. <<
+#
+# roles/run.invoker contains run.jobs.run, which is what this comment used to
+# say made it sufficient. But scheduler.tf posts an `overrides` body, and
+# running a job WITH OVERRIDES requires run.jobs.runWithOverrides — a
+# separate permission that run.invoker does not grant.
+#
+# Cloud Scheduler on owc-dpar-d returns 403 on every fire while this binding
+# is present and exact, which is the shape that predicts. roles/run.developer
+# includes both permissions and is still resource-scoped here.
+#
+# Not changed yet: the hypothesis needs confirming against the live API
+# first, and HANDOFF.md has the one-command test.
 resource "google_cloud_run_v2_job_iam_member" "scheduler_invoker" {
   name     = google_cloud_run_v2_job.this.name
   project  = var.project_id

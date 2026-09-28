@@ -153,6 +153,13 @@ gcloud run jobs execute cr-$PREFIX-lightcast-1 --region=$REGION --project=$PROJE
 
 ### `PERMISSION_DENIED` 403 on `jobs/...:run` {#scheduler-403}
 
+> **This entry's diagnosis is incomplete.** On `owc-dpar-d` every check below
+> passes and the 403 persists. The leading explanation is that the scheduler
+> posts an `overrides` body, which needs `run.jobs.runWithOverrides` —
+> a permission `roles/run.invoker` does not grant. See
+> [`HANDOFF.md`](HANDOFF.md#open-issue-1-the-scheduler-403) for the test and
+> the fix options before working through the rest of this.
+
 ```json
 "status": "PERMISSION_DENIED",
 "debugInfo": "URL_ERROR-ERROR_OTHER. Original HTTP response code number = 403",
