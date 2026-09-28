@@ -286,21 +286,35 @@ auth-check: ## Verify the gcloud CLI has usable credentials
 
 image-digest: auth-check ## Print just the digest-pinned image reference (scriptable)
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
-	@digest=$$(gcloud artifacts docker images describe "$(IMAGE_REPO):$(IMAGE_TAG)" \
-	    --project $(PROJECT) --format='value(image_summary.digest)' 2>/dev/null); \
+	@# stderr is CAPTURED, not discarded. A permission error, a disabled API
+	@# and a genuinely absent image all yield an empty digest, and throwing
+	@# the message away reports all three as "no image found, build one
+	@# first" — which sends you to rebuild an image that already exists.
+	@err=$$(mktemp); \
+	  digest=$$(gcloud artifacts docker images describe "$(IMAGE_REPO):$(IMAGE_TAG)" \
+	    --project $(PROJECT) --format='value(image_summary.digest)' 2>"$$err"); \
 	  if [ -z "$$digest" ]; then \
 	    digest=$$(gcloud artifacts docker images describe "$(IMAGE_REPO):latest" \
-	      --project $(PROJECT) --format='value(image_summary.digest)' 2>/dev/null); \
+	      --project $(PROJECT) --format='value(image_summary.digest)' 2>>"$$err"); \
 	    if [ -n "$$digest" ]; then \
 	      echo "warning: no image tagged $(IMAGE_TAG) (the current git SHA); using :latest." >&2; \
 	      echo "         Run 'make deploy ENV=$(ENV)' to build and deploy at this commit." >&2; \
 	    fi; \
 	  fi; \
 	  if [ -z "$$digest" ]; then \
-	    echo "no image found at $(IMAGE_REPO):$(IMAGE_TAG) or :latest." >&2; \
-	    echo "Build one first:  make build ENV=$(ENV)" >&2; \
+	    echo "no digest for $(IMAGE_REPO):$(IMAGE_TAG) or :latest." >&2; \
+	    if [ -s "$$err" ]; then \
+	      echo "" >&2; \
+	      echo "what gcloud said:" >&2; \
+	      grep -v "service account impersonation" "$$err" | sed "s/^/  /" >&2; \
+	      echo "" >&2; \
+	    fi; \
+	    echo "If the build reported SUCCESS, the image exists and this is not a" >&2; \
+	    echo "missing image — read the error above. Otherwise:  make build ENV=$(ENV)" >&2; \
+	    rm -f "$$err"; \
 	    exit 1; \
 	  fi; \
+	  rm -f "$$err"; \
 	  echo "$(IMAGE_REPO)@$$digest"
 
 # -- terraform ---------------------------------------------------------------
