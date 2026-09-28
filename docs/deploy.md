@@ -72,9 +72,15 @@ ERROR: (gcloud.auth.application-default.set-quota-project) The application
 default credentials are not user credentials, quota project cannot be added.
 ```
 
-Nothing is wrong with the credentials — the shell is just wearing the wrong
-identity for that one command. `unset CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT
-GOOGLE_IMPERSONATE_SERVICE_ACCOUNT`, run it, then re-run `env-exports`.
+The credentials are not merely being read wrong — **the login wrote the
+impersonation into the ADC file**, which is now
+`type: impersonated_service_account`. Unsetting the variables afterwards does
+not fix it; Terraform would go on to impersonate the deploy account starting
+from the deploy account, which fails because it holds no `tokenCreator` on
+itself, with an error that mentions nothing about ADC.
+
+Unset both variables and **log in again**, then set the quota project, then
+re-run `env-exports`. `make doctor` checks the credential type and says so.
 
 So: authenticate **as yourself** first, then switch onto the deploy identity.
 

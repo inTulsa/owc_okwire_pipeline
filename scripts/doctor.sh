@@ -176,11 +176,28 @@ if gcloud auth application-default print-access-token >/dev/null 2>&1; then
     cfg=$(gcloud info --format='value(config.paths.global_config_dir)' 2>/dev/null)
     adc_file="${cfg:-$HOME/.config/gcloud}/application_default_credentials.json"
   fi
-  quota=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('quota_project_id',''))" "$adc_file" 2>/dev/null || true)
-  if [ -n "$quota" ]; then
-    ok "ADC" "quota project: $quota"
+  # The credential TYPE matters more than the quota project. `gcloud auth
+  # application-default login` honours CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT
+  # and bakes it into the file, so logging in from a shell that has already
+  # eval'd `make env-exports` writes an impersonated_service_account ADC.
+  # Terraform then impersonates the deploy account FROM the deploy account,
+  # which fails because it holds no tokenCreator on itself — and the error
+  # says nothing about ADC. Unsetting the variable afterwards does not fix
+  # the file; only logging in again does.
+  adc_type=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('type',''))" "$adc_file" 2>/dev/null || true)
+  if [ "$adc_type" = "impersonated_service_account" ]; then
+    bad "ADC" "is an impersonated credential, not yours — Terraform cannot impersonate from it"
+    printf '           %s\n' "You logged in while the shell was already on the deploy account."
+    printf '           %s\n' "unset CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT GOOGLE_IMPERSONATE_SERVICE_ACCOUNT"
+    printf '           %s\n' "gcloud auth application-default login     # re-login: the file is what is wrong"
+    printf '           %s\n' "then re-run: eval \"\$(make -s env-exports ENV=<env>)\""
   else
-    warn "ADC" "no quota project set — gcloud auth application-default set-quota-project <PROJECT>"
+    quota=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('quota_project_id',''))" "$adc_file" 2>/dev/null || true)
+    if [ -n "$quota" ]; then
+      ok "ADC" "quota project: $quota"
+    else
+      warn "ADC" "no quota project set — gcloud auth application-default set-quota-project <PROJECT>"
+    fi
   fi
 else
   if (( IN_CLOUD_SHELL )); then
