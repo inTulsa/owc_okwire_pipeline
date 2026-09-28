@@ -150,7 +150,7 @@ fi
 head2 "Location policy"
 if pol=$(gcloud resource-manager org-policies describe \
       constraints/gcp.resourceLocations --project "$PROJECT" --effective \
-      --format='value(listPolicy.allowedValues)' 2>&1); then
+      --format='value(listPolicy.allowedValues)' 2>/dev/null); then
   if [[ -z "$pol" || "$pol" == *"allValues"* ]]; then
     printf '  \033[32mok\033[0m   %s\n' "no location restriction in effect"
   else
@@ -165,12 +165,30 @@ else
 fi
 
 head2 "What already exists"
-sa_found=0
+# Reading a service account needs iam.serviceAccounts.get, which the deploy
+# identity has only via serviceAccountUser on the five it attaches. powerbi
+# is deliberately not one of them, so an impersonated run cannot see it and
+# must not report that as absent — the verdict below keys off this.
+sa_found=0; sa_missing=0; sa_unknown=0
 for email in "${ALL_SAS[@]}"; do
-  gcloud iam service-accounts describe "$email" --project "$PROJECT" >/dev/null 2>&1 \
-    && sa_found=$((sa_found+1))
+  if out=$(gcloud iam service-accounts describe "$email" --project "$PROJECT" 2>&1); then
+    sa_found=$((sa_found+1))
+  else
+    case "$out" in
+      *NOT_FOUND*|*"not found"*|*"Unknown service account"*) sa_missing=$((sa_missing+1)) ;;
+      *) sa_unknown=$((sa_unknown+1)) ;;
+    esac
+  fi
 done
-printf '  service accounts : %d of %d\n' "$sa_found" "${#ALL_SAS[@]}"
+printf '  service accounts : %d of %d visible' "$sa_found" "${#ALL_SAS[@]}"
+(( sa_missing )) && printf ', \033[31m%d MISSING\033[0m' "$sa_missing"
+(( sa_unknown )) && printf ', %d not readable as this identity' "$sa_unknown"
+printf '\n'
+if (( sa_unknown )); then
+  printf '  \033[2m%s\033[0m\n' "Not readable is expected while impersonating the deploy account: it"
+  printf '  \033[2m%s\033[0m\n' "holds actAs on the five it attaches, and powerbi is deliberately not"
+  printf '  \033[2m%s\033[0m\n' "one of them. Not evidence of absence."
+fi
 
 api_on=0
 if enabled=$(gcloud services list --enabled --project "$PROJECT" --format='value(config.name)' 2>/dev/null); then
@@ -202,7 +220,7 @@ elif (( admin_have == 3 )); then
   echo "  You can run everything yourself, including step 4:"
   echo ""
   echo "    make gcloud-admin ENV=<env>"
-elif (( sa_found == ${#ALL_SAS[@]} && deploy_missing == 0 )); then
+elif (( sa_missing == 0 && deploy_missing == 0 )); then
   echo "  Step 4 has been done and you have what the deploy needs. Continue:"
   echo ""
   echo "    make up ENV=<env>"
