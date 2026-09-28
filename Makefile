@@ -290,12 +290,20 @@ image-digest: auth-check ## Print just the digest-pinned image reference (script
 	@# and a genuinely absent image all yield an empty digest, and throwing
 	@# the message away reports all three as "no image found, build one
 	@# first" — which sends you to rebuild an image that already exists.
+	@# `images list`, NOT `images describe`. describe fetches vulnerability
+	@# metadata from Container Analysis and therefore needs
+	@# containeranalysis.occurrences.list, which roles/artifactregistry.admin
+	@# does not grant and this repo has no reason to hold. It fails with
+	@# "does not have permission to access projects instance" on a digest
+	@# lookup that never needed that API. list reads Artifact Registry only.
 	@err=$$(mktemp); \
-	  digest=$$(gcloud artifacts docker images describe "$(IMAGE_REPO):$(IMAGE_TAG)" \
-	    --project $(PROJECT) --format='value(image_summary.digest)' 2>"$$err"); \
+	  digest=$$(gcloud artifacts docker images list "$(IMAGE_REPO)" \
+	    --project $(PROJECT) --include-tags --filter="tags:$(IMAGE_TAG)" \
+	    --format='value(version)' --limit=1 2>"$$err"); \
 	  if [ -z "$$digest" ]; then \
-	    digest=$$(gcloud artifacts docker images describe "$(IMAGE_REPO):latest" \
-	      --project $(PROJECT) --format='value(image_summary.digest)' 2>>"$$err"); \
+	    digest=$$(gcloud artifacts docker images list "$(IMAGE_REPO)" \
+	      --project $(PROJECT) --include-tags --filter="tags:latest" \
+	      --format='value(version)' --limit=1 2>>"$$err"); \
 	    if [ -n "$$digest" ]; then \
 	      echo "warning: no image tagged $(IMAGE_TAG) (the current git SHA); using :latest." >&2; \
 	      echo "         Run 'make deploy ENV=$(ENV)' to build and deploy at this commit." >&2; \

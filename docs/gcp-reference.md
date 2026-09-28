@@ -231,6 +231,14 @@ mid-deploy.
 | No log reads without `roles/logging.viewer` | Every runbook diagnostic silently returns nothing | `logging.viewer` is one of the eleven roles |
 | Cloud Shell ships a terraform **stub** | `make up` reports success having created nothing | `make install-terraform`; `tf-check` guards every `tf-*` target |
 
+`gcloud artifacts docker images describe` is not usable by the deploy
+identity: it reads Container Analysis for vulnerability metadata and needs
+`containeranalysis.occurrences.list`, which `roles/artifactregistry.admin`
+does not grant. Use `images list --include-tags --filter="tags:<tag>"` to
+resolve a digest — it reads Artifact Registry alone. Granting the deploy
+account a Container Analysis role to work around this would be widening it
+for a field nothing uses.
+
 Two permissions are easy to leave out and both stop a deploy partway:
 
 - `run.jobs.setIamPolicy` — every `google_cloud_run_v2_job_iam_member`. Not in
