@@ -12,6 +12,11 @@ Two production data pipelines, one schedule, one warehouse, one runbook.
 Both land in BigQuery (`owc_marts`), which PowerBI reads directly. Schedules
 live in [`pipelines.yml`](pipelines.yml).
 
+> **Two things are open and one of them blocks production.** Cloud Scheduler
+> cannot start the jobs, and the deploy principal is a person's account when
+> it should be a service account. Both are written up in
+> [`docs/HANDOFF.md`](docs/HANDOFF.md) with the next step for each.
+
 ## Start here
 
 **Standing an environment up, or deploying a change?**
@@ -73,6 +78,7 @@ Named for the question they answer, not numbered — read the one you need.
 | I want to run a pipeline or change the code | [`local-development.md`](docs/local-development.md) |
 | I want to add a dataset or a new pipeline | [`adding-a-pipeline.md`](docs/adding-a-pipeline.md) |
 | What are the alerts and why does each exist? | [`monitoring.md`](docs/monitoring.md) |
+| **Picking this up mid-flight? Open issues and OMES constraints** | [`HANDOFF.md`](docs/HANDOFF.md) |
 | What still needs a human decision? **Read before go-live** | [`OPEN-ITEMS.md`](docs/OPEN-ITEMS.md) |
 
 The enrollment pipeline's original business-process documentation is preserved
