@@ -132,15 +132,37 @@ step is unaffected by any of this.
 
 ### More than one person deploying {#deployer-group}
 
-Grant the `tokenCreator` binding to a **group**, not to each person:
+**A group is the best answer and it is not a prerequisite.** Start with a
+named person if that is what you can get today; adding the group later costs
+one binding and undoes nothing, because several principals can hold
+`tokenCreator` on the same account at once.
+
+Either works as `OPERATOR`:
+
+```bash
+make gcloud-admin ENV=dev OPERATOR=user:someone@agency.ok.gov
+```
 
 ```bash
 make gcloud-admin ENV=dev OPERATOR=group:owc-deployers@agency.ok.gov
 ```
 
-Adding or removing a deployer is then a group membership change. No IAM
-edit, no admin round-trip, and the project's policy never mentions a person
-— which is also what makes offboarding a one-line job instead of an audit.
+**Adding a deployer afterwards is one command, run by an admin,** whichever
+you started with — no re-run of the setup:
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding sa-<prefix>-deploy-1@<project>.iam.gserviceaccount.com --project <project> --member user:SOMEONE@agency.ok.gov --role roles/iam.serviceAccountTokenCreator
+```
+
+That one binding is the whole cost of a new deployer. Under the old model it
+was eleven project roles plus five `actAs` grants per person — and an
+organization that forbids admin roles on human accounts cannot grant it at
+all, so there was no correct number of deployers.
+
+With a group it drops to zero: adding or removing someone is a membership
+change, no IAM edit, no admin round-trip, and the project policy never
+mentions a person — which is also what makes offboarding one line instead of
+an audit.
 
 **The repo cannot create the group, and deliberately does not try.** A Google
 Group lives in the organization's directory, not in the GCP project: it needs
