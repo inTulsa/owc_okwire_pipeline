@@ -170,16 +170,42 @@ early, so modules that depend on it were never evaluated. A
 "Changes to Outputs" block with no resource changes does **not** mean there
 is nothing to do.
 
-Re-run it. It usually succeeds on the next attempt:
+**gcloud is unaffected**, which is the confusing part. gcloud is Python and
+falls back to IPv4 cleanly; Terraform is Go, and Go's dialer will keep
+choosing an AAAA record it cannot route to. So every `make` target that
+shells out to gcloud works while `terraform apply` fails.
+
+Retrying is worth one attempt and no more — if the VM has no IPv6 route,
+the next run fails on more resources, not fewer. Escalate instead:
+
+**1. Make Go use the system resolver.** getaddrinfo applies RFC 6724
+sorting, which deprioritises IPv6 when the host has no global IPv6 address.
+No sudo, fixes it most of the time:
+
+```bash
+export GODEBUG=netdns=cgo
+```
+
+**2. Turn IPv6 off for the session.** Go then sees no usable IPv6 address
+and stops offering AAAA to the dialer. Cloud Shell VMs are disposable, so
+this costs nothing:
+
+```bash
+sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1 && sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
+```
+
+**3. Start a new Cloud Shell session** for a different VM. You will need to
+redo `gcloud auth application-default login` and the `env-exports` eval,
+because the gcloud config lives in a per-session `/tmp` directory.
+
+Then re-run the apply:
 
 ```bash
 make tf-apply ENV=$ENV TF_ARGS="-var=image_digest=<the digest make build printed>"
 ```
 
 There is no need to re-run `make up` — the build is the slow part and the
-image it pushed is still good. If it fails repeatedly, start a new Cloud
-Shell session: you get a different VM, and the one you are on may have lost
-its IPv6 route entirely.
+image it pushed is still good.
 
 ---
 
