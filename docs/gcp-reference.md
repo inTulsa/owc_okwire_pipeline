@@ -217,8 +217,9 @@ take either the state or the source code with it.
 
 ## What an OMES project enforces {#omes-constraints}
 
-Learned by hitting each one on `owc-dpar-d`. Assume all of it applies to
-`owc-dpar-p`, and design around it rather than discovering it mid-deploy.
+Each of these has been hit on a real OMES project. Assume all of it applies
+to every environment, and design around it rather than discovering it
+mid-deploy.
 
 | Constraint | How it shows up | Handled by |
 |---|---|---|

@@ -583,7 +583,7 @@ reference. These two matter while you are deploying:
 `make smoke` runs each pipeline **as you**. Cloud Scheduler runs them as
 `sa-<prefix>-scheduler-1`, which is a different identity needing a different
 permission. A green smoke test and a scheduler that cannot start anything look
-identical from outside — that is exactly what dev looked like for five days.
+identical from outside, and nothing else in a deploy distinguishes them.
 
 ```bash
 gcloud scheduler jobs run cs-$PREFIX-enrollment-monthly-1 --location $REGION --project $PROJECT

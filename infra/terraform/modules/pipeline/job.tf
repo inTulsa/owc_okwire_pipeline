@@ -95,7 +95,7 @@ resource "google_cloud_run_v2_job" "this" {
 # requires run.jobs.runWithOverrides. roles/run.invoker grants exactly
 # run.instances.invoke, run.jobs.run and run.routes.invoke — so every
 # scheduled fire returns 403 while the binding reads as perfectly correct,
-# because it IS correct for a plain run. Confirmed on owc-dpar-d:
+# because it IS correct for a plain run.
 # `gcloud iam roles describe roles/run.invoker` is the one-command check.
 #
 # A manual `gcloud run jobs execute` does not catch this. It runs as the

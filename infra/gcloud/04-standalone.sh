@@ -15,7 +15,9 @@
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-PROJECT=""; PREFIX=""; PRINCIPAL=""; LOCATION="US"; REGION="us-central1"
+PROJECT=""; PREFIX=""; LOCATION="US"; REGION="us-central1"
+# --principal is repeatable: one binding per person or group.
+PRINCIPALS=()
 # Which half to emit.
 #
 #   operator  APIs, the Data Transfer agent, the two buckets. Everything the
@@ -32,7 +34,7 @@ PART="all"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --prefix)    PREFIX="${2:?}"; shift 2 ;;
-    --principal) PRINCIPAL="${2:?}"; shift 2 ;;
+    --principal) PRINCIPALS+=("${2:?}"); shift 2 ;;
     --location)  LOCATION="${2:?}"; shift 2 ;;
     --region)    REGION="${2:?}"; shift 2 ;;
     --part)      PART="${2:?}"; shift 2 ;;
@@ -42,7 +44,7 @@ done
 case "$PART" in operator|admin|all) ;; *) echo "--part must be operator, admin or all" >&2; exit 64 ;; esac
 [[ -n "$PROJECT" ]] || { echo "usage: $0 <project-id> [--prefix P] --principal MEMBER" >&2; exit 64; }
 PREFIX="${PREFIX:-$PROJECT}"
-[[ -n "$PRINCIPAL" ]] || PRINCIPAL="user:$(gcloud config get-value account 2>/dev/null)"
+(( ${#PRINCIPALS[@]} )) || PRINCIPALS=("user:$(gcloud config get-value account 2>/dev/null)")
 
 # shellcheck source=names.sh
 source "$(dirname "${BASH_SOURCE[0]}")/names.sh"
@@ -97,13 +99,13 @@ emit "# ========================================================================
 emit "set -euo pipefail"
 emit ""
 emit "PROJECT=$PROJECT"
-emit "DEPLOYER=$PRINCIPAL"
+emit "DEPLOYERS=($(printf '%s ' "${PRINCIPALS[@]}"))"
 emit "DEPLOY_SA=$SA_DEPLOY"
 emit ""
-emit '# ^ CHECK DEPLOYER BEFORE RUNNING.'
+emit '# ^ CHECK DEPLOYERS BEFORE RUNNING.'
 emit '#'
-emit '# DEPLOYER is the PERSON who will run the deploys. It is NOT the account'
-emit '# running this script — it is the person you are doing this for.'
+emit '# DEPLOYERS are the PEOPLE (or groups) who will run the deploys. NOT the'
+emit '# account running this script — the people you are doing this for.'
 emit '#'
 emit '# They receive exactly ONE binding in this project: tokenCreator on'
 emit '# DEPLOY_SA. Every resource-admin role goes to DEPLOY_SA instead, and'
@@ -125,13 +127,13 @@ emit 'fi'
 emit ''
 emit 'step() { printf "\n==> %s\n" "$*"; }'
 emit ''
-emit '# The deploy principal being the account running this script is almost'
-emit '# always a mistake: it means whoever generated the request took the'
-emit '# default from their own shell. Ask rather than guess.'
+emit '# A deployer being the account running this script is almost always a'
+emit '# mistake: it means whoever generated the request took the default from'
+emit '# their own shell. Ask rather than guess.'
 emit 'RUNNER="user:$(gcloud config get-value account 2>/dev/null)"'
-emit 'if [[ "$DEPLOYER" == "$RUNNER" ]]; then'
+emit 'if [[ " ${DEPLOYERS[*]} " == *" $RUNNER "* ]]; then'
 emit '  echo "" >&2'
-emit '  echo "  DEPLOYER is $DEPLOYER, which is the account running this" >&2'
+emit '  echo "  DEPLOYERS includes $RUNNER, the account running this" >&2'
 emit '  echo "  script. That is usually wrong — it should be the person who" >&2'
 emit '  echo "  will run the deploys, not the admin setting this up." >&2'
 emit '  echo "" >&2'
@@ -285,9 +287,11 @@ emit ""
 next_step "Letting the named person use the deploy account (one binding)"
 emit '# The only thing a human gets. They impersonate the deploy account;'
 emit '# they never hold its roles.'
-emit 'gcloud iam service-accounts add-iam-policy-binding "$DEPLOY_SA" \'
-emit '  --project "$PROJECT" --member "$DEPLOYER" \'
-emit '  --role roles/iam.serviceAccountTokenCreator --quiet >/dev/null'
+emit 'for who in "${DEPLOYERS[@]}"; do'
+emit '  gcloud iam service-accounts add-iam-policy-binding "$DEPLOY_SA" \'
+emit '    --project "$PROJECT" --member "$who" \'
+emit '    --role roles/iam.serviceAccountTokenCreator --quiet >/dev/null'
+emit 'done'
 emit ""
 fi   # end admin part
 

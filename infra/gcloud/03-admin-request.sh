@@ -15,20 +15,27 @@
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
-PROJECT=""; PREFIX=""; PRINCIPAL=""
+PROJECT=""; PREFIX=""
+# --principal is repeatable: everyone who will be able to deploy.
+PRINCIPALS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --prefix)    PREFIX="${2:?}"; shift 2 ;;
-    --principal) PRINCIPAL="${2:?}"; shift 2 ;;
+    --principal) PRINCIPALS+=("${2:?}"); shift 2 ;;
     *)           PROJECT="$1"; shift ;;
   esac
 done
 [[ -n "$PROJECT" ]] || { echo "usage: $0 <project-id> [--prefix P] --principal MEMBER" >&2; exit 64; }
 PREFIX="${PREFIX:-$PROJECT}"
-if [[ -z "$PRINCIPAL" ]]; then
+if (( ${#PRINCIPALS[@]} == 0 )); then
   acct=$(gcloud config get-value account 2>/dev/null)
-  PRINCIPAL="user:${acct}"
+  PRINCIPALS=("user:${acct}")
 fi
+# Only one person runs the one-time setup, even when several will deploy.
+RUNNER="${PRINCIPALS[0]}"
+# Every deployer, for the narrative and the generated command.
+DEPLOYERS_LIST=$(printf '%s, ' "${PRINCIPALS[@]}"); DEPLOYERS_LIST="${DEPLOYERS_LIST%, }"
+PRINCIPAL_FLAGS=$(printf -- '--principal %s ' "${PRINCIPALS[@]}")
 
 # shellcheck source=names.sh
 source "$(dirname "${BASH_SOURCE[0]}")/names.sh"
@@ -46,7 +53,8 @@ cat <<TXT
   FOR THE PROJECT ADMIN — about 2 minutes. You do not need this repo.
 ================================================================================
 
-  Grant these two roles to  $PRINCIPAL  on  $PROJECT :
+  Grant these two roles to  $RUNNER  on  $PROJECT ,
+  who will run the one-time setup:
 
       Service Account Admin      roles/iam.serviceAccountAdmin
       Project IAM Admin          roles/resourcemanager.projectIamAdmin
@@ -55,20 +63,20 @@ cat <<TXT
   Or CLI:
 
     gcloud projects add-iam-policy-binding $PROJECT \\
-      --member $PRINCIPAL --role roles/iam.serviceAccountAdmin --condition=None
+      --member $RUNNER --role roles/iam.serviceAccountAdmin --condition=None
 
     gcloud projects add-iam-policy-binding $PROJECT \\
-      --member $PRINCIPAL --role roles/resourcemanager.projectIamAdmin --condition=None
+      --member $RUNNER --role roles/resourcemanager.projectIamAdmin --condition=None
 
   Tell us. We run one command, takes about a minute, and read it back.
 
   Then take both roles away again — same page, or:
 
     gcloud projects remove-iam-policy-binding $PROJECT \\
-      --member $PRINCIPAL --role roles/iam.serviceAccountAdmin
+      --member $RUNNER --role roles/iam.serviceAccountAdmin
 
     gcloud projects remove-iam-policy-binding $PROJECT \\
-      --member $PRINCIPAL --role roles/resourcemanager.projectIamAdmin
+      --member $RUNNER --role roles/resourcemanager.projectIamAdmin
 
   We then run a check, in front of you, that FAILS if either role is still
   attached. That is your receipt that the elevation is gone.
@@ -85,7 +93,8 @@ WHY
 
   Nobody is asking for admin roles on a person's account. The resource-admin
   roles go to a service account this creates, sa-$PREFIX-deploy-1, which no
-  human logs in as. $PRINCIPAL gets one binding — tokenCreator on that
+  human logs in as. $DEPLOYERS_LIST
+  each get one binding — tokenCreator on that
   account — and deploys by impersonating it. Revoking is that one binding.
 
 WHAT THE ONE COMMAND CREATES
@@ -102,7 +111,8 @@ WHAT THE ONE COMMAND CREATES
                        to Cloud Run and Cloud Scheduler jobs. Per-account,
                        not project-wide.
   2 tokenCreator       one for Google's BigQuery Data Transfer agent, and one
-                       letting $PRINCIPAL impersonate the deploy account.
+                       one per deployer, letting them impersonate it:
+                       $DEPLOYERS_LIST
                        That second one is the only grant to a human.
   API enables          of the 16 needed.
   2 GCS buckets        Terraform state, and a source mirror.
@@ -115,7 +125,7 @@ IF YOU WOULD RATHER RUN IT YOURSELF
 
     git clone $REPO_URL owc && cd owc
     ./infra/gcloud/01-admin-identities.sh $PROJECT \\
-        --prefix $PREFIX --principal $PRINCIPAL --dry-run
+        --prefix $PREFIX $PRINCIPAL_FLAGS--dry-run
 
   That prints every command and changes nothing. Drop --dry-run to apply.
   Idempotent: anything already correct is skipped.

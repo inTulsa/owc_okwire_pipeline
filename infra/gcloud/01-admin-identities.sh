@@ -33,7 +33,10 @@ set -euo pipefail
 
 PROJECT=""
 PREFIX=""
-PRINCIPAL=""
+# Repeatable: --principal may be given more than once. Several people (or a
+# group and a person) can hold tokenCreator on the deploy account at the same
+# time, and each is one binding.
+PRINCIPALS=()
 LOCATION="US"
 DRY_RUN=0
 SKIP_PRINCIPAL=0
@@ -46,7 +49,8 @@ usage() {
 usage: $0 <project-id> [options]
 
   --prefix P          OMES name prefix (default: the project id)
-  --principal P       WHO MAY DEPLOY, as a full IAM member string. Their only
+  --principal P       WHO MAY DEPLOY, as a full IAM member string. REPEATABLE
+                      — pass it once per person or group. Their only
                       binding is tokenCreator on the deploy service account,
                       which they impersonate — never a resource-admin role.
                         user:someone@agency.ok.gov
@@ -75,7 +79,7 @@ USAGE
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --prefix)          PREFIX="${2:?}"; shift 2 ;;
-    --principal)       PRINCIPAL="${2:?}"; shift 2 ;;
+    --principal)       PRINCIPALS+=("${2:?}"); shift 2 ;;
     --no-principal)    SKIP_PRINCIPAL=1; shift ;;
     --no-run-admin)    NO_RUN_ADMIN=1; shift ;;
     --no-state-bucket) SKIP_STATE_BUCKET=1; shift ;;
@@ -168,10 +172,10 @@ fi
 # --principal is the PERSON who will deploy. It is never defaulted.
 #
 # It used to fall back to the active gcloud account, which meant an admin
-# running this from their own shell silently granted themselves — that is
-# exactly what happened on owc-dpar-d, and the operator got nothing. A
-# default that is wrong most of the time is worse than a prompt.
-if (( ! SKIP_PRINCIPAL )) && [[ -z "$PRINCIPAL" ]]; then
+# running this from their own shell silently granted themselves and the
+# operator got nothing. A default that is wrong most of the time is worse
+# than a prompt.
+if (( ! SKIP_PRINCIPAL )) && (( ${#PRINCIPALS[@]} == 0 )); then
   cat >&2 <<'NOPRINCIPAL'
 
 --principal is required, and is NOT defaulted to the account running this.
@@ -386,9 +390,9 @@ run gcloud iam service-accounts add-iam-policy-binding "$SA_FRESHNESS" \
 #
 # roles/cloudscheduler.serviceAgent normally covers this and is granted
 # automatically at the project level. An organization that strips default
-# grants leaves it absent, and then every scheduled fire is a 403 that
-# run.invoker cannot explain — observed on owc-dpar-d. Granting it
-# explicitly costs one call and does not depend on that default surviving.
+# grants leaves it absent, and then every scheduled fire is a 403 that the
+# job's own binding cannot explain. Granting it explicitly costs one call
+# and does not depend on that default surviving.
 say "Granting the Cloud Scheduler agent tokenCreator on the scheduler identity"
 run gcloud iam service-accounts add-iam-policy-binding "$SA_SCHEDULER" \
   --project "$PROJECT" \
@@ -464,9 +468,9 @@ else
   # it, and does nothing — the same failure this project already hit with the
   # Cloud Scheduler service agent. Nothing here can tell the difference,
   # because reading a group needs Cloud Identity, not project IAM.
-  if [[ "$PRINCIPAL" == group:* ]]; then
+  if [[ "${PRINCIPALS[*]}" == *group:* ]]; then
     note ""
-    note "$PRINCIPAL is a group. Two things to confirm, because neither"
+    note "A group was named. Two things to confirm, because neither"
     note "this script nor IAM will tell you:"
     note ""
     note "  1. The group EXISTS before this binding is made. IAM accepts a"
@@ -480,12 +484,17 @@ else
     note "  make deploy-identity ENV=<env>"
     note ""
   fi
-  say "Granting $PRINCIPAL tokenCreator on the deploy identity, and nothing else"
-  run gcloud iam service-accounts add-iam-policy-binding "$SA_DEPLOY" \
-    --project "$PROJECT" --member "$PRINCIPAL" \
-    --role roles/iam.serviceAccountTokenCreator --quiet
+  say "Granting ${#PRINCIPALS[@]} principal(s) tokenCreator on the deploy identity, and nothing else"
+  for who in "${PRINCIPALS[@]}"; do
+    run gcloud iam service-accounts add-iam-policy-binding "$SA_DEPLOY" \
+      --project "$PROJECT" --member "$who" \
+      --role roles/iam.serviceAccountTokenCreator --quiet
+  done
   note ""
-  note "$PRINCIPAL now holds exactly one binding in this project:"
+  note "Each of these now holds exactly one binding in this project:"
+  for who in "${PRINCIPALS[@]}"; do note "  $who"; done
+  note ""
+  note "which is:"
   note "  tokenCreator on $SA_DEPLOY"
   note "They deploy by impersonating it. See docs/deploy.md#deploy-identity."
 fi

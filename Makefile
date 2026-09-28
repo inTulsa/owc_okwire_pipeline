@@ -79,7 +79,9 @@ TF_PRINCIPAL ?= serviceAccount:$(DEPLOY_SA)
 # Deliberately not defaulted to the active gcloud account: an admin running
 # the setup from their own shell would name themselves, which is the exact
 # mistake this model exists to remove. The script refuses without it.
+# Space-separated for more than one — each becomes its own binding:
 #   make gcloud-admin ENV=dev OPERATOR=user:someone@agency.ok.gov
+#   make gcloud-admin ENV=dev OPERATOR="user:a@agency.ok.gov user:b@workforce.ok.gov"
 OPERATOR ?=
 
 # The google provider reads this and impersonates on every API call, so
@@ -636,7 +638,7 @@ access-check: auth-check ## Where do I stand on $(PROJECT), and what must I ask 
 omes-request: ## What to ask your project admin for, scoped to what is missing
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@infra/gcloud/03-admin-request.sh $(PROJECT) --prefix $(NAME_PREFIX) \
-	  $(if $(OPERATOR),--principal $(OPERATOR),)
+	  $(foreach o,$(OPERATOR),--principal $(o))
 
 # Everything the deploy account can already do: enabling APIs, provisioning
 # the Data Transfer agent, creating the two buckets. Doing this yourself
@@ -646,7 +648,7 @@ prep: auth-check ## Do the setup that needs no elevated rights (APIs, buckets)
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@tmp=$$(mktemp); \
 	  infra/gcloud/04-standalone.sh $(PROJECT) --prefix $(NAME_PREFIX) \
-	    $(if $(OPERATOR),--principal $(OPERATOR),) --location $(call tfvar,location) --region $(REGION) \
+	    $(foreach o,$(OPERATOR),--principal $(o)) --location $(call tfvar,location) --region $(REGION) \
 	    --part operator > "$$tmp"; \
 	  gcloud config set project $(PROJECT) >/dev/null 2>&1; \
 	  bash "$$tmp"; rc=$$?; rm -f "$$tmp"; exit $$rc
@@ -657,17 +659,17 @@ prep: auth-check ## Do the setup that needs no elevated rights (APIs, buckets)
 omes-script: ## Write a standalone setup script for your project admin to run
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@infra/gcloud/04-standalone.sh $(PROJECT) --prefix $(NAME_PREFIX) \
-	  $(if $(OPERATOR),--principal $(OPERATOR),) --location $(call tfvar,location) --region $(REGION) --part admin
+	  $(foreach o,$(OPERATOR),--principal $(o)) --location $(call tfvar,location) --region $(REGION) --part admin
 
 gcloud-admin-dry-run: ## Print every privileged command the one-time setup would run, and change nothing
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	infra/gcloud/01-admin-identities.sh $(PROJECT) --prefix $(NAME_PREFIX) \
-	  $(if $(OPERATOR),--principal $(OPERATOR),) --dry-run
+	  $(foreach o,$(OPERATOR),--principal $(o)) --dry-run
 
 gcloud-admin: auth-check ## ONE TIME, PRIVILEGED: create the identities, project IAM and APIs
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	infra/gcloud/01-admin-identities.sh $(PROJECT) --prefix $(NAME_PREFIX) \
-	  $(if $(OPERATOR),--principal $(OPERATOR),)
+	  $(foreach o,$(OPERATOR),--principal $(o))
 
 # An apply that works as you says nothing about an apply that runs with the
 # reduced role set. This checks both halves, and also asserts the roles that

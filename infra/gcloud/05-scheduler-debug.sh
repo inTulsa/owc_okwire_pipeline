@@ -57,8 +57,8 @@ SCHED_AGENT="service-${PROJECT_NUMBER}@gcp-sa-cloudscheduler.iam.gserviceaccount
 # run.jobs.runWithOverrides, which roles/run.invoker does not grant — it
 # carries only run.instances.invoke, run.jobs.run and run.routes.invoke.
 # An exact, correct-looking run.invoker binding therefore 403s on every fire.
-# Asserting run.invoker here reported ok for five days on owc-dpar-d while
-# nothing could start.
+# Asserting run.invoker here reports ok while nothing can start, which is
+# the worst thing a diagnostic can do.
 head2 "1. Can the scheduler run each job WITH OVERRIDES?"
 for job in "$JOB_LIGHTCAST" "$JOB_ENROLLMENT"; do
   if pol=$(gcloud run jobs get-iam-policy "$job" --region "$REGION" \

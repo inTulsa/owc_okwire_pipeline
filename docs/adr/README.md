@@ -1,8 +1,8 @@
 # Decision records
 
-The ADRs live inline in [`../01-architecture.md`](../01-architecture.md) rather
-than as separate files — there are eight of them and they are short enough that
-splitting them across eight files costs more in navigation than it buys in
+The ADRs live inline in [`../architecture.md`](../architecture.md) rather than
+as separate files — there are ten of them and they are short enough that
+splitting them across ten files costs more in navigation than it buys in
 tidiness.
 
 | # | Decision |
@@ -18,4 +18,4 @@ tidiness.
 | 009 | No reporting layer — the pipeline stops at `owc_marts` (supersedes the three-dataset split) |
 | 010 | Rollback from the GCS Parquet, not a BigQuery snapshot (supersedes ADR-003's snapshot step); no custom IAM roles |
 
-Add a ninth by appending to `01-architecture.md` and adding a row here.
+Add an eleventh by appending to `architecture.md` and adding a row here.
