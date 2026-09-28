@@ -44,7 +44,9 @@ DEPLOY_PERMS=(
 ADMIN_PERMS=(
   "iam.serviceAccounts.create|roles/iam.serviceAccountAdmin"
   "resourcemanager.projects.setIamPolicy|roles/resourcemanager.projectIamAdmin"
-  "serviceusage.services.enable|roles/serviceusage.serviceUsageAdmin"
+  # NOTE: roles/monitoring.editor also carries this one, so a YES here does
+  # NOT prove the caller holds serviceUsageAdmin. See OPEN-ITEMS item 10.
+  "serviceusage.services.enable|serviceUsageAdmin — or monitoring.editor"
 )
 all=()
 for e in "${DEPLOY_PERMS[@]}" "${ADMIN_PERMS[@]}"; do all+=("${e%%|*}"); done

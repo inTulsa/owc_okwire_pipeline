@@ -237,6 +237,43 @@ bq query --project_id=$PROJECT --use_legacy_sql=false --format=pretty 'SELECT st
 
 ---
 
+## 10. `monitoring.editor` lets the deploy identity enable APIs {#monitoring-editor}
+
+`roles/monitoring.editor` includes `serviceusage.services.enable`. So the
+deploy identity can turn APIs on, even though it holds only
+`serviceusage.serviceUsageConsumer` and the split was designed on the basis
+that it could not. Confirmed on `owc-dpar-d`:
+
+```bash
+gcloud iam roles describe roles/monitoring.editor --format='value(includedPermissions)' | tr ';' '\n' | grep serviceusage
+```
+
+**Not urgent.** Terraform has no `google_project_service` resource, so
+nothing in a deploy exercises it — the permission is latent, not used. But
+"Terraform cannot enable APIs" is stated in `deploy.md` and
+`gcp-reference.md` as a property of the role set, and right now it is a
+property of the *code* only.
+
+**The fix is narrower roles.** Terraform creates six
+`google_monitoring_alert_policy` and one
+`google_monitoring_notification_channel` — nothing else in monitoring. So
+
+```
+roles/monitoring.alertPolicyEditor
+roles/monitoring.notificationChannelEditor
+```
+
+should replace `roles/monitoring.editor` in `TF_PRINCIPAL_ROLES`. Verify
+both carry what the module needs and that neither carries
+`serviceusage.services.enable` before swapping, then re-run
+`make gcloud-admin` and remove the old binding.
+
+Worth raising with OMES either way: they asked for the deploy principal not
+to hold `serviceUsageAdmin`, and it does not — but the capability arrived
+through a different door.
+
+---
+
 ## Also worth knowing
 
 **The PowerBI JSON key exception.** The PowerBI BigQuery connector
