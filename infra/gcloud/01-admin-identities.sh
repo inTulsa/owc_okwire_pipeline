@@ -454,8 +454,14 @@ for role in "${TF_PRINCIPAL_ROLES[@]}"; do
   fi
 done
 note ""
-note "NOT granted to anyone, human or service account:"
+note "This script grants none of these, to anyone:"
 for role in "${TF_PRINCIPAL_FORBIDDEN_ROLES[@]}"; do note "  $role"; done
+note ""
+note "That is a statement about this script, NOT about the project. A"
+note "project set up before the deploy identity existed can still carry"
+note "these on human accounts, and this run does not remove them. The"
+note "check that reads the live policy and fails on them is:"
+note "  make iam-check ENV=<env> STRICT=1"
 
 if (( SKIP_PRINCIPAL )); then
   note ""
