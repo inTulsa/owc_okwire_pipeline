@@ -96,9 +96,15 @@ Confirm it before changing the config.
 `roles/run.developer` includes both permissions. Granting it on **one job**
 is resource-scoped, not project-wide:
 
+Run from the repo root — `env-exports` is a make target, and an empty
+`$(...)` from the wrong directory sets nothing while `eval ""` still
+succeeds, so the next command runs with blank names:
+
 ```bash
-eval "$(make -s env-exports ENV=dev)"
+cd ~/owc && eval "$(make -s env-exports ENV=dev)" && echo "$PROJECT $PREFIX $REGION"
 ```
+
+Confirm that echo is not blank before continuing.
 
 ```bash
 gcloud run jobs add-iam-policy-binding cr-$PREFIX-lightcast-1 \
