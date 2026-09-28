@@ -15,7 +15,7 @@
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-PROJECT=""; PREFIX=""; PRINCIPAL=""; LOCATION="US"
+PROJECT=""; PREFIX=""; PRINCIPAL=""; LOCATION="US"; REGION="us-central1"
 # Which half to emit.
 #
 #   operator  APIs, the Data Transfer agent, the two buckets. Everything the
@@ -34,6 +34,7 @@ while [[ $# -gt 0 ]]; do
     --prefix)    PREFIX="${2:?}"; shift 2 ;;
     --principal) PRINCIPAL="${2:?}"; shift 2 ;;
     --location)  LOCATION="${2:?}"; shift 2 ;;
+    --region)    REGION="${2:?}"; shift 2 ;;
     --part)      PART="${2:?}"; shift 2 ;;
     *)           PROJECT="$1"; shift ;;
   esac
@@ -254,7 +255,29 @@ for t in "${ATTACHED_SAS[@]}"; do
 done
 emit ""
 emit "# The ${#TF_PRINCIPAL_ROLES[@]} resource-admin roles the deploy needs. Harmless to re-run."
+emit 'RUN_ROLE=roles/run.admin'
 for r in "${TF_PRINCIPAL_ROLES[@]}"; do
+  if [[ "$r" == "roles/run.admin" ]]; then
+    emit ''
+    emit '# roles/run.admin is the one an organization may refuse, and there is a'
+    emit '# working answer either way — so this tries it and falls back rather'
+    emit '# than stopping. It is needed because Terraform writes a Cloud Run job'
+    emit '# IAM policy (run.jobs.setIamPolicy), which roles/run.developer lacks.'
+    emit '# Nothing here logs in as this account; it is a service account.'
+    emit 'if gcloud projects add-iam-policy-binding "$PROJECT" \'
+    emit '     --member "serviceAccount:$DEPLOY_SA" --role roles/run.admin \'
+    emit '     --condition=None --quiet >/dev/null 2>&1; then'
+    emit '  RUN_ROLE=roles/run.admin'
+    emit 'else'
+    emit '  printf "    roles/run.admin refused — falling back to roles/run.developer\n"'
+    emit '  gcloud projects add-iam-policy-binding "$PROJECT" \'
+    emit '    --member "serviceAccount:$DEPLOY_SA" --role roles/run.developer \'
+    emit '    --condition=None --quiet >/dev/null'
+    emit '  RUN_ROLE=roles/run.developer'
+    emit 'fi'
+    emit ''
+    continue
+  fi
   emit "gcloud projects add-iam-policy-binding \"\$PROJECT\" \\"
   emit "  --member \"serviceAccount:\$DEPLOY_SA\" --role $r --condition=None --quiet >/dev/null"
 done
@@ -272,6 +295,39 @@ emit ""
 if [[ "$PART" == "operator" ]]; then
   emit 'printf "\n==> Done. Next: the project admin runs the identity setup.\n\n"'
 else
+  emit 'if [[ "$RUN_ROLE" == "roles/run.developer" ]]; then'
+  emit '  cat <<RUNDEV'
+  emit ''
+  emit '==> IMPORTANT — the deploy account has run.developer, not run.admin'
+  emit ''
+  emit '  Supported, but not finished. run.developer cannot write a Cloud Run'
+  emit "  job's IAM policy, so Terraform cannot grant Cloud Scheduler"
+  emit '  permission to start the jobs. Two things follow.'
+  emit ''
+  emit '  1. THE OWC TEAM sets this in their terraform.tfvars before'
+  emit '     deploying, or the apply fails on that one resource:'
+  emit ''
+  emit '       scheduler_job_iam_in_terraform = false'
+  emit ''
+  emit '  2. YOU run two more commands AFTER their first deploy — the Cloud'
+  emit '     Run jobs must exist before anything can be granted on them:'
+  emit ''
+  emit "       gcloud run jobs add-iam-policy-binding $JOB_LIGHTCAST \\"
+  emit "         --region $REGION --project $PROJECT \\"
+  emit "         --member serviceAccount:$SA_SCHEDULER \\"
+  emit '         --role roles/run.developer'
+  emit ''
+  emit "       gcloud run jobs add-iam-policy-binding $JOB_ENROLLMENT \\"
+  emit "         --region $REGION --project $PROJECT \\"
+  emit "         --member serviceAccount:$SA_SCHEDULER \\"
+  emit '         --role roles/run.developer'
+  emit ''
+  emit '  Until step 2 every scheduled run returns 403, silently: the jobs'
+  emit '  work by hand and fail on the monthly cron. Tell the OWC team which'
+  emit '  way this went — it changes what they have to do.'
+  emit ''
+  emit 'RUNDEV'
+  emit 'fi'
   emit 'printf "\n==> Done. Nothing else needs these permissions again.\n"'
   emit 'printf "    Tell the OWC team; they verify from their side and can show\n"'
   emit 'printf "    you the result.\n\n"'

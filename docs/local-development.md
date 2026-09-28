@@ -13,7 +13,7 @@ operating need none of it; see
 ```bash
 make setup                    # venv + deps + writes .env from the example
 $EDITOR .env                  # SNOWFLAKE_USER / SNOWFLAKE_PASSWORD
-make validate                 # config + all 41 SQL files, no network
+make validate                 # config + all 35 SQL files, no network
 ```
 
 `make help` lists every target.
@@ -127,7 +127,7 @@ LIMIT N
 ```
 
 - **Files on disk are never modified.** The wrapping happens in memory.
-- Seven of the 41 files end in a semicolon (`dim_area`, `dim_company`,
+- Seven of the 35 files end in a semicolon (`dim_area`, `dim_company`,
   `dim_edulevels`, `dim_schools`, `dim_skills`, `fact_completions`,
   `fact_completions_lagged`). A semicolon inside a subquery is a syntax error,
   so it is stripped first.
@@ -136,7 +136,7 @@ LIMIT N
   `fact_jobs_lagged_qoq`). The safety scan is comment- and
   string-literal-aware so those are not mistaken for a second statement — a
   naive scan flags them and fails `make check` for nothing.
-- All 41 files are verified single-statement by
+- All 35 files are verified single-statement by
   `test_every_sql_file_is_single_statement_so_limit_is_safe`, and
   `prepare_query` refuses to wrap anything that is not.
 

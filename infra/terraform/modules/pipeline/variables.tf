@@ -6,7 +6,7 @@
 # tfvars entry — not new infrastructure code. This module is instantiated
 # twice today (lightcast and enrollment) and those two are about as different
 # as two pipelines get: one is a credentialed warehouse extract fanned across
-# 41 parallel tasks, the other a single-task stateful scraper with a mounted
+# 35 parallel tasks, the other a single-task stateful scraper with a mounted
 # filesystem.
 # ---------------------------------------------------------------------------
 
@@ -46,6 +46,24 @@ variable "service_account_email" {
 variable "scheduler_service_account_email" {
   type        = string
   description = "Identity Cloud Scheduler uses. Gets run.developer on THIS job only — see job.tf for why not run.invoker."
+}
+
+variable "scheduler_job_iam_in_terraform" {
+  type        = bool
+  default     = true
+  description = <<-EOT
+    Whether Terraform writes the scheduler's binding on this Cloud Run job.
+
+    Writing it needs run.jobs.setIamPolicy, which roles/run.admin carries and
+    roles/run.developer does not. Set false when the deploy identity holds
+    only run.developer — the apply then skips the binding and an admin grants
+    it once per job with `make scheduler-grant`. Leaving it true without the
+    permission fails the apply on this one resource.
+
+    False is not a working state on its own: until the admin runs those two
+    commands, every scheduled fire returns 403. `make verify-separation`
+    and `make scheduler-debug` both report the gap.
+  EOT
 }
 
 # -- schedules ---------------------------------------------------------------
@@ -243,7 +261,7 @@ variable "schedulers_paused" {
     Create the Cloud Scheduler jobs but leave them PAUSED. True in dev.
 
     Both environments read the same pipelines.yml, so without this dev fires
-    the identical schedule prod does — 41 Snowflake queries at 06:00 on the
+    the identical schedule prod does — 35 Snowflake queries at 06:00 on the
     1st, at the same minute as prod, every month. Those credits bill to
     LIGHTCAST, and the two environments would also contend for
     TULSA_FOR_YOU_WH. Dev exists to prove a deploy works; the smoke run in

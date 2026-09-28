@@ -130,6 +130,39 @@ unset CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT GOOGLE_IMPERSONATE_SERVICE_ACCOU
 An admin running the one privileged step never evals `env-exports`, so their
 step is unaffected by any of this.
 
+### The one decision an admin has to make {#run-admin-decision}
+
+The deploy account needs eleven roles. Ten are uncontroversial —
+administer one resource type, no access to the project IAM policy, no
+ability to touch a service account. The eleventh is a choice:
+
+| | **`roles/run.admin`** (default) | **`roles/run.developer`** (fallback) |
+|---|---|---|
+| Why | Terraform writes the binding that lets Cloud Scheduler start the jobs, which needs `run.jobs.setIamPolicy` | Narrower — but cannot write that binding |
+| Who holds it | The deploy service account. No human logs in as it. | Same |
+| Deploys | Self-service, including adding a pipeline later | Self-service **except** that one binding |
+| Extra work | None | The admin returns once per environment, after the first deploy, to run two commands |
+| If you get it wrong | — | Every scheduled run 403s, silently: the jobs work by hand and fail on the cron |
+
+**The setup script tries `roles/run.admin` and falls back on its own** if the
+grant is refused, so nobody has to decide in advance. It prints which way it
+went and exactly what is left to do. An admin who already knows their
+organization will refuse can pass `--no-run-admin` and skip the attempt.
+
+If it fell back, two things change:
+
+1. Set `scheduler_job_iam_in_terraform = false` in that environment's
+   `terraform.tfvars`, or `make up` fails on that one resource.
+2. After your first successful deploy, an admin runs the output of
+
+```bash
+make scheduler-grant ENV=dev
+```
+
+`make scheduler-debug ENV=dev` check 1 confirms it landed, and
+`make verify-separation ENV=dev` fails until it has — the gap is never
+silent from this repo's side, only from Google's.
+
 The quota project is not optional. Terraform's GCS backend bills every call to
 whatever `quota_project_id` sits in your ADC; an inactive one makes every call
 return `404`, which Terraform reports as `storage: bucket doesn't exist`.
@@ -512,7 +545,7 @@ RUN BY: someone@agency.ok.gov                                          <- you st
 ```
 
 Only the first proves anything. Use **enrollment**: it short-circuits on its
-cache, while lightcast fans out to 41 tasks and bills Lightcast's warehouse.
+cache, while lightcast fans out to 35 tasks and bills Lightcast's warehouse.
 
 Prod's schedulers are already enabled, so `jobs run` works directly. In dev
 they are paused and `jobs run` refuses with

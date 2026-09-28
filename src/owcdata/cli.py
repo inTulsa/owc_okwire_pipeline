@@ -53,7 +53,7 @@ def _resolve_run_id(settings: Settings) -> str:
     """A run id shared by every task in one Cloud Run execution.
 
     Cloud Run sets CLOUD_RUN_EXECUTION to the execution name, which is the
-    same across tasks — so all 41 tasks land under one run_id and the manifest
+    same across tasks — so all 35 tasks land under one run_id and the manifest
     can be grouped by run. A per-task id would make that impossible.
     """
     if settings.run_id:

@@ -11,7 +11,7 @@ distribution list when something goes wrong.
 | | **Lightcast** | **School enrollment** |
 |---|---|---|
 | Where the data comes from | Lightcast, a labor-market data vendor we license | The Oklahoma Department of Education's public website |
-| What it contains | Job postings, employment, wages, graduates, skills — 41 separate tables | Public school enrollment by school, year, grade, race, and gender |
+| What it contains | Job postings, employment, wages, graduates, skills — 35 separate tables | Public school enrollment by school, year, grade, race, and gender |
 | How often it updates | Most tables monthly, on the 1st | Checked monthly, on the 5th |
 | How often the *data* actually changes | Monthly to yearly, depending on the table | Roughly once a year, when the state publishes a new school year |
 

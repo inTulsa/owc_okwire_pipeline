@@ -17,7 +17,7 @@ What these catch:
 * ``known_row_count`` — literal counts already known to be true, e.g.
   ``dim_area = 79``.
 * ``not_null`` — columns that must never be null in a published table.
-* ``empty_result`` — zero rows. For all 41 Lightcast datasets that means a
+* ``empty_result`` — zero rows. For all 35 Lightcast datasets that means a
   break, so it fails unless the dataset is explicitly allowed to be empty.
 """
 

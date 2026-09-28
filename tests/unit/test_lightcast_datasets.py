@@ -53,7 +53,7 @@ def test_limit_wrapping_strips_the_trailing_semicolon(lc, name):
 
 
 def test_semicolons_inside_comments_are_not_statement_terminators():
-    """Four of the 41 files carry one. A naive scan would flag them wrongly."""
+    """Five of the 35 files carry one. A naive scan would flag them wrongly."""
     sql = "SELECT 1 AS x -- detailed SOC only; avoids aggregates\nFROM t"
     assert statement_semicolons(sql) == []
     assert is_single_statement(sql)
@@ -78,7 +78,7 @@ def test_real_multi_statement_is_detected_and_refused():
 
 
 def test_no_limit_returns_the_file_text_unchanged(lc):
-    ds = resolve(lc, dataset="fact_jobs")[0]
+    ds = resolve(lc, dataset="fact_emp")[0]
     assert ds.query() == ds.read_sql().rstrip()
 
 
@@ -126,7 +126,7 @@ def test_one_dataset_per_task_when_task_count_matches(lc):
 def test_sharding_is_a_partition_at_any_task_count(lc):
     """Every dataset exactly once — a lost dataset silently stops publishing."""
     datasets = resolve(lc)
-    for task_count in (1, 2, 4, 7, 40, 41):
+    for task_count in (1, 2, 4, 7, 34, 35):
         seen = [d.name for i in range(task_count) for d in shard(datasets, i, task_count)]
         assert seen == [d.name for d in datasets], f"broken at task_count={task_count}"
 

@@ -135,7 +135,7 @@ gcloud scheduler jobs describe cs-$PREFIX-lightcast-monthly-1 --location=$REGION
 | Cause | Fix |
 |---|---|
 | Scheduler is PAUSED **in prod** | `gcloud scheduler jobs resume cs-$PREFIX-lightcast-monthly-1 --location=$REGION` |
-| Scheduler is PAUSED **in dev** | Expected — do not resume. Dev's schedulers are paused by Terraform (`schedulers_paused = true`) so dev does not re-run prod's 41 Snowflake queries and bill Lightcast twice. This alert is also disabled in dev, so you should not be reading this there. |
+| Scheduler is PAUSED **in dev** | Expected — do not resume. Dev's schedulers are paused by Terraform (`schedulers_paused = true`) so dev does not re-run prod's 35 Snowflake queries and bill Lightcast twice. This alert is also disabled in dev, so you should not be reading this there. |
 | Scheduler was deleted | `make tf-apply ENV=$ENV` |
 | Scheduler fires but jobs never start | That is [alert 3](#alert-3-scheduler-failing) |
 | Jobs run but the manifest is empty | Check for `manifest_write_failed` in the logs — the run may be fine while the record-keeping is broken, which disables this alert. Verify `bigquery.dataEditor` on `owc_ops`. |
@@ -144,7 +144,7 @@ Then catch up manually:
 
 ```bash
 gcloud run jobs execute cr-$PREFIX-lightcast-1 --region=$REGION --project=$PROJECT \
-  --args="run,lightcast,--group,monthly" --tasks=41 --wait
+  --args="run,lightcast,--group,monthly" --tasks=35 --wait
 ```
 
 ---
@@ -259,7 +259,7 @@ gcloud scheduler jobs pause cs-$PREFIX-enrollment-monthly-1 --location $REGION -
 ```
 
 Use **enrollment**, not lightcast: enrollment short-circuits on its cache,
-while lightcast fans out to 41 tasks and bills Lightcast's warehouse.
+while lightcast fans out to 35 tasks and bills Lightcast's warehouse.
 
 Then read checks 5 and 6 together. The scheduler's own history shows success
 either way, because `jobs:run` returns an Operation.
@@ -1449,7 +1449,7 @@ gcloud run jobs execute cr-$PREFIX-lightcast-1 --region=$REGION --project=$PROJE
 
 ```bash
 gcloud run jobs execute cr-$PREFIX-lightcast-1 --region=$REGION --project=$PROJECT \
-  --args="run,lightcast,--group,monthly" --tasks=41 --wait
+  --args="run,lightcast,--group,monthly" --tasks=35 --wait
 ```
 
 ### Reprocess enrollment without re-scraping

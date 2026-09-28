@@ -253,7 +253,7 @@ verbatim — `diff` them and you should see exactly four differences:
 |---|---|---|---|
 | `env_name` | `dev` | `prod` | Namespaces the log-based metrics and prints in alert titles. |
 | `raw_bucket_force_destroy` | `true` | `false` | Lets `terraform destroy` clean up a scratch environment. Never true in prod. |
-| `schedulers_paused` | `true` | `false` | **The important one.** Both read the same `pipelines.yml`, so without it dev fires prod's exact schedule — 41 Snowflake queries at 06:00 on the 1st, the same minute as prod, every month. Those credits bill to **Lightcast**, and both environments would contend for `TULSA_FOR_YOU_WH`. |
+| `schedulers_paused` | `true` | `false` | **The important one.** Both read the same `pipelines.yml`, so without it dev fires prod's exact schedule — 35 Snowflake queries at 06:00 on the 1st, the same minute as prod, every month. Those credits bill to **Lightcast**, and both environments would contend for `TULSA_FOR_YOU_WH`. |
 | `freshness_check_enabled` | `false` | `true` | Follows the line above. With schedulers paused, "has this run inside its interval?" is permanently no, so the alert would fire monthly for working-as-intended — on the same channel prod uses. |
 
 Dev's schedulers are **created but paused**, not omitted, so the `oauth_token`

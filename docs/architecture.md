@@ -72,11 +72,10 @@ numbers, which is the worst failure mode there is.
 (alert 5). A smoke detector, not a fix. Fixing it means editing the SQL, which
 was out of scope.
 
-### 2. The seven `*_lagged` datasets are year-shifted copies
+### 2. The four `*_lagged` datasets are year-shifted copies
 
-`fact_emp_lagged`, `fact_has_lagged`, `fact_jobs_lagged`,
-`fact_skills_lagged`, `fact_completions_lagged`, `fact_enrollments_lagged`,
-`fact_emp_lagged_2` roughly double extract cost for two of the three largest
+`fact_completions_lagged`, `fact_emp_lagged`, `fact_enrollments_lagged` and
+`fact_has_lagged` roughly double extract cost for two of the three largest
 tables. Left as-is. Nothing here blocks revisiting it — they are ordinary
 datasets in `pipelines.yml`.
 

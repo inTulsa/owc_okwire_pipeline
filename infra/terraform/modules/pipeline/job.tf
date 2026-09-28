@@ -107,7 +107,13 @@ resource "google_cloud_run_v2_job" "this" {
 # run.jobs.runWithOverrides. This repo has a no-custom-roles principle
 # (modules/platform/iam.tf), so that is a deliberate reversal to reach for
 # only if an org objects to run.developer scoped to a single job.
+#
+# Skipped entirely when the deploy identity cannot write a job's IAM policy
+# (run.developer rather than run.admin). An admin then grants the same thing
+# by hand — `make scheduler-grant` prints the commands.
 resource "google_cloud_run_v2_job_iam_member" "scheduler_invoker" {
+  count = var.scheduler_job_iam_in_terraform ? 1 : 0
+
   name     = google_cloud_run_v2_job.this.name
   project  = var.project_id
   location = var.region

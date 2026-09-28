@@ -5,7 +5,7 @@ Two production data pipelines, one schedule, one warehouse, one runbook.
 | | **lightcast** | **enrollment** |
 |---|---|---|
 | Source | Snowflake data share (Lightcast reader account) | `oklahoma.gov` public webpage (scraped) |
-| Extract | 41 independent SQL files | HTML parse → Excel download → reshape |
+| Extract | 35 independent SQL files | HTML parse → Excel download → reshape |
 | State | Stateless; re-queries every run | Stateful; caches downloads, short-circuits when nothing is new |
 | Cadence | Monthly / quarterly / yearly by dataset | Checked monthly; data lands ~annually by fiscal year |
 
@@ -92,7 +92,7 @@ src/owcdata/
   pipelines/
     lightcast/    Snowflake → Arrow → Parquet, one dataset per Cloud Run task
     enrollment/   the original scraper, parsing logic unchanged
-sql/owc/          41 .sql files, verbatim from owcpipelines
+sql/owc/          35 .sql files, verbatim from owcpipelines
 infra/terraform/  platform + a reusable `pipeline` module, instantiated twice.
                   Creates resources only: no service accounts, no project IAM.
 infra/gcloud/     the one-time privileged setup, in plain gcloud — identities,

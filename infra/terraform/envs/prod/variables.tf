@@ -63,6 +63,20 @@ variable "snowflake_user" {
   }
 }
 
+variable "scheduler_job_iam_in_terraform" {
+  type        = bool
+  default     = true
+  description = <<-EOT
+    Whether Terraform grants Cloud Scheduler permission to start the Cloud
+    Run jobs. Needs run.jobs.setIamPolicy on the deploy identity, which
+    roles/run.admin has and roles/run.developer does not.
+
+    Set false only if your organization would not grant run.admin to the
+    deploy service account. An admin then runs `make scheduler-grant` once
+    per environment, after the first successful apply.
+  EOT
+}
+
 variable "name_prefix" {
   type        = string
   description = <<-EOT

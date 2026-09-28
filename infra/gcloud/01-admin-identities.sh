@@ -33,6 +33,8 @@ PRINCIPAL=""
 LOCATION="US"
 DRY_RUN=0
 SKIP_PRINCIPAL=0
+# Skip roles/run.admin and use roles/run.developer. See the grant below.
+NO_RUN_ADMIN=0
 SKIP_STATE_BUCKET=0
 
 usage() {
@@ -60,6 +62,7 @@ while [[ $# -gt 0 ]]; do
     --prefix)          PREFIX="${2:?}"; shift 2 ;;
     --principal)       PRINCIPAL="${2:?}"; shift 2 ;;
     --no-principal)    SKIP_PRINCIPAL=1; shift ;;
+    --no-run-admin)    NO_RUN_ADMIN=1; shift ;;
     --no-state-bucket) SKIP_STATE_BUCKET=1; shift ;;
     --location)        LOCATION="${2:?}"; shift 2 ;;
     --dry-run)         DRY_RUN=1; shift ;;
@@ -398,10 +401,38 @@ for target in "${ATTACHED_SAS[@]}"; do
     --role roles/iam.serviceAccountUser --quiet
 done
 
+# roles/run.admin is the one an organization may refuse, and there is a
+# working answer either way — so try it, fall back rather than stop, and say
+# plainly what the fallback costs. Deciding this on a call should not need a
+# second meeting.
 say "Granting the deploy identity its ${#TF_PRINCIPAL_ROLES[@]} resource-admin roles"
+RUN_ROLE="roles/run.admin"
 for role in "${TF_PRINCIPAL_ROLES[@]}"; do
-  run gcloud projects add-iam-policy-binding "$PROJECT" \
-    --member "serviceAccount:$SA_DEPLOY" --role "$role" --condition=None --quiet
+  if [[ "$role" == "roles/run.admin" ]] && (( NO_RUN_ADMIN )); then
+    note "--no-run-admin: using roles/run.developer instead of roles/run.admin"
+    role="roles/run.developer"
+    RUN_ROLE="$role"
+  fi
+  if run gcloud projects add-iam-policy-binding "$PROJECT" \
+       --member "serviceAccount:$SA_DEPLOY" --role "$role" --condition=None --quiet; then
+    continue
+  fi
+  if [[ "$role" == "roles/run.admin" ]]; then
+    note ""
+    note "roles/run.admin was refused. Falling back to roles/run.developer."
+    if run gcloud projects add-iam-policy-binding "$PROJECT" \
+         --member "serviceAccount:$SA_DEPLOY" --role roles/run.developer \
+         --condition=None --quiet; then
+      RUN_ROLE="roles/run.developer"
+    else
+      echo "Neither roles/run.admin nor roles/run.developer could be granted." >&2
+      echo "Nothing else in this script depends on it, but no deploy will work." >&2
+      exit 1
+    fi
+  else
+    echo "Could not grant $role to $SA_DEPLOY." >&2
+    exit 1
+  fi
 done
 note ""
 note "NOT granted to anyone, human or service account:"
@@ -421,6 +452,45 @@ else
   note "$PRINCIPAL now holds exactly one binding in this project:"
   note "  tokenCreator on $SA_DEPLOY"
   note "They deploy by impersonating it. See docs/deploy.md#deploy-identity."
+fi
+
+# The one thing that changes what the operator has to do next, so it is
+# printed before the generic steps rather than buried in them.
+if [[ "$RUN_ROLE" == "roles/run.developer" ]]; then
+  say "IMPORTANT — the deploy identity has run.developer, not run.admin"
+  cat <<RUNDEV
+
+  That is a supported configuration, but it is not finished. run.developer
+  cannot write a Cloud Run job's IAM policy, so Terraform cannot grant Cloud
+  Scheduler permission to start the jobs. Two things follow.
+
+  1. THE OPERATOR sets this in infra/terraform/envs/<env>/terraform.tfvars
+     before deploying, or the apply fails on that one resource:
+
+       scheduler_job_iam_in_terraform = false
+
+  2. YOU run two more commands AFTER their first successful deploy — the
+     Cloud Run jobs have to exist before anything can be granted on them:
+
+       make scheduler-grant ENV=<env>
+
+     prints both with the names filled in, or they are:
+
+       gcloud run jobs add-iam-policy-binding $JOB_LIGHTCAST \\
+         --region <region> --project $PROJECT \\
+         --member serviceAccount:$SA_SCHEDULER \\
+         --role roles/run.developer
+
+       ...and the same for $JOB_ENROLLMENT.
+
+  Until step 2 is done every scheduled run returns 403. It is silent: the
+  jobs work when started by hand and fail on the monthly cron. Both
+  'make verify-separation' and 'make scheduler-debug' report the gap.
+
+  To avoid all of this, grant the deploy account roles/run.admin instead —
+  it is the same account, which no human logs in as.
+
+RUNDEV
 fi
 
 # ---------------------------------------------------------------------------

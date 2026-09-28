@@ -9,11 +9,19 @@
 --
 ---------------------------------------------------------------------------------------------------
 */
-WITH TJ AS (
+WITH INDID_CROSSWALK AS (                       -- STEVEN ADDED
+    SELECT
+        POSTINGS_NAICS6,
+        LC_BUCKET_INDID
+    FROM
+        TULSA_FOR_YOU.VIEWS.INDUSTRY_CROSSWALK_POSTINGS_TO_LC 
+),
+
+TJ AS (
     SELECT
         YEAR(POSTED) AS YEAR_POSTED,
-        QUARTER(POSTED) AS QUARTER_POSTED,  -- added quarterly postings (STEVEN)
-        MONTH(POSTED) AS MONTH_POSTED,      -- added monthly postings (STEVEN)
+        QUARTER(POSTED) AS QUARTER_POSTED,      -- added quarterly postings (STEVEN)
+        MONTH(POSTED) AS MONTH_POSTED,          -- added monthly postings (STEVEN)
         COUNTY AS AREAID,
         NAICS6 AS INDID,
         SOC_5 AS OCCID,
@@ -35,10 +43,11 @@ WITH TJ AS (
 SELECT
     PS.SKILL_ID,
     YEAR(P.POSTED) AS YEAR_POSTED,
-    QUARTER(P.POSTED) AS QUARTER_POSTED,    -- added quarterly postings (STEVEN)
-    MONTH(P.POSTED) AS MONTH_POSTED,        -- added monthly postings (STEVEN)
+    QUARTER(P.POSTED) AS QUARTER_POSTED,       -- added quarterly postings (STEVEN)
+    MONTH(P.POSTED) AS MONTH_POSTED,           -- added monthly postings (STEVEN)
     P.COUNTY AS AREAID,
-    P.NAICS6 AS INDID,
+    --P.NAICS6 AS INDID,                       -- STEVEN COMMENTED OUT
+    IC.LC_BUCKET_INDID AS INDID,               -- STEVEN ADDED
     P.SOC_5 AS OCCID,
     P.MIN_EDULEVELS,
     P.IS_INTERNSHIP,
@@ -49,6 +58,9 @@ FROM
 JOIN
     LIGHTCAST.TULSA_FOR_YOU.POSTINGS AS P
     ON PS.ID = P.ID
+JOIN
+    INDID_CROSSWALK AS IC                       -- STEVEN ADDED
+    ON P.NAICS6 = IC.POSTINGS_NAICS6            -- STEVEN ADDED
 JOIN
     TJ AS T
     ON YEAR(P.POSTED) = T.YEAR_POSTED
@@ -67,7 +79,8 @@ GROUP BY
     QUARTER(POSTED),                            -- added quarterly postings (STEVEN)
     MONTH(POSTED),                              -- added monthly postings (STEVEN)
     P.COUNTY,
-    P.NAICS6,
+    --P.NAICS6,                                 -- STEVEN COMMENTED OUT
+    IC.LC_BUCKET_INDID,                         -- STEVEN ADDED
     P.SOC_5,
     P.MIN_EDULEVELS,
     P.IS_INTERNSHIP,

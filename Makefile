@@ -108,7 +108,7 @@ endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check auth-check doctor \
         diff-enrollment derive-scrape derive-check lock lock-check docs-check shell-check base-digest build deploy set-image which-image image-digest tf-init tf-bootstrap preflight scheduler-debug verify-separation env-exports tf-output tf-plan tf-apply tf-fmt tf-validate clean \
-        access-check prep omes-request omes-script gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push deploy-identity \
+        access-check prep omes-request omes-script gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push deploy-identity scheduler-grant \
         tf-check install-terraform
 
 help: ## Show this help
@@ -514,6 +514,26 @@ env-exports: ## Print the shell exports the docs' raw gcloud/bq commands use
 	@# like cr--lightcast-1. That cannot be caught after the fact, only
 	@# before, and only by something the successful path emits.
 
+scheduler-grant: ## Print the admin commands that let Cloud Scheduler start the jobs
+	@test -n "$(PROJECT)"     || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@test -n "$(NAME_PREFIX)" || { echo "could not read name_prefix from $(TFVARS)" >&2; exit 1; }
+	@echo ""
+	@echo "Only needed when the deploy identity holds roles/run.developer rather"
+	@echo "than roles/run.admin, and $(ENV)'s terraform.tfvars therefore has"
+	@echo "  scheduler_job_iam_in_terraform = false"
+	@echo ""
+	@echo "Run these AFTER the first successful deploy — the jobs have to exist."
+	@echo "They need run.jobs.setIamPolicy, so an ADMIN runs them, not you."
+	@echo ""
+	@for job in cr-$(NAME_PREFIX)-lightcast-1 cr-$(NAME_PREFIX)-enrollment-1; do \
+	  echo "gcloud run jobs add-iam-policy-binding $$job --region $(REGION) --project $(PROJECT) --member serviceAccount:sa-$(NAME_PREFIX)-scheduler-1@$(PROJECT).iam.gserviceaccount.com --role roles/run.developer"; \
+	  echo ""; \
+	done
+	@echo "Then confirm from your side — check 1 answers it:"
+	@echo ""
+	@echo "  make scheduler-debug ENV=$(ENV)"
+	@echo ""
+
 deploy-identity: auth-check ## Check the deploy service account exists and that you can impersonate it
 	@test -n "$(PROJECT)"     || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@test -n "$(NAME_PREFIX)" || { echo "could not read name_prefix from $(TFVARS)" >&2; exit 1; }
@@ -626,7 +646,7 @@ prep: auth-check ## Do the setup that needs no elevated rights (APIs, buckets)
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@tmp=$$(mktemp); \
 	  infra/gcloud/04-standalone.sh $(PROJECT) --prefix $(NAME_PREFIX) \
-	    $(if $(OPERATOR),--principal $(OPERATOR),) --location $(call tfvar,location) \
+	    $(if $(OPERATOR),--principal $(OPERATOR),) --location $(call tfvar,location) --region $(REGION) \
 	    --part operator > "$$tmp"; \
 	  gcloud config set project $(PROJECT) >/dev/null 2>&1; \
 	  bash "$$tmp"; rc=$$?; rm -f "$$tmp"; exit $$rc
@@ -637,7 +657,7 @@ prep: auth-check ## Do the setup that needs no elevated rights (APIs, buckets)
 omes-script: ## Write a standalone setup script for your project admin to run
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@infra/gcloud/04-standalone.sh $(PROJECT) --prefix $(NAME_PREFIX) \
-	  $(if $(OPERATOR),--principal $(OPERATOR),) --location $(call tfvar,location) --part admin
+	  $(if $(OPERATOR),--principal $(OPERATOR),) --location $(call tfvar,location) --region $(REGION) --part admin
 
 gcloud-admin-dry-run: ## Print every privileged command the one-time setup would run, and change nothing
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }

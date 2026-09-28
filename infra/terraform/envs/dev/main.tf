@@ -137,11 +137,12 @@ module "lightcast" {
   scheduler_service_account_email = module.platform.service_account_emails.scheduler
 
   # Dev must NOT run prod's schedule. Both environments read the same
-  # pipelines.yml, so without this dev fires the same 41 Snowflake queries at
+  # pipelines.yml, so without this dev fires the same 35 Snowflake queries at
   # the same minute as prod every month, and those credits bill to Lightcast.
   # The jobs are still created, so their wiring is exercised here rather than
   # first tried in prod — they just never fire on their own.
-  schedulers_paused = true
+  scheduler_job_iam_in_terraform = var.scheduler_job_iam_in_terraform
+  schedulers_paused              = true
 
   schedules          = local.lightcast_schedules
   task_count_default = length(local.sql_datasets)
@@ -235,11 +236,12 @@ module "enrollment" {
   scheduler_service_account_email = module.platform.service_account_emails.scheduler
 
   # Dev must NOT run prod's schedule. Both environments read the same
-  # pipelines.yml, so without this dev fires the same 41 Snowflake queries at
+  # pipelines.yml, so without this dev fires the same 35 Snowflake queries at
   # the same minute as prod every month, and those credits bill to Lightcast.
   # The jobs are still created, so their wiring is exercised here rather than
   # first tried in prod — they just never fire on their own.
-  schedulers_paused = true
+  scheduler_job_iam_in_terraform = var.scheduler_job_iam_in_terraform
+  schedulers_paused              = true
 
   schedules = [{
     name       = "monthly"

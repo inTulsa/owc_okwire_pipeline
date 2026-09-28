@@ -12,7 +12,7 @@ Each one has a specific owner-type and a consequence for leaving it.
 
 **Needs:** knowledge of Lightcast's actual refresh cycles per dataset.
 
-**Current state:** all 41 datasets run monthly. That is never *wrong* — only
+**Current state:** all 35 datasets run monthly. That is never *wrong* — only
 more often than necessary, which costs Lightcast warehouse credits for
 querying data that has not changed.
 
@@ -22,7 +22,7 @@ quarterly/yearly Cloud Scheduler jobs — which do not exist while the lists are
 empty. Verified working:
 
 ```
-monthly 34 / quarterly 3 / yearly 4   →  three schedulers, 41 datasets, no overlap
+monthly 28 / quarterly 3 / yearly 4   →  three schedulers, 35 datasets, no overlap
 ```
 
 ---
@@ -157,11 +157,20 @@ migration and no human ever holds the roles.
   service account and the person who minted the token.
 - **Revoking is one binding**, not eleven roles and five `actAs` grants.
 
-One role in the set is worth flagging to OMES: the deploy account holds
-`roles/run.admin` rather than `roles/run.developer`, because writing a Cloud
-Run job's IAM policy needs `run.jobs.setIamPolicy` and `run.developer` does
-not carry it. It is the one role broader than "administer the resource", and
-it is held by an account no person logs in as.
+### The one thing to raise on the call
+
+Ten of the eleven roles administer a single resource type. The eleventh,
+`roles/run.admin`, is broader, and an organization may refuse it. **Nobody
+needs to decide in advance:** the setup script tries it, falls back to
+`roles/run.developer` if refused, prints which way it went, and prints the
+two follow-up commands the fallback needs. `--no-run-admin` skips the
+attempt for an admin who already knows the answer.
+
+The full trade-off is in
+[deploy.md](deploy.md#run-admin-decision). In short: `run.admin` means the
+deploy is entirely self-service; `run.developer` means an admin comes back
+once per environment, after the first deploy, to run two commands — and
+until they do, every scheduled run 403s silently.
 
 ---
 
@@ -176,6 +185,39 @@ the bucket name, and you set it in **both** `terraform.tfvars` and
 
 **Consequence of leaving it:** nothing breaks. It is cheaper to answer before
 prod's first apply than to migrate state afterwards.
+
+---
+
+## 9. The six tables dropped by the SQL consolidation still exist in BigQuery {#orphaned-marts}
+
+`sql/owc/` went from 41 files to 35 when the queries were consolidated
+upstream. `fact_emp_2` and `fact_emp_lagged_2` were folded into `fact_emp`
+and `fact_emp_lagged`; `fact_jobs`, `fact_jobs_lagged`, `fact_skills` and
+`fact_skills_lagged` were folded into their `_qoq` counterparts.
+
+**The pipeline no longer refreshes them. It does not drop them either.** Six
+tables in `owc_marts` will sit there looking current and quietly age. If
+PowerBI reads any of them, that is stale data with no error attached — the
+worst failure mode this project has.
+
+**Decide before the next prod publish:** drop them, or keep them and record
+somewhere visible that they are frozen. Dropping is the safer default; check
+the PowerBI semantic model first.
+
+```sql
+-- what is in marts that the pipeline no longer produces
+SELECT table_name FROM `owc_marts.INFORMATION_SCHEMA.TABLES`
+WHERE table_name IN ('fact_emp_2','fact_emp_lagged_2','fact_jobs',
+                     'fact_jobs_lagged','fact_skills','fact_skills_lagged');
+```
+
+**Also expect the quality gate to block the first run.**
+`row_count_drift_pct` is 20% against the previous successful run, and a
+consolidated `fact_emp` or `dim_ind` will move far more than that. That is
+the gate working: the publish is refused and staging is kept to diff
+against. Confirm the new numbers are right, then let it through — the
+procedure is [ALERT 5](runbook.md#alert-5-drift). Do not raise the threshold
+to get past it.
 
 ---
 

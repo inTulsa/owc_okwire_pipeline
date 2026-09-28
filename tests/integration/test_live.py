@@ -74,7 +74,7 @@ def test_dim_area_has_the_known_79_rows():
 
 
 def test_every_sql_file_compiles_against_snowflake():
-    """Parse-only validation of all 41 queries with LIMIT 0 — catches a column
+    """Parse-only validation of all 35 queries with LIMIT 0 — catches a column
     renamed on Lightcast's side without extracting any data."""
     _require("SNOWFLAKE_USER", "SNOWFLAKE_PASSWORD")
     from owcdata.pipelines.lightcast.datasets import resolve

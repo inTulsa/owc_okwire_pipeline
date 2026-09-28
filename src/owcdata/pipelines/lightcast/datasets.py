@@ -13,7 +13,7 @@ from pathlib import Path
 from owcdata.config import REPO_ROOT, LightcastConfig
 from owcdata.errors import ConfigError
 
-# Trailing semicolons plus any whitespace after them. Seven of the 41 files
+# Trailing semicolons plus any whitespace after them. Seven of the 35 files
 # end in one (dim_area, dim_company, dim_edulevels, dim_schools, dim_skills,
 # fact_completions, fact_completions_lagged) and a semicolon inside a
 # subquery is a syntax error, so it has to come off before wrapping.
@@ -62,7 +62,7 @@ def _blank_comments_and_strings(sql: str) -> str:
 def statement_semicolons(sql: str) -> list[int]:
     """Offsets of semicolons that actually terminate a statement.
 
-    Comment-aware on purpose. Four of the 41 files carry a semicolon inside a
+    Comment-aware on purpose. Five of the 35 files carry a semicolon inside a
     ``--`` comment ("detailed SOC only; avoids aggregates like 00-0000" and
     three variants of "ADD quarterly; the past 3 months"), which is harmless
     and must not be mistaken for a second statement — a naive scan for ``;``
@@ -87,7 +87,7 @@ def prepare_query(sql: str, limit: int | None = None) -> str:
 
     With no ``limit`` this is the file's own text, unchanged apart from
     trailing whitespace. With a ``limit`` the whole query becomes a subquery.
-    All 41 files are verified single-statement, so wrapping is safe; the
+    All 35 files are verified single-statement, so wrapping is safe; the
     newline before ``)`` matters because several files end in a ``--`` line
     comment that would otherwise swallow it.
     """

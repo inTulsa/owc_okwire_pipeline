@@ -140,7 +140,8 @@ module "lightcast" {
   scheduler_service_account_email = module.platform.service_account_emails.scheduler
 
   # Prod is the environment whose schedule is real.
-  schedulers_paused = false
+  scheduler_job_iam_in_terraform = var.scheduler_job_iam_in_terraform
+  schedulers_paused              = false
 
   schedules          = local.lightcast_schedules
   task_count_default = length(local.sql_datasets)
@@ -234,7 +235,8 @@ module "enrollment" {
   scheduler_service_account_email = module.platform.service_account_emails.scheduler
 
   # Prod is the environment whose schedule is real.
-  schedulers_paused = false
+  scheduler_job_iam_in_terraform = var.scheduler_job_iam_in_terraform
+  schedulers_paused              = false
 
   schedules = [{
     name       = "monthly"
