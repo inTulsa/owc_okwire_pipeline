@@ -472,6 +472,12 @@ env-exports: ## Print the shell exports the docs' raw gcloud/bq commands use
 	@echo "export PROJECT=$(PROJECT)"
 	@echo "export PREFIX=$(NAME_PREFIX)"
 	@echo "export REGION=$(REGION)"
+	@echo ': "$${PROJECT:?env-exports produced nothing — are you in the repo root?}"'
+	@# Emitted so the eval'd block checks itself. If this target is run from
+	@# the wrong directory make fails, $$(...) is empty, and `eval ""`
+	@# succeeds — so the caller proceeds with blank names and builds things
+	@# like cr--lightcast-1. That cannot be caught after the fact, only
+	@# before, and only by something the successful path emits.
 
 tf-output: ## Show terraform outputs for $(ENV). Add NAME=<output> for one value.
 	@scripts/tf-output.sh $(TF_DIR) $(ENV) $(PROJECT) $(NAME)
