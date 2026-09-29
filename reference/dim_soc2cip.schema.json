@@ -1,0 +1,6 @@
+[
+  {"name": "CIP2020Title", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "PROGRAMID",    "type": "STRING", "mode": "NULLABLE"},
+  {"name": "OCCID",        "type": "STRING", "mode": "NULLABLE"},
+  {"name": "SOC2018Title", "type": "STRING", "mode": "NULLABLE"}
+]

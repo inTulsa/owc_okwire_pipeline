@@ -591,7 +591,16 @@ BigQuery match what is committed, and anything typed straight into the table
 is overwritten. Edit the CSV, commit, deploy.
 
 The header row becomes the column names, so they have to be valid BigQuery
-identifiers. Check what the first load produced:
+identifiers.
+
+**Pin the schema for anything code-like** by adding `<name>.schema.json`
+beside the CSV — it replaces autodetection. Autodetect types a column by
+what its values look like, and identifiers often look numeric: every
+`PROGRAMID` in `dim_soc2cip.csv` parses as a number, so autodetect makes it
+FLOAT64, `44` becomes `44.0`, and joining it against a string CIP column
+fails. Zip codes, FIPS codes and SOC codes have the same trap.
+
+If you let it autodetect, check what landed:
 
 ```bash
 bq show --project_id=$PROJECT owc_marts.dim_soc2cip

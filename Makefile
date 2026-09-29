@@ -812,13 +812,21 @@ load-reference: auth-check ## Upload reference/*.csv to GCS and load them into o
 	    name=$$(basename "$$f" .csv); \
 	    echo ">> $$f -> gs://$(RAW_BUCKET)/reference/$$name.csv"; \
 	    gcloud storage cp "$$f" "gs://$(RAW_BUCKET)/reference/$$name.csv" --project $(PROJECT) >/dev/null || exit 1; \
-	    bq load --project_id=$(PROJECT) --replace --autodetect \
-	      --source_format=CSV --skip_leading_rows=1 \
-	      "owc_marts.$$name" "gs://$(RAW_BUCKET)/reference/$$name.csv" || exit 1; \
+	    if [ -f "reference/$$name.schema.json" ]; then \
+	      echo "   schema:  reference/$$name.schema.json"; \
+	      bq load --project_id=$(PROJECT) --replace \
+	        --source_format=CSV --skip_leading_rows=1 \
+	        --schema="reference/$$name.schema.json" \
+	        "owc_marts.$$name" "gs://$(RAW_BUCKET)/reference/$$name.csv" || exit 1; \
+	    else \
+	      echo "   schema:  autodetected (add reference/$$name.schema.json to pin it)"; \
+	      bq load --project_id=$(PROJECT) --replace --autodetect \
+	        --source_format=CSV --skip_leading_rows=1 \
+	        "owc_marts.$$name" "gs://$(RAW_BUCKET)/reference/$$name.csv" || exit 1; \
+	    fi; \
 	    rows=$$(bq query --project_id=$(PROJECT) --use_legacy_sql=false --format=csv \
 	      "SELECT COUNT(*) FROM \`owc_marts.$$name\`" 2>/dev/null | tail -1); \
 	    echo "   owc_marts.$$name: $$rows row(s)"; \
-	    echo "   schema:  bq show --project_id=$(PROJECT) owc_marts.$$name"; \
 	  done; \
 	  if [ "$$found" = "0" ]; then echo ">> no reference/*.csv to load"; fi
 

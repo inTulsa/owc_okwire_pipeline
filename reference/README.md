@@ -19,8 +19,25 @@ Anything typed straight into the table is overwritten.
 
 **Conventions.** First row is the header, and the column names become the
 BigQuery column names — so they must be valid identifiers (letters, digits,
-underscores; not starting with a digit). The schema is autodetected, so
-check what landed the first time:
+underscores; not starting with a digit).
+
+**Pin the schema for anything code-like.** Add `<name>.schema.json` next to
+the CSV and it is used instead of autodetection:
+
+```json
+[
+  {"name": "PROGRAMID", "type": "STRING", "mode": "NULLABLE"}
+]
+```
+
+Autodetection types a column by what its values look like, and identifiers
+frequently look numeric. CIP codes are the example that prompted this: every
+value in `dim_soc2cip.PROGRAMID` parses as a number, so autodetect makes it
+FLOAT64 — `44.0401` stops being a code, `44` becomes `44.0`, and a join
+against a string CIP column elsewhere fails. Zip codes, FIPS codes, SOC
+codes and account numbers all have this problem.
+
+If you do let it autodetect, check what landed:
 
 ```bash
 bq show --project_id=<project> owc_marts.<name>
