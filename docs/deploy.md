@@ -567,6 +567,42 @@ To close that gap before handing over, have OMES run step 4 on a project
 where you are not owner, or drop owner on the test project *after* step 4 —
 carefully, and only if someone else can still administer it.
 
+## Static reference data {#reference-data}
+
+Some tables come from a CSV somebody maintains by hand — a SOC-to-CIP
+crosswalk, a lookup a report joins against — rather than from a pipeline.
+Put the file in `reference/` **in this repo** and commit it:
+
+```
+reference/dim_soc2cip.csv   ->   owc_marts.dim_soc2cip
+```
+
+```bash
+make load-reference ENV=dev
+```
+
+It uploads each CSV to `gs://gcs-<prefix>-raw-1/reference/` and loads it
+into `owc_marts` with an autodetected schema. `make up` runs it as well, so
+prod loads the file dev was tested against instead of relying on someone
+remembering to upload it.
+
+**The repo is the source of truth.** The load is `--replace`: a deploy makes
+BigQuery match what is committed, and anything typed straight into the table
+is overwritten. Edit the CSV, commit, deploy.
+
+The header row becomes the column names, so they have to be valid BigQuery
+identifiers. Check what the first load produced:
+
+```bash
+bq show --project_id=$PROJECT owc_marts.dim_soc2cip
+```
+
+It lands in `owc_marts` rather than a dataset of its own because PowerBI
+already reads `owc_marts` and holds `dataViewer` there. A BigQuery external
+table over the CSV in GCS would have been less machinery, but it would
+require the PowerBI identity to read the raw bucket — which
+[the separation](#where-the-line-is-drawn) exists to prevent.
+
 ## Then prod {#prod}
 
 Prod runs the same steps with `ENV=prod`, but it is not a replay of dev. Three

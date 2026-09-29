@@ -50,6 +50,7 @@ BUILD_SA    = sa-$(NAME_PREFIX)-build-1@$(PROJECT).iam.gserviceaccount.com
 # A mirror of this repo inside the project, for anyone who cannot clone from
 # GitHub. Created by infra/gcloud/01-admin-identities.sh, not by Terraform.
 SOURCE_BUCKET = gcs-$(NAME_PREFIX)-source-1
+RAW_BUCKET    = gcs-$(NAME_PREFIX)-raw-1
 # Created by infra/gcloud/01-admin-identities.sh, which derives it from the
 # project id the same way. Passed to terraform at init rather than written
 # into backend.tf, so aiming an apply at another project is one variable.
@@ -110,7 +111,7 @@ endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check auth-check doctor \
         diff-enrollment derive-scrape derive-check lock lock-check docs-check shell-check base-digest build deploy set-image which-image image-digest tf-init tf-bootstrap preflight scheduler-debug verify-separation env-exports tf-output tf-plan tf-apply tf-fmt tf-validate clean \
-        access-check prep omes-request omes-script gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push deploy-identity scheduler-grant \
+        access-check prep omes-request omes-script gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push deploy-identity scheduler-grant load-reference \
         tf-check install-terraform
 
 help: ## Show this help
@@ -781,9 +782,45 @@ up: ## Stand $(ENV) up end to end, after gcloud-admin has run once
 	  $(MAKE) --no-print-directory tf-apply ENV=$(ENV) TF_ARGS="-var=image_digest=$$image"
 	@$(MAKE) --no-print-directory set-image ENV=$(ENV)
 	@echo ""
+	@$(MAKE) --no-print-directory load-reference ENV=$(ENV)
+	@echo ""
 	@$(MAKE) --no-print-directory verify-separation ENV=$(ENV)
 	@echo ""
 	@echo ">> $(ENV) is up. Prove it end to end:  make smoke ENV=$(ENV)"
+
+# --- static reference data --------------------------------------------------
+#
+# CSVs no pipeline produces: crosswalks and lookups a report needs and a
+# human maintains. They live in reference/ IN THE REPO, so prod loads the
+# same file dev was tested against rather than depending on someone
+# remembering to upload it. reference/<name>.csv becomes owc_marts.<name>.
+#
+# --replace every run, because the repo is the source of truth: edit the
+# CSV, commit, deploy, and BigQuery matches it. Anything typed directly into
+# the table is overwritten, which is the intended trade.
+#
+# owc_marts and not a new dataset, because PowerBI already reads owc_marts
+# and holds dataViewer there — and an external table over GCS would need the
+# PowerBI identity to read the raw bucket, which the separation forbids.
+load-reference: auth-check ## Upload reference/*.csv to GCS and load them into owc_marts
+	@test -n "$(PROJECT)"     || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@test -n "$(NAME_PREFIX)" || { echo "could not read name_prefix from $(TFVARS)" >&2; exit 1; }
+	@found=0; \
+	  for f in reference/*.csv; do \
+	    [ -e "$$f" ] || continue; \
+	    found=1; \
+	    name=$$(basename "$$f" .csv); \
+	    echo ">> $$f -> gs://$(RAW_BUCKET)/reference/$$name.csv"; \
+	    gcloud storage cp "$$f" "gs://$(RAW_BUCKET)/reference/$$name.csv" --project $(PROJECT) >/dev/null || exit 1; \
+	    bq load --project_id=$(PROJECT) --replace --autodetect \
+	      --source_format=CSV --skip_leading_rows=1 \
+	      "owc_marts.$$name" "gs://$(RAW_BUCKET)/reference/$$name.csv" || exit 1; \
+	    rows=$$(bq query --project_id=$(PROJECT) --use_legacy_sql=false --format=csv \
+	      "SELECT COUNT(*) FROM \`owc_marts.$$name\`" 2>/dev/null | tail -1); \
+	    echo "   owc_marts.$$name: $$rows row(s)"; \
+	    echo "   schema:  bq show --project_id=$(PROJECT) owc_marts.$$name"; \
+	  done; \
+	  if [ "$$found" = "0" ]; then echo ">> no reference/*.csv to load"; fi
 
 tf-plan: tf-init ## terraform plan for $(ENV). Add TF_ARGS='-var=image_digest=...'
 	cd $(TF_DIR) && terraform plan $(TF_VARS) $(TF_ARGS)
