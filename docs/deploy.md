@@ -149,6 +149,21 @@ unset CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT GOOGLE_IMPERSONATE_SERVICE_ACCOU
 An admin running the one privileged step never evals `env-exports`, so their
 step is unaffected by any of this.
 
+**Every new Cloud Shell session starts without it.** The variables are
+per-shell, and Cloud Shell keeps gcloud's config in a per-session `/tmp`
+directory, so a session that comes back tomorrow has neither the
+impersonation nor ADC. Without the impersonation, commands run as *you* —
+and your account holds one binding, so the first thing needing `actAs`
+fails with a numeric service account id and no explanation:
+
+```text
+PERMISSION_DENIED: caller does not have permission to act as service
+account projects/owc-dpar-d/serviceAccounts/107658414795578711517
+```
+
+`make auth-check` (which every other target depends on) now detects this
+and names the cause. The fix is always the same eval.
+
 ### More than one person deploying {#deployer-group}
 
 **A group is the best answer and it is not a prerequisite.** Start with a

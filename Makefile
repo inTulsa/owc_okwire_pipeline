@@ -282,8 +282,8 @@ which-image: auth-check ## Show the digest each job is currently running vs the 
 # then broke `set-image`, `deploy`, and `which-image` with an unhelpful
 # "<none>". The warning goes to stderr so stdout stays clean for
 # `IMAGE=$(make -s image-digest ...)`.
-auth-check: ## Verify the gcloud CLI has usable credentials
-	@scripts/require-gcloud-auth.sh
+auth-check: ## Verify the gcloud CLI has usable credentials and the deploy identity
+	@scripts/require-gcloud-auth.sh $(DEPLOY_SA)
 
 image-digest: auth-check ## Print just the digest-pinned image reference (scriptable)
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
