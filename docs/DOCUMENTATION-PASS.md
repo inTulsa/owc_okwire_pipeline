@@ -179,10 +179,13 @@ That output is the list and the receipt. Run it as the admin for the full
 audit; the deploy identity cannot read the project IAM policy.
 
 **2. `schedulers_paused = false` in `envs/dev/terraform.tfvars` is
-temporary.** It is commented as such. Dev's lightcast scheduler fires
+temporary.** It is commented as such, and dev's lightcast scheduler fires
 `0 6 1 * *`. The moment prod is live, both environments run the same 35
-Snowflake queries at the same minute and bill Lightcast twice. Revert it
-before prod's first apply, or decide deliberately not to.
+Snowflake queries at the same minute and bill Lightcast twice. **Revert it
+as the first step of the migration** — see
+[the release section](#task-6-the-dev-to-prod-release). `make preflight`
+now refuses a prod apply while it is `false`, so the failure mode is a
+refusal rather than a duplicated bill.
 
 **3. `snowflake_user` in `envs/prod/terraform.tfvars` is `REPLACE_ME@`.**
 The plan rejects it on purpose.
@@ -221,7 +224,40 @@ question.
 verified." Promoting a documentation pass that has not been reviewed
 defeats it.
 
-When ready:
+### Pause dev as part of the migration, not after it
+
+**`envs/dev/terraform.tfvars` has `schedulers_paused = false`.** It was set
+deliberately so the scheduled path could be exercised, and that window
+closes the moment prod is live. Two live environments read the same
+`pipelines.yml`, so they fire the same 35 Snowflake queries at the same
+minute — twice, on Lightcast's warehouse, where the cost is not ours to see,
+and contending for `TULSA_FOR_YOU_WH`.
+
+Do it **before** prod's first apply, in this order:
+
+```bash
+# 1. pause dev — set schedulers_paused = true in envs/dev/terraform.tfvars
+make tf-apply ENV=dev TF_ARGS="-var=image_digest=<the digest make build printed>"
+```
+
+```bash
+cd ~/owc && eval "$(make -s env-exports ENV=dev)"
+```
+
+```bash
+# confirm both dev schedulers report PAUSED
+gcloud scheduler jobs list --location $REGION --project $PROJECT --format="table(name,state,schedule)"
+```
+
+Only then build prod. `make preflight` refuses a `ENV=prod` apply while
+dev's tfvars still says `false`, so this is enforced rather than remembered
+— `ALLOW_BOTH_LIVE=1` overrides it if that is ever genuinely wanted.
+
+Leaving dev unpaused does not break anything visibly. It doubles a bill
+somebody else receives, which is the kind of mistake that survives for
+months.
+
+### Then the merge
 
 ```bash
 git merge-tree --write-tree origin/prod origin/dev   # confirm still clean
@@ -271,5 +307,7 @@ Do not do these in the documentation pass:
 - Someone who was not in this session can build `owc-dpar-p` from
   `deploy.md` alone, including the eight surprises in task 3.
 - The README banner describes the real current blocker.
+- The migration sequence says to pause dev **first**, and `make preflight
+  ENV=prod` has been confirmed to refuse while dev is unpaused.
 - **This file is deleted**, and anything in it that is still true lives in
   `OPEN-ITEMS.md`, `deploy.md`, `gcp-reference.md` or the runbook.

@@ -472,9 +472,38 @@ verify-separation: auth-check ## Check each identity can reach only what it shou
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@scripts/verify-separation.sh $(PROJECT) $(NAME_PREFIX) $(REGION)
 
-preflight: auth-check ## Check the Snowflake secret has a version before applying
+preflight: auth-check ## Check the Snowflake secret has a version, and that dev is paused before a prod apply
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@if [ -n "$(SKIP_PREFLIGHT)" ]; then echo ">> preflight skipped"; exit 0; fi
+	@# Two live environments read the same pipelines.yml, so they fire the
+	@# same 35 Snowflake queries at the same minute and bill Lightcast twice
+	@# — on someone else's warehouse, where we would not see the cost. dev
+	@# was unpaused deliberately for testing; this is the reminder that the
+	@# testing window closes when prod goes live, and it fires at the only
+	@# moment it matters rather than hoping a document was read.
+	@if [ "$(ENV)" = "prod" ] && grep -qE '^[[:space:]]*schedulers_paused[[:space:]]*=[[:space:]]*false' infra/terraform/envs/dev/terraform.tfvars 2>/dev/null; then \
+	  echo ""; \
+	  echo "REFUSING: the dev schedulers are still running."; \
+	  echo ""; \
+	  echo "  infra/terraform/envs/dev/terraform.tfvars has"; \
+	  echo "      schedulers_paused = false"; \
+	  echo ""; \
+	  echo "  Prod runs its schedulers unpaused by design. With dev unpaused too,"; \
+	  echo "  both environments fire the same schedule from the same pipelines.yml"; \
+	  echo "  — 35 Snowflake queries at 06:00 on the 1st, twice, billed to"; \
+	  echo "  the Lightcast warehouse, and contending for TULSA_FOR_YOU_WH."; \
+	  echo ""; \
+	  echo "  Pause dev first:"; \
+	  echo "      set schedulers_paused = true in envs/dev/terraform.tfvars"; \
+	  echo "      make tf-apply ENV=dev TF_ARGS=\"-var=image_digest=<digest>\""; \
+	  echo ""; \
+	  echo "  Then re-run this. To proceed anyway, deliberately:"; \
+	  echo "      make tf-apply ENV=prod ALLOW_BOTH_LIVE=1 ..."; \
+	  echo ""; \
+	  [ -n "$(ALLOW_BOTH_LIVE)" ] || exit 1; \
+	  echo "  ALLOW_BOTH_LIVE set — continuing."; \
+	  echo ""; \
+	fi
 	@if ! gcloud secrets describe $(SECRET_NAME) --project $(PROJECT) >/dev/null 2>&1; then \
 	  echo ""; \
 	  echo "The secret container $(SECRET_NAME) does not exist yet."; \
