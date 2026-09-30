@@ -62,6 +62,45 @@ gcloud logging read \
   --project=$PROJECT --limit=200 --format='value(jsonPayload.event,jsonPayload.dataset,jsonPayload.error)'
 ```
 
+### Which datasets are running right now
+
+**Not from `pipeline_runs`.** A row is written by `record.finish()`, so it
+appears only once a dataset is *done* — the table is the completed picture,
+never the in-flight one. `status` defaults to `running` in the dataclass and
+no row is ever inserted carrying it.
+
+For in-flight work, read the logs:
+
+```bash
+make logs ENV=$ENV                      # both pipelines, last hour, oldest first
+```
+
+```bash
+make logs ENV=$ENV PIPELINE=lightcast SINCE=6h
+```
+
+```bash
+make logs ENV=$ENV FAILED=1             # errors only
+```
+
+It filters to the events that mark dataset boundaries — `extract_started`,
+`snowflake_query_submitted`, `bq_load_started`, `bq_published`,
+`dataset_failed` — so the output reads as a per-dataset timeline rather than
+every line the job emitted.
+
+For the completed picture with row counts and durations:
+
+```bash
+make runs ENV=$ENV
+```
+
+And for overall progress on one execution, which is counts rather than
+names:
+
+```bash
+gcloud run jobs executions describe EXECUTION_ID --region $REGION --project $PROJECT --format="value(status.runningCount,status.succeededCount,status.failedCount)"
+```
+
 ---
 
 ## ALERT 1: task failed {#alert-1-task-failed}

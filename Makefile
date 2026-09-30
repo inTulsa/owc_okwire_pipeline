@@ -111,7 +111,7 @@ endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check auth-check doctor \
         diff-enrollment derive-scrape derive-check lock lock-check docs-check shell-check base-digest build deploy set-image which-image image-digest tf-init tf-bootstrap preflight scheduler-debug verify-separation env-exports tf-output tf-plan tf-apply tf-fmt tf-validate clean \
-        access-check prep omes-request omes-script gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push deploy-identity scheduler-grant load-reference powerbi-key \
+        access-check prep omes-request omes-script gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push deploy-identity scheduler-grant load-reference powerbi-key logs runs \
         tf-check install-terraform
 
 help: ## Show this help
@@ -787,6 +787,41 @@ up: ## Stand $(ENV) up end to end, after gcloud-admin has run once
 	@$(MAKE) --no-print-directory verify-separation ENV=$(ENV)
 	@echo ""
 	@echo ">> $(ENV) is up. Prove it end to end:  make smoke ENV=$(ENV)"
+
+# --- watching a run ---------------------------------------------------------
+#
+# Two different questions, two different sources, and the distinction
+# matters: owc_ops.pipeline_runs is written by record.finish(), so a row
+# appears only when a dataset is DONE. It cannot tell you what is running.
+# For that you need the structured logs.
+#
+#   make logs ENV=dev                    both pipelines, last hour
+#   make logs ENV=dev PIPELINE=lightcast only that job
+#   make logs ENV=dev SINCE=6h           a wider window
+#   make logs ENV=dev FAILED=1           errors only
+LOG_SINCE ?= $(if $(SINCE),$(SINCE),1h)
+logs: auth-check ## Per-dataset events from a running or recent job. PIPELINE= SINCE= FAILED=1
+	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@filter='resource.type="cloud_run_job"'; \
+	  if [ -n "$(PIPELINE)" ]; then \
+	    filter="$$filter resource.labels.job_name=\"cr-$(NAME_PREFIX)-$(PIPELINE)-1\""; \
+	  fi; \
+	  if [ -n "$(FAILED)" ]; then \
+	    filter="$$filter severity>=ERROR"; \
+	  else \
+	    filter="$$filter jsonPayload.event=(\"extract_started\" OR \"snowflake_query_submitted\" OR \"bq_load_started\" OR \"bq_published\" OR \"dataset_failed\" OR \"pipeline_failed\" OR \"lightcast_run_finished\")"; \
+	  fi; \
+	  echo ">> last $(LOG_SINCE), oldest first"; \
+	  gcloud logging read "$$filter" --project $(PROJECT) \
+	    --freshness=$(LOG_SINCE) --limit=300 --order=asc \
+	    --format='table[no-heading](timestamp.date("%H:%M:%S"),jsonPayload.event:label=EVENT,jsonPayload.dataset:label=DATASET,jsonPayload.error)' \
+	  || { echo "No matching entries, or no logging.viewer on this project." >&2; exit 1; }
+
+runs: auth-check ## The run manifest: which datasets FINISHED, and how. Completed only.
+	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@echo ">> owc_ops.pipeline_runs — finished datasets only; use 'make logs' for in-flight"
+	@bq query --project_id=$(PROJECT) --use_legacy_sql=false --format=pretty \
+	  'SELECT started_at, pipeline, dataset, status, row_count, ROUND(duration_seconds,1) AS secs, LEFT(error, 60) AS error FROM `owc_ops.pipeline_runs` WHERE started_at > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY) ORDER BY started_at DESC LIMIT 50'
 
 # --- the PowerBI key, which is the one key in this project ------------------
 #
