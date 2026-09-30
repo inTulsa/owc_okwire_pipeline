@@ -117,12 +117,34 @@ Partitioning on `YEAR` with `YEAR >= 2015` gives ~11 partitions of ~100–150 MB
 metadata overhead for pruning nobody needs.
 
 Clustering prunes on a **left prefix** only, so column order is load-bearing
-and has to match what PowerBI actually filters on. That is unknowable until
-the PowerBI mode is settled (open item 5), and guessing at four columns now
-would likely be wrong.
+and has to match what the consumer actually filters on. This originally
+deferred to "whenever the PowerBI mode is settled." **It is settled:
+PowerBI runs Import on Premium capacity, in the Government cloud.**
 
-**Decision:** ship unpartitioned and unclustered. Measure. Partition only if a
-table passes ~10 GB, and cluster only once the real filter columns are known.
+That resolves the deferral by removing the question rather than answering
+it. Import copies the data into the semantic model, so every slicer, filter
+and cross-highlight is served from PowerBI's own engine and **never reaches
+BigQuery**. BigQuery sees one full table read per scheduled refresh.
+Clustering cannot prune a full read, so there is no column order that would
+help.
+
+**Decision:** ship unpartitioned and unclustered, and treat that as settled
+rather than deferred. Partition only if a table passes ~10 GB.
+
+**What would reopen it:** a consumer that issues selective queries against
+BigQuery — a DirectQuery model, a composite model with a DirectQuery
+partition, or analysts querying `owc_marts` directly. Any of those makes
+clustering matter again, and the filter columns would then be observable
+from `owc_ops` rather than guessed at.
+
+**One residual, if incremental refresh is ever wanted.** PowerBI's
+incremental refresh needs a datetime column to range-partition on, and the
+fact tables carry a bare `YEAR` integer. Adding one **would touch the
+Lightcast SQL**, which is deliberately unmodified
+([ADR-008](#adr-008-the-enrollment-script-is-a-generated-derivation-not-a-hand-edited-copy)
+covers the equivalent commitment on the enrollment side). A full refresh
+needs nothing, so this is a cost to weigh if refresh duration ever becomes a
+problem — not something to pre-build.
 
 `owc_ops.pipeline_runs` *is* partitioned and clustered, because that table is
 genuinely queried by time on every freshness check.
@@ -216,6 +238,35 @@ sequence: mint, repoint PowerBI, confirm a refresh, delete the old key.
 
 Decided and written down here rather than discovered at go-live.
 
+## ADR-007: One container image for both pipelines
+
+**Status:** accepted.
+
+Separate images per pipeline would be tidier but double the build and deploy
+configuration. Image size is irrelevant at this scale, and one image is far
+easier for a small team to reason about. `owcdata run <pipeline>` selects.
+
+## ADR-008: The enrollment script is a generated derivation, not a hand-edited copy
+
+**Status:** accepted.
+
+The design commits to carrying the enrollment script over with its parsing,
+reshaping, and caching logic unchanged. A commitment like that decays the
+moment someone runs a formatter over the file — which happened once during
+this build and turned a 9-line change set into a 43-line one.
+
+**Decision:** [`scrape.py`](../src/owcdata/pipelines/enrollment/scrape.py) is
+**generated** by
+[`scripts/derive_scrape.py`](../scripts/derive_scrape.py) from the pristine
+original at
+[`tests/fixtures/primary_enrollment_data_script.original.py`](../tests/fixtures/primary_enrollment_data_script.original.py),
+via an explicit ordered list of substitutions that must each match exactly
+once. It is excluded from `ruff format`, and `make check` runs
+`derive_scrape.py --check`.
+
+The result: `make diff-enrollment` shows exactly 9 removed lines, forever, and
+any drift fails `make check` rather than slowly eroding the claim.
+
 ## ADR-009: No reporting layer — the pipeline stops at owc_marts
 
 **Status:** accepted. **Supersedes** the original three-dataset design.
@@ -246,7 +297,7 @@ Note the privilege moved in the right direction: **less** for the unattended
 pipeline, slightly more read scope for a read-only BI identity.
 
 **What would bring the layer back.** Authorized views exist to *withhold*
-columns or rows. If [open item 6](OPEN-ITEMS.md) — whether the Lightcast
+columns or rows. If [open item 13](OPEN-ITEMS.md#license-audience) — whether the Lightcast
 license permits these derived tables for the intended PowerBI audience — turns
 out to restrict specific fields, a filtering view is the correct mechanism.
 Re-adding it is additive and needs no change to the `pipeline` module. A
@@ -286,7 +337,15 @@ owcdata rollback dim_area --run-id <run_id>    # a specific run
 
 That is an ordinary BigQuery load job, so `dataEditor` + `jobUser` is the
 entire permission set either pipeline needs. **There are no custom roles in
-this project.**
+this project**, and every role named anywhere in this repo is a predefined
+Google role — which is what makes the role set reviewable by someone who has
+never seen the code.
+
+> **If that ever stops being true, amend this ADR in the same commit.** The
+> `roles/run.developer` fallback documented in `modules/pipeline/job.tf`
+> offers a custom role as a last resort. Taking it would make the sentence
+> above false, and a design document that quietly stops matching the project
+> is worse than one that never made the claim.
 
 **Consequences, stated plainly.** A snapshot restore is a metadata operation;
 a Parquet reload is a load job, so rolling back a multi-GB fact table takes
@@ -297,32 +356,3 @@ This change also required the **enrollment** pipeline to write its merged
 output as Parquet to the raw bucket rather than loading a DataFrame directly,
 so both pipelines produce the same artifact and share one publish and one
 rollback path. `land_dataframe` is gone.
-
-## ADR-007: One container image for both pipelines
-
-**Status:** accepted.
-
-Separate images per pipeline would be tidier but double the build and deploy
-configuration. Image size is irrelevant at this scale, and one image is far
-easier for a small team to reason about. `owcdata run <pipeline>` selects.
-
-## ADR-008: The enrollment script is a generated derivation, not a hand-edited copy
-
-**Status:** accepted.
-
-The design commits to carrying the enrollment script over with its parsing,
-reshaping, and caching logic unchanged. A commitment like that decays the
-moment someone runs a formatter over the file — which happened once during
-this build and turned a 9-line change set into a 43-line one.
-
-**Decision:** [`scrape.py`](../src/owcdata/pipelines/enrollment/scrape.py) is
-**generated** by
-[`scripts/derive_scrape.py`](../scripts/derive_scrape.py) from the pristine
-original at
-[`tests/fixtures/primary_enrollment_data_script.original.py`](../tests/fixtures/primary_enrollment_data_script.original.py),
-via an explicit ordered list of substitutions that must each match exactly
-once. It is excluded from `ruff format`, and `make check` runs
-`derive_scrape.py --check`.
-
-The result: `make diff-enrollment` shows exactly 9 removed lines, forever, and
-any drift fails `make check` rather than slowly eroding the claim.

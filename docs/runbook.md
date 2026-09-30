@@ -188,7 +188,7 @@ gcloud run jobs execute cr-$PREFIX-lightcast-1 --region=$REGION --project=$PROJE
 
 ---
 
-## `terraform apply` fails with "cannot assign requested address"
+## `terraform apply` fails with "cannot assign requested address" {#ipv6}
 
 ```text
 Error: Error when reading or editing BigQueryDataset "...owc_staging":
@@ -253,7 +253,7 @@ image it pushed is still good.
 
 ---
 
-## `tf-bootstrap` fails with "Moved resource instances excluded by targeting"
+## `tf-bootstrap` fails with "Moved resource instances excluded by targeting" {#state-mv}
 
 ```text
 Error: Moved resource instances excluded by targeting

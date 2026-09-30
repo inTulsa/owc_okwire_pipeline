@@ -12,14 +12,18 @@ Two production data pipelines, one schedule, one warehouse, one runbook.
 Both land in BigQuery (`owc_marts`), which PowerBI reads directly. Schedules
 live in [`pipelines.yml`](pipelines.yml).
 
-> **One thing is open and it blocks production.** Deploys should run as
-> `sa-<prefix>-deploy-1`, impersonated by a named person, and no project has
-> that account yet — [`OPEN-ITEMS.md` item 7](docs/OPEN-ITEMS.md#deploy-identity).
+> **`owc-dpar-d` is live. `owc-dpar-p` has not been built.** Dev runs both
+> pipelines end to end on the deploy-identity model — deploys run as
+> `sa-<prefix>-deploy-1`, impersonated, and no human needs an admin role to
+> deploy. What is not settled is prod: the privileged setup has never run
+> there, and the eleven roles the deploy account needs have only ever been
+> granted on dev. **Agree that role set before prod's first apply** —
+> [`OPEN-ITEMS.md` item 1](docs/OPEN-ITEMS.md#prod-role-set).
 
 ## Start here
 
 **Standing an environment up, or deploying a change?**
-→ **[`docs/deploy.md`](docs/deploy.md)**. That is the whole procedure, six
+→ **[`docs/deploy.md`](docs/deploy.md)**. That is the whole procedure, eight
 steps, and it is the only one. Everything else below is reference.
 
 From Google Cloud Shell:
@@ -28,10 +32,18 @@ From Google Cloud Shell:
 # 1. get the code
 cd ~ && git clone https://github.com/inTulsa/owc_okwire_pipeline.git owc && cd owc
 
-# 2. Cloud Shell logs gcloud in for you, but NOT Terraform
-eval "$(make -s env-exports ENV=dev)"
+# 2. Cloud Shell logs gcloud in for you, but NOT Terraform.
+#    First: no IPv6 route means gcloud works and every terraform call
+#    fails. Ten seconds now saves an hour. See deploy.md#ipv6-preflight.
+curl -s -m 5 -6 https://storage.googleapis.com >/dev/null || echo "NO IPv6 — open a new Cloud Shell session before continuing"
+
+#    Then ORDER MATTERS: authenticate as yourself BEFORE taking on the
+#    deploy identity. Reversed, the login writes the impersonation into
+#    the ADC file and the only fix is starting over. deploy.md#adc-ordering
 gcloud auth application-default login
-gcloud auth application-default set-quota-project $PROJECT
+gcloud config set project owc-dpar-d
+gcloud auth application-default set-quota-project owc-dpar-d
+eval "$(make -s env-exports ENV=dev)"
 
 # 3. Cloud Shell ships a terraform stub, not terraform
 make install-terraform
@@ -77,8 +89,8 @@ Named for the question they answer, not numbered — read the one you need.
 | I want to run a pipeline or change the code | [`local-development.md`](docs/local-development.md) |
 | I want to add a dataset or a new pipeline | [`adding-a-pipeline.md`](docs/adding-a-pipeline.md) |
 | What are the alerts and why does each exist? | [`monitoring.md`](docs/monitoring.md) |
+| Who can do what, and how is that proven? *(for a security review)* | [`security-model.md`](docs/security-model.md) |
 | What still needs a human decision? **Read before go-live** | [`OPEN-ITEMS.md`](docs/OPEN-ITEMS.md) |
-| **Picking this up next? The documentation pass owed before prod** | [`DOCUMENTATION-PASS.md`](docs/DOCUMENTATION-PASS.md) |
 
 The enrollment pipeline's original business-process documentation is preserved
 verbatim in [`docs/enrollment/`](docs/enrollment/).

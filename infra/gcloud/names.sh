@@ -124,7 +124,7 @@ TF_PRINCIPAL_ROLES=(
 
 # The roles this split REMOVES, which 02-verify-admin.sh asserts are absent.
 #
-# These are the four Stephen Jones named, or their direct consequences:
+# These are the four the platform team named, or their direct consequences:
 #   projectIamAdmin          every google_project_iam_member read-modify-wrote
 #                            the project IAM policy, so all 24 of them needed
 #                            getIamPolicy just to refresh

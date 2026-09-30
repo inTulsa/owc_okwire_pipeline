@@ -46,7 +46,7 @@ tar czf owc.tar.gz --exclude='.venv' --exclude='.terraform' \
 mkdir -p ~/owc && tar xzf ~/owc.tar.gz --strip-components=1 -C ~/owc && cd ~/owc
 ```
 
-**Or from the project's own copy**, once step 4 has run at least once. This is
+**Or from the project's own copy**, once step 6 has run at least once. This is
 the path for anyone with GCP access but no GitHub access:
 
 ```bash
@@ -62,45 +62,97 @@ mkdir -p ~/owc && cd ~/owc \
 Cloud Shell logs `gcloud` in for you. It does **not** log Terraform in, and
 that is the half people skip.
 
-**Order matters, and getting it wrong gives a misleading error.** Both
-`application-default` commands must run as yourself, before the shell is put
-on the deploy identity. Run them after `env-exports` and gcloud reads ADC
-through the impersonation and refuses:
+### Check IPv6 first — it costs ten seconds and saves an hour {#ipv6-preflight}
 
-```text
-ERROR: (gcloud.auth.application-default.set-quota-project) The application
-default credentials are not user credentials, quota project cannot be added.
+Do this before anything else in the shell:
+
+```bash
+curl -s -m 5 -6 https://storage.googleapis.com >/dev/null && echo "IPv6 ok" || echo "NO IPv6 ROUTE — see below"
 ```
 
-The credentials are not merely being read wrong — **the login wrote the
-impersonation into the ADC file**, which is now
-`type: impersonated_service_account`. Unsetting the variables afterwards does
-not fix it; Terraform would go on to impersonate the deploy account starting
-from the deploy account, which fails because it holds no `tokenCreator` on
-itself, with an error that mentions nothing about ADC.
+If it says `NO IPv6 ROUTE`, **gcloud will work perfectly and every
+`terraform` call will fail**, intermittently and on different resources each
+time, with `cannot assign requested address`. gcloud is Python and falls
+back to IPv4; Terraform is Go and keeps dialling an AAAA record it cannot
+route to.
 
-Unset both variables and **log in again**, then set the quota project, then
-re-run `env-exports`. `make doctor` checks the credential type and says so.
+The quickest fix is to close this Cloud Shell session and open a new one —
+you get a different VM, often with no IPv6 address at all, which makes Go
+skip AAAA by itself. Do that **now**, before authenticating, rather than
+after, because a new session loses the ADC and the impersonation anyway.
 
-So: authenticate **as yourself** first, then switch onto the deploy identity.
+`GODEBUG=netdns=cgo` and `/etc/gai.conf` look like the fix and do nothing:
+Terraform's official binary is built `CGO_ENABLED=0`, so it reads neither.
+The full explanation and the `/etc/hosts` workaround for when a new session
+does not help are in [the runbook](runbook.md#ipv6).
+
+### Then authenticate, in this order {#adc-ordering}
+
+**The order is load-bearing.** The first two commands below must run as
+*yourself*, before the third puts the shell on the deploy identity. There is
+no way to recover from getting it wrong except starting over, so follow it
+literally.
+
+Substitute `owc-dpar-p` and `ENV=prod` throughout when you are building
+prod — this is the one place in the procedure where the project name is
+typed rather than read from `terraform.tfvars`, because `env-exports` has
+not run yet.
+
+**First — log in as yourself.**
 
 ```bash
 gcloud auth application-default login
 ```
 
-```bash
-eval "$(make -s env-exports ENV=dev)"
-```
+**Second — set the quota project, still as yourself.**
 
 ```bash
-gcloud config set project $PROJECT
-gcloud auth application-default set-quota-project $PROJECT
+gcloud config set project owc-dpar-d
+gcloud auth application-default set-quota-project owc-dpar-d
+```
+
+The quota project is not optional. Terraform's GCS backend bills every call
+to whatever `quota_project_id` sits in your ADC; an inactive one makes every
+call return `404`, which Terraform reports as `storage: bucket doesn't exist`.
+
+**Third — and only now — switch onto the deploy identity.**
+
+```bash
+eval "$(make -s env-exports ENV=dev)"
 ```
 
 `env-exports` sets `$PROJECT`, `$PREFIX`, `$REGION` from that environment's
 `terraform.tfvars`, so they cannot drift from what Terraform builds. It also
 sets the two variables that put this shell on the deploy identity. `make`
 targets read the project themselves and need none of it.
+
+#### If you run them in the wrong order {#adc-wrong-order}
+
+Running `env-exports` before the `application-default` commands gives an
+error that points at the wrong thing:
+
+```text
+ERROR: (gcloud.auth.application-default.set-quota-project) The application
+default credentials are not user credentials, quota project cannot be added.
+```
+
+The credentials are not merely being *read* wrong — **the login wrote the
+impersonation into the ADC file**, which is now
+`type: impersonated_service_account`.
+
+**Unsetting the variables does not fix it.** Terraform would go on to
+impersonate the deploy account *starting from* the deploy account, which
+fails because it holds no `tokenCreator` on itself — with an error that
+mentions nothing about ADC.
+
+The recovery is the whole sequence again:
+
+```bash
+unset CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT GOOGLE_IMPERSONATE_SERVICE_ACCOUNT
+```
+
+then steps 1, 2 and 3 above, in that order. `make doctor` checks the
+credential type and names this specifically.
 
 ### You deploy as a service account, not as yourself {#deploy-identity}
 
@@ -253,9 +305,13 @@ make scheduler-grant ENV=dev
 `make verify-separation ENV=dev` fails until it has — the gap is never
 silent from this repo's side, only from Google's.
 
-The quota project is not optional. Terraform's GCS backend bills every call to
-whatever `quota_project_id` sits in your ADC; an inactive one makes every call
-return `404`, which Terraform reports as `storage: bucket doesn't exist`.
+> **This fallback has never been executed.** `owc-dpar-d` was granted
+> `roles/run.admin`, so `scheduler_job_iam_in_terraform = false` — the
+> `count = 0` branch and the `make scheduler-grant` hand-off — is code that
+> has been written and reviewed but not run. Treat the paragraphs above as
+> the design, not as a tested procedure, and budget time accordingly the
+> first time an environment needs it. Tracked as
+> [OPEN-ITEMS item 7](OPEN-ITEMS.md#scheduler-fallback).
 
 ## 3. Check the environment
 
@@ -480,7 +536,7 @@ On every later run it goes straight through. What it does, in order:
 |---|---|
 | `iam-check` | the identities and buckets are there |
 | `tf-init` | adopt the state bucket for this `PROJECT`, and print it |
-| `tf-bootstrap` | Artifact Registry + the secret container |
+| `tf-bootstrap` | Artifact Registry + the secret container. On a project whose state predates `scheduler_job_iam_in_terraform`, this fails once with *"Moved resource instances excluded by targeting"* and needs [a one-time `terraform state mv`](runbook.md#state-mv). A brand-new project like `owc-dpar-p` will not hit it. |
 | `build` | Cloud Build → an image pinned by digest |
 | `tf-apply` | everything else, including the Cloud Run jobs |
 | `set-image` | point both jobs at that digest — `terraform apply` never will |
@@ -501,10 +557,10 @@ actually publishes — then the run manifest. Look for `status = success`.
 
 ## Running this in an OMES project {#omes}
 
-The six steps are the same. What differs is **who runs step 4**, and that
+The eight steps are the same. What differs is **who runs step 5**, and that
 changes what the other steps look like.
 
-### Step 4 is theirs, not yours
+### Step 5 is theirs, not yours
 
 You will not hold `serviceAccountAdmin` or `projectIamAdmin` on `owc-dpar-d`
 or `owc-dpar-p`. So:
@@ -532,7 +588,7 @@ use it is deferred.
 
 If OMES is hosting Terraform state — *"we can hook up your instance with the
 state"* — they add `--no-state-bucket`, tell you the bucket, and you set it in
-**both** `terraform.tfvars` and `backend.tf` before step 5.
+**both** `terraform.tfvars` and `backend.tf` before step 7.
 
 ### `iam-check` will run in REDUCED mode there, and that is correct
 
@@ -556,8 +612,9 @@ with their own account:
 make iam-check ENV=dev STRICT=1
 ```
 
-That is the report to ask them for, and the one that answers Stephen's
-objection on their own terms rather than yours.
+That is the report to ask them for. It answers the no-admin-roles
+requirement in the platform team's own terms — their account, their view of
+the policy — rather than asserting it from this side.
 
 ### What a rehearsal on your own project cannot prove
 
@@ -578,8 +635,8 @@ graph, the ordering, the two-pass `make up`, the smoke test. The one
 unproven claim — "eleven roles are enough" — is proven the first time it runs
 in an OMES project, where you genuinely do not have more.
 
-To close that gap before handing over, have OMES run step 4 on a project
-where you are not owner, or drop owner on the test project *after* step 4 —
+To close that gap before handing over, have OMES run step 5 on a project
+where you are not owner, or drop owner on the test project *after* step 5 —
 carefully, and only if someone else can still administer it.
 
 ## PowerBI credentials {#powerbi}
@@ -703,7 +760,7 @@ require the PowerBI identity to read the raw bucket — which
 
 ## Then prod {#prod}
 
-Prod runs the same steps with `ENV=prod`, but it is not a replay of dev. Three
+Prod runs the same steps with `ENV=prod`, but it is not a replay of dev. Four
 things have to be settled first, and two of prod's differences change what a
 mistake costs.
 
@@ -711,12 +768,90 @@ mistake costs.
 
 | | |
 |---|---|
+| **Which roles prod will actually grant** | The eleven roles have only ever been granted on dev. See [below](#prod-role-set) — this is the one that can stop the deploy dead. |
 | **`snowflake_user` is a placeholder** | `envs/prod/terraform.tfvars` ships `REPLACE_ME@…` and the plan rejects it on purpose. Put the real reader account in first. |
-| **Who deploys prod** | The privileged step runs **once** per project. Decide which person gets `tokenCreator` on `sa-owc-dpar-p-deploy-1` before it runs — see [the deploy identity](#deploy-identity). Adding someone later is one binding; taking resource-admin roles back off a person is not. |
-| **Terraform state hosting** | [OPEN-ITEMS item 8](OPEN-ITEMS.md#state-hosting). Cheaper to answer now than to migrate state later. |
+| **Who deploys prod** | The privileged step runs **once** per project. Decide who gets `tokenCreator` on `sa-owc-dpar-p-deploy-1` before it runs — see [the deploy identity](#deploy-identity). Adding someone later is one binding; taking resource-admin roles back off a person is not. |
+| **Terraform state hosting** | [OPEN-ITEMS item 5](OPEN-ITEMS.md#state-hosting). Cheaper to answer now than to migrate state later. |
 
-`owc-dpar-p` has none of its six service accounts yet, so the privileged step
-there creates everything from nothing.
+`owc-dpar-p` has none of its seven service accounts yet, so the privileged
+step there creates everything from nothing.
+
+### Dev proves the roles are enough. It does not prove you can get them. {#prod-role-set}
+
+**This is the likeliest way a prod deploy stalls, and it is worth an email
+before it is worth a terminal.**
+
+`owc-dpar-d` deploys end to end on exactly eleven roles and nothing more, so
+the set is known-sufficient. What dev cannot tell you is whether the same
+reviewer, or a different one, will grant all eleven on a production project.
+Production reviews are stricter, and prod is where that gets tested.
+
+Only one of the eleven has a fallback. `roles/run.admin` is the broad one:
+the setup script attempts it, falls back to `roles/run.developer` if
+refused, prints which way it went, and
+[the trade-off is documented](#run-admin-decision). **The other ten have no
+fallback.** If a review refuses `roles/bigquery.admin` or
+`roles/secretmanager.admin`, there is no documented narrower path — the
+deploy stops and the design has to be reopened.
+
+So put the whole list in front of whoever approves it, in one pass, before
+the privileged step runs:
+
+```bash
+make gcloud-admin-dry-run ENV=prod
+```
+
+That is every command, shell-quoted, with nothing inferred. Send the output,
+not a summary of it. [`security-model.md`](security-model.md) is written for
+that reader: what each role is for, what the deploy identity provably cannot
+do, and the two places where the current set is wider than the design
+claims.
+
+**If a role is refused, stop and say so** rather than working around it. A
+narrower role that silently lacks one permission produces a deploy that
+half-works and a failure weeks later on the cron.
+
+### Pause dev's schedulers first — before prod's first apply {#pause-dev-first}
+
+`envs/dev/terraform.tfvars` has `schedulers_paused = false`, set deliberately
+so the scheduled path could be exercised on dev. **That window closes the
+moment prod is live.** Both environments read the same `pipelines.yml`, so
+two live environments fire the same 35 Snowflake queries at the same minute
+— twice, on Lightcast's warehouse, where the cost is not ours to see, and
+contending for `TULSA_FOR_YOU_WH`.
+
+Set `schedulers_paused = true` in `envs/dev/terraform.tfvars`, then:
+
+```bash
+make tf-apply ENV=dev
+```
+
+```bash
+gcloud scheduler jobs list --location $REGION --project $PROJECT --format="table(name,state,schedule)"
+```
+
+Both dev schedulers must report `PAUSED`. Only then build prod.
+
+**The two environments are deliberately not coupled.** A prod deploy does not
+read dev's configuration and must not start doing so — they are separate
+projects, and a checkout pointed at a test project would make any such check
+meaningless. What exists instead:
+
+- **A notice on every apply**, from that environment's own tfvars.
+  `make tf-apply ENV=dev` states that the dev schedulers are unpaused for as
+  long as they are. No other environment is consulted.
+- **An opt-in cross-check**, off by default, for exactly this moment:
+
+  ```bash
+  make tf-apply ENV=prod CHECK_OTHER_ENV=dev
+  ```
+
+  Naming the other environment is the whole interface — it refuses if that
+  environment's schedulers are live, and otherwise says so and continues.
+  Nothing consults another environment unless asked.
+
+Leaving dev unpaused breaks nothing visibly. It doubles a bill somebody else
+receives, which is the kind of mistake that survives for months.
 
 ### Two differences that change the procedure
 
@@ -766,7 +901,7 @@ the job's own IAM policy.
 
 ## Rehearsing against your own project
 
-The same six steps with one extra variable. Nothing is edited, nothing is
+The same eight steps with one extra variable. Nothing is edited, nothing is
 committed, nothing has to be changed back:
 
 ```bash
@@ -801,10 +936,10 @@ Every `google_project_iam_member` read-modify-writes the project IAM policy,
 so all 24 needed `getIamPolicy` **to refresh** — on runs that changed nothing.
 Those, plus the seven service accounts and the API enables, moved to
 [`infra/gcloud/01-admin-identities.sh`](../infra/gcloud/01-admin-identities.sh)
-— step 4, once.
+— step 5, once.
 
 > **"we can not hook up your personal Github, but we can hook up your instance
-> with the state once you work with Jason Thornhill."**
+> with the state once you work with [their platform engineer]."**
 
 There is no CI in this repo. The Workload Identity Federation pool, the OIDC
 provider, the deployer service account and the GitHub Actions workflows are
@@ -825,7 +960,7 @@ reads or writes the project IAM policy.**
 
 | | Created by | Needs |
 |---|---|---|
-| APIs, service accounts, project IAM, `actAs`, state + source buckets | step 4, in gcloud | `serviceAccountAdmin`, `projectIamAdmin`, `serviceUsageAdmin` |
+| APIs, service accounts, project IAM, `actAs`, state + source buckets | step 5, in gcloud | `serviceAccountAdmin`, `projectIamAdmin`, `serviceUsageAdmin` |
 | Buckets, datasets, tables, registry, secret, jobs, schedulers, alerts | Terraform | resource admin only |
 | **Resource-scoped** IAM — bucket prefix, dataset `dataEditor`, secret accessor, registry reader, job `run.developer` | Terraform | resource admin only |
 
@@ -840,7 +975,7 @@ write the scheduler binding in `modules/pipeline/job.tf` — an apply dies on
 that one resource and the schedulers 403 forever. The deploy identity holds
 `roles/run.admin` instead, which does. That is the one role in the list
 broader than "administer the resource", and it is acceptable only because
-[a service account holds it](#deploy-identity) rather than a person. It also cannot move to step 4 without breaking ordering: the build
+[a service account holds it](#deploy-identity) rather than a person. It also cannot move to step 5 without breaking ordering: the build
 identity needs `artifactregistry.writer` on a registry that does not exist
 yet, and the lightcast job will not *create* unless its runtime identity can
 already read the secret.
