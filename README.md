@@ -78,6 +78,7 @@ Named for the question they answer, not numbered — read the one you need.
 | I want to add a dataset or a new pipeline | [`adding-a-pipeline.md`](docs/adding-a-pipeline.md) |
 | What are the alerts and why does each exist? | [`monitoring.md`](docs/monitoring.md) |
 | What still needs a human decision? **Read before go-live** | [`OPEN-ITEMS.md`](docs/OPEN-ITEMS.md) |
+| **Picking this up next? The documentation pass owed before prod** | [`DOCUMENTATION-PASS.md`](docs/DOCUMENTATION-PASS.md) |
 
 The enrollment pipeline's original business-process documentation is preserved
 verbatim in [`docs/enrollment/`](docs/enrollment/).
