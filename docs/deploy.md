@@ -582,6 +582,59 @@ To close that gap before handing over, have OMES run step 4 on a project
 where you are not owner, or drop owner on the test project *after* step 4 —
 carefully, and only if someone else can still administer it.
 
+## PowerBI credentials {#powerbi}
+
+**PowerBI Desktop and the PowerBI workspace do not authenticate the same
+way.** Desktop can use your interactive Google sign-in; the workspace
+cannot, because a scheduled refresh has nobody to answer an OAuth prompt.
+A model that works in Desktop and fails on publish has hit this, not a
+misconfiguration in GCP.
+
+[ADR-006](architecture.md#adr-006-one-tightly-scoped-json-key-for-powerbi)
+settles it: one JSON key for `sa-<prefix>-powerbi-1`, which holds
+`bigquery.jobUser` plus `dataViewer` on `owc_marts` and nothing else — not
+`owc_staging`, not `owc_ops`.
+
+```bash
+make powerbi-key ENV=dev
+```
+
+It lists any existing keys first, so a rotation is deliberate; refuses to
+write inside the repository; and prints what to do with the file and how to
+destroy the local copy. Then in the workspace: **semantic model → Settings →
+Data source credentials → Edit credentials**, authentication method
+**Service Account**, paste the file contents.
+
+### It needs a permission the deploy account does not have
+
+`iam.serviceAccountKeys.create` is not in the eleven roles, and the deploy
+account has no `actAs` on `powerbi` either — that account is deliberately
+outside `ATTACHED_SAS` because nothing attaches it. So either an admin mints
+the key, or they grant the deploy account key-admin on **that one account**,
+which makes the annual rotation self-service:
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding sa-<prefix>-powerbi-1@<project>.iam.gserviceaccount.com --project <project> --member serviceAccount:sa-<prefix>-deploy-1@<project>.iam.gserviceaccount.com --role roles/iam.serviceAccountKeyAdmin
+```
+
+Resource-scoped to one service account, and held by an identity no human
+logs in as.
+
+### Check the org policy first
+
+```bash
+gcloud resource-manager org-policies describe constraints/iam.disableServiceAccountKeyCreation --project $PROJECT --effective
+```
+
+`booleanPolicy: {}` means key creation is allowed. `booleanPolicy: {enforced: true}`
+means ADR-006's "there is no third option" does not hold in that
+organization, and the remaining choices are an org-policy exception for that
+one account, a Google organizational account signed in to the data source
+(which reintroduces the person-leaves failure ADR-006 rejected), or the
+newer *Google BigQuery (Azure AD identity)* connector federating Entra ID
+through Workload Identity Federation — untested here, and it needs a
+workload identity pool this repo does not build.
+
 ## Static reference data {#reference-data}
 
 Some tables come from a CSV somebody maintains by hand — a SOC-to-CIP

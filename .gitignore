@@ -2,6 +2,12 @@
 .env
 .env.*
 !.env.example
+# service-account keys. `make powerbi-key` refuses to write inside the repo,
+# but a key pasted or downloaded here must not be committable either.
+*-key.json
+*key*.json
+sa-*.json
+!reference/*.schema.json
 
 # local pipeline output — `--target local` writes here
 /data/

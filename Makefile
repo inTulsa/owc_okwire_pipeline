@@ -111,7 +111,7 @@ endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check auth-check doctor \
         diff-enrollment derive-scrape derive-check lock lock-check docs-check shell-check base-digest build deploy set-image which-image image-digest tf-init tf-bootstrap preflight scheduler-debug verify-separation env-exports tf-output tf-plan tf-apply tf-fmt tf-validate clean \
-        access-check prep omes-request omes-script gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push deploy-identity scheduler-grant load-reference \
+        access-check prep omes-request omes-script gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push deploy-identity scheduler-grant load-reference powerbi-key \
         tf-check install-terraform
 
 help: ## Show this help
@@ -787,6 +787,59 @@ up: ## Stand $(ENV) up end to end, after gcloud-admin has run once
 	@$(MAKE) --no-print-directory verify-separation ENV=$(ENV)
 	@echo ""
 	@echo ">> $(ENV) is up. Prove it end to end:  make smoke ENV=$(ENV)"
+
+# --- the PowerBI key, which is the one key in this project ------------------
+#
+# ADR-006: the PowerBI BigQuery connector authenticates as a Google
+# organizational account or via a service-account JSON key, and there is no
+# third option. Per-user OAuth works in PowerBI Desktop and breaks in the
+# workspace, because a scheduled refresh has nobody to answer the prompt.
+#
+# So: one key, for sa-<prefix>-powerbi-1, which holds bigquery.jobUser plus
+# dataViewer on owc_marts and nothing else. Rotate annually.
+#
+# Minting needs iam.serviceAccountKeys.create on that account, which is NOT
+# in the deploy roles by default — see docs/deploy.md#powerbi.
+POWERBI_SA  = sa-$(NAME_PREFIX)-powerbi-1@$(PROJECT).iam.gserviceaccount.com
+KEY_OUT    ?= $(HOME)/owc-powerbi-$(NAME_PREFIX)-key.json
+
+powerbi-key: auth-check ## Mint the PowerBI service-account key (ADR-006). KEY_OUT=<path>
+	@test -n "$(PROJECT)"     || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@test -n "$(NAME_PREFIX)" || { echo "could not read name_prefix from $(TFVARS)" >&2; exit 1; }
+	@case "$(abspath $(KEY_OUT))" in \
+	  "$(abspath .)"/*) \
+	    echo "REFUSING: $(KEY_OUT) is inside the repository." >&2; \
+	    echo "A service-account key must not sit where it can be committed." >&2; \
+	    echo "Pass KEY_OUT=\$$HOME/somewhere.json" >&2; exit 1 ;; \
+	esac
+	@if [ -e "$(KEY_OUT)" ]; then \
+	  echo "REFUSING: $(KEY_OUT) already exists. Move or delete it first." >&2; exit 1; \
+	fi
+	@echo ">> existing user-managed keys on $(POWERBI_SA):"
+	@gcloud iam service-accounts keys list --iam-account $(POWERBI_SA) \
+	  --project $(PROJECT) --managed-by user --format='table(name.basename(),validAfterTime)' \
+	  || { echo ""; echo "Could not list keys. You need iam.serviceAccountKeys.list on that"; \
+	       echo "account — see docs/deploy.md#powerbi for what to ask an admin for."; exit 1; }
+	@echo ""
+	@echo "   If any are listed above, this is a ROTATION: mint the new key, put it"
+	@echo "   in PowerBI, confirm a refresh succeeds, THEN delete the old one."
+	@echo ""
+	@gcloud iam service-accounts keys create "$(KEY_OUT)" \
+	  --iam-account $(POWERBI_SA) --project $(PROJECT)
+	@chmod 600 "$(KEY_OUT)"
+	@echo ""
+	@echo ">> key written to $(KEY_OUT)  (mode 600)"
+	@echo ""
+	@echo "   1. In the PowerBI workspace: the semantic model -> Settings ->"
+	@echo "      Data source credentials -> Edit credentials."
+	@echo "      Authentication method: Service Account. Paste the file contents."
+	@echo "   2. Run a refresh and confirm it succeeds."
+	@echo "   3. Delete the local copy. It is a bearer credential for owc_marts:"
+	@echo "         shred -u $(KEY_OUT)   # or: rm -P $(KEY_OUT)"
+	@echo "   4. Set a reminder to rotate in 12 months (ADR-006)."
+	@echo ""
+	@echo "   To download it off Cloud Shell first:  cloudshell download $(KEY_OUT)"
+	@echo ""
 
 # --- static reference data --------------------------------------------------
 #
