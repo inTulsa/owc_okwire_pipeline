@@ -151,7 +151,7 @@ than a failed apply.
 Password auth is correct here and is **not** deprecated: Snowflake's password
 phase-out explicitly exempts reader accounts. See
 [ADR-004](architecture.md#adr-004-snowflake-password-auth-is-kept) and
-[open item 12](OPEN-ITEMS.md#reader-account).
+[open item 11](OPEN-ITEMS.md#reader-account).
 
 ## Why the image is pinned by digest
 

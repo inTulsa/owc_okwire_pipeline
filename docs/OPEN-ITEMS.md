@@ -16,14 +16,13 @@ true as of **2026-09-30**.
 - [Known gaps in what is deployed](#known-gaps)
   - [6. `monitoring.editor` lets the deploy identity enable APIs](#monitoring-editor)
   - [7. The scheduler-IAM fallback has never been executed](#scheduler-fallback)
-  - [8. `readSessionUser` on dev was granted by hand](#readsessionuser)
-  - [9. `make lock-check` is red](#lock-check)
+  - [8. `make lock-check` is red](#lock-check)
 - [Decisions that need someone outside this repo](#external-decisions)
-  - [10. Fill in the quarterly and yearly dataset lists](#dataset-groups)
-  - [11. Tell Lightcast before raising `parallelism` above 4](#parallelism)
-  - [12. Confirm the Snowflake account is a true reader account](#reader-account)
-  - [13. Confirm the Lightcast license permits this audience](#license-audience)
-  - [14. Move the enrollment repo in, preserving history](#enrollment-history)
+  - [9. Fill in the quarterly and yearly dataset lists](#dataset-groups)
+  - [10. Tell Lightcast before raising `parallelism` above 4](#parallelism)
+  - [11. Confirm the Snowflake account is a true reader account](#reader-account)
+  - [12. Confirm the Lightcast license permits this audience](#license-audience)
+  - [13. Move the enrollment repo in, preserving history](#enrollment-history)
 - [Also worth knowing](#also-worth-knowing)
 
 ---
@@ -35,9 +34,14 @@ true as of **2026-09-30**.
 **Owner:** the OWC administrator, with the OMES platform team.
 
 **The eleven roles the deploy account needs have only ever been granted on
-`owc-dpar-d`.** Dev proves the set is *sufficient* — it deploys end to end
-with nothing more. It does not prove the set is *obtainable*, because a
-different reviewer on a different project may draw the line somewhere else.
+`owc-dpar-d`.** Dev proves the set is *sufficient* and *exact* — measured on
+2026-09-30, `sa-owc-dpar-d-deploy-1` holds all eleven and nothing else, and
+deploys run end to end on them. That is the strongest form of the argument:
+not "eleven roles are roughly right" but "these eleven, no more, demonstrably
+run the platform."
+
+It does not prove the set is *obtainable*, because a different reviewer on a
+different project may draw the line somewhere else.
 
 Only one of the eleven has a documented fallback. `roles/run.admin` is the
 broad one, the setup script tries it, falls back to `roles/run.developer`
@@ -87,33 +91,71 @@ another IAM request. It has to exist in the organization's directory first —
 this repo cannot create it and does not try. Two traps and the test that
 catches both are in [`deploy.md`](deploy.md#deployer-group).
 
-### How dev differs, and why that is deliberate
+### What dev's policy actually shows {#dev-baseline}
 
-On `owc-dpar-d` the deploy identity exists and is what deploys run as. Two
-human accounts also still hold resource-admin roles there, from the setup
-that predates the split:
+Read from `gcloud projects get-iam-policy owc-dpar-d` on **2026-09-30**.
+This is the measured baseline, not an expectation.
 
-- **The OWC administrator**, who will own this platform and work with the
-  OMES platform team to maintain it. Holding administrative rights is that
-  person's role, not drift.
-- **The developer account**, which is scoped to dev and should keep its
-  access until prod is running and the handover is complete.
+**The deploy identity is exactly right.** `sa-owc-dpar-d-deploy-1` holds all
+eleven required roles and **nothing else** — no extras, no drift. The model
+works as designed, and dev is the evidence for it.
 
-**Neither should be replicated on prod.** The property the split exists to
-achieve — no human holding a resource-admin role on the project — is a
-property to establish on `owc-dpar-p` from its first day, where it costs
-nothing, rather than argued about on dev, where removing access mid-handover
-buys nothing.
+**Five of the six forbidden roles appear against no principal in the
+project policy**, including `roles/resourcemanager.projectIamAdmin` and
+`roles/iam.serviceAccountAdmin` — the two the platform team named first.
+Read that as written: it is a statement about the project policy, and an
+inherited grant would not appear in it. See
+[the limits below](#audit-limits).
 
-**Before delivery, capture the receipt** for whatever dev's policy actually
-is. This has to be run by someone who can read the project IAM policy; the
-deploy identity deliberately cannot:
+**One is not.** `roles/serviceusage.serviceUsageAdmin` is held by two human
+accounts: the OWC administrator and the developer account. That is one of
+the four roles `TF_PRINCIPAL_FORBIDDEN_ROLES` exists to keep off principals,
+and it is the remaining gap between the design and the deployed reality.
+
+Three human accounts also hold 10–12 project roles each — `storage.admin`,
+`bigquery.admin`, `secretmanager.admin`, `cloudscheduler.admin`,
+`artifactregistry.admin`, `monitoring.editor`, `logging.configWriter`,
+`run.developer` and others. These predate the deploy identity.
+
+**On dev, that is a decision rather than drift.** The OWC administrator owns
+this platform and will maintain it with the OMES platform team; administering
+it is that person's role. The developer account is scoped to dev and keeps
+its access until prod is running and handover is complete.
+
+**On prod it should never be created.** The property the split exists to
+achieve is free to establish on `owc-dpar-p` from its first day and expensive
+to retrofit. Prod's policy should show the deploy identity holding the eleven,
+named people holding `tokenCreator` on it, and nothing else.
+
+### Two limits of the check, which matter when quoting it {#audit-limits}
+
+`make iam-check ENV=dev STRICT=1` **passes on dev today**, because it audits
+`TF_PRINCIPAL` — the deploy service account — and that account is clean. It
+says nothing about the two human accounts above.
+
+To audit a person, name them, one at a time:
 
 ```bash
-make iam-check ENV=dev STRICT=1
+make iam-check ENV=dev STRICT=1 TF_PRINCIPAL=user:someone@agency.ok.gov
 ```
 
-**Consequence:** until it runs on prod, prod cannot be deployed at all.
+And it reads the **project** policy only, so a role inherited from the
+organization or folder does not appear. That is not hypothetical here: the
+administrator who ran the one-time setup successfully wrote the project IAM
+policy while holding no project-level `projectIamAdmin` or `owner`. Their
+authority to do so must therefore come from above the project, where nothing
+in this repo can see it.
+
+For a whole-project statement, read the policy directly and keep the output:
+
+```bash
+gcloud projects get-iam-policy owc-dpar-d --format=yaml
+```
+
+**Consequence:** until the privileged step runs on prod, prod cannot be
+deployed at all. Separately, until `serviceUsageAdmin` comes off those two
+accounts, the no-admin-roles property is true of the deploy identity and not
+yet true of the project.
 
 ---
 
@@ -271,28 +313,7 @@ it deliberately instead.
 
 ---
 
-## 8. `readSessionUser` on dev was granted by hand {#readsessionuser}
-
-**Owner:** whoever next runs `iam-check` on dev.
-
-`roles/bigquery.readSessionUser` on `sa-<prefix>-powerbi-1` was added
-manually when a PowerBI refresh failed on `bigquery.readsessions.create` —
-dev predates that role being in `RUNTIME_PROJECT_GRANTS`. It is in the setup
-script now, so prod gets it without the detour.
-
-**Confirm dev's live grant and the script agree**, so `iam-check` does not
-report drift that is really just history:
-
-```bash
-make iam-check ENV=dev
-```
-
-**Consequence:** cosmetic on dev. Zero on prod. Listed so a drift report is
-recognized rather than investigated.
-
----
-
-## 9. `make lock-check` is red {#lock-check}
+## 8. `make lock-check` is red {#lock-check}
 
 **Owner:** whoever does the next dependency pass. **Not during a release.**
 
@@ -317,7 +338,7 @@ else.
 
 ## Decisions that need someone outside this repo {#external-decisions}
 
-## 10. Fill in the quarterly and yearly dataset lists {#dataset-groups}
+## 9. Fill in the quarterly and yearly dataset lists {#dataset-groups}
 
 **Owner:** someone who knows Lightcast's actual refresh cycles per dataset.
 
@@ -343,7 +364,7 @@ benefit.
 
 ---
 
-## 11. Tell Lightcast before raising `parallelism` above 4 {#parallelism}
+## 10. Tell Lightcast before raising `parallelism` above 4 {#parallelism}
 
 **Owner:** a conversation with Lightcast, before the change.
 
@@ -369,7 +390,7 @@ is the only evidence there is.
 
 ---
 
-## 12. Confirm the Snowflake account is a true reader account {#reader-account}
+## 11. Confirm the Snowflake account is a true reader account {#reader-account}
 
 **Owner:** Lightcast, or one query.
 
@@ -394,7 +415,7 @@ isolated behind `connect()`. The risk is the deadline, not the work.
 
 ---
 
-## 13. Confirm the Lightcast license permits this audience {#license-audience}
+## 12. Confirm the Lightcast license permits this audience {#license-audience}
 
 **Owner:** whoever holds the Lightcast license agreement.
 
@@ -414,7 +435,7 @@ cannot enforce.
 
 ---
 
-## 14. Move the enrollment repo in, preserving history {#enrollment-history}
+## 13. Move the enrollment repo in, preserving history {#enrollment-history}
 
 **Owner:** needs an ownership conversation with the script's author.
 
@@ -448,6 +469,12 @@ here so it is not a mystery at 2am.
 working queries was out of scope. Alert 5 is the smoke detector; the
 procedure for when it fires is
 [in the runbook](runbook.md#stale-year-literals).
+
+**The runtime grants were verified clean on 2026-09-30.** All six runtime
+identities on `owc-dpar-d` hold exactly the project-level roles
+`RUNTIME_PROJECT_GRANTS` specifies — no missing grants, no extras, including
+the `bigquery.readSessionUser` that was once added by hand. A drift report
+from `iam-check` after this date is a real finding, not leftover history.
 
 **PowerBI runs Import, not DirectQuery**, on Premium capacity in the
 Government cloud. That settles the clustering question in

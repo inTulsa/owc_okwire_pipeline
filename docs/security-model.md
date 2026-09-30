@@ -68,9 +68,13 @@ prints every command shell-quoted, with nothing inferred.
 
 ## What the deploy identity holds {#deploy-roles}
 
-Eleven predefined roles. **There are no custom roles in this project** — see
+Eleven predefined roles. **This repo defines and grants no custom roles** —
+see
 [ADR-010](architecture.md#adr-010-rollback-from-the-gcs-parquet-not-a-bigquery-snapshot)
-— which is what makes this set reviewable without reading the code.
+— which is what makes the set reviewable without reading the code. (An
+organization may separately attach its own custom roles to a project; on
+`owc-dpar-d` the org's storage-scanning agent holds two. Those are the
+organization's, not this platform's.)
 
 | Role | What it is for |
 |---|---|
@@ -165,17 +169,42 @@ inability to run the check *is* the result.
 
 Nothing here asks to be taken on trust. Each command is read-only.
 
-**The full audit — run by an administrator, on their own account.** The
-deploy identity deliberately cannot produce this, for the reason above:
+**The deploy identity's audit — run by an administrator**, since the deploy
+identity deliberately cannot read the policy itself:
 
 ```bash
 make iam-check ENV=prod STRICT=1
 ```
 
 It confirms the seven identities exist, that the deploy account holds all
-eleven roles, and that no forbidden role is attached to anyone. `STRICT=1`
-turns excess privilege from a warning into a failure — which is what makes
-it a receipt rather than a report.
+eleven roles, and that it holds none of the six forbidden ones. `STRICT=1`
+turns excess privilege from a warning into a failure.
+
+**Read what it audits precisely.** It checks **one principal** —
+`TF_PRINCIPAL`, which defaults to `serviceAccount:sa-<prefix>-deploy-1`. A
+clean `STRICT=1` run is a statement about the deploy account and about
+nothing else. In particular it does **not**:
+
+- **Audit human accounts.** A person holding `serviceUsageAdmin` does not
+  make this command fail. Point it at them explicitly, one at a time:
+
+  ```bash
+  make iam-check ENV=dev STRICT=1 TF_PRINCIPAL=user:someone@agency.ok.gov
+  ```
+
+- **See roles inherited from the organization or folder.** It reads the
+  *project* IAM policy, and an inherited binding does not appear there.
+  This is not hypothetical on these projects: the administrator who ran the
+  one-time setup successfully wrote the project IAM policy while holding no
+  project-level `projectIamAdmin` or `owner`, so that grant is inherited and
+  invisible to every check in this repo.
+
+For a whole-project statement, read the policy directly — which is also the
+artifact worth keeping as the record:
+
+```bash
+gcloud projects get-iam-policy owc-dpar-p --format=yaml
+```
 
 **The data-boundary assertions — run on every deploy:**
 
@@ -317,8 +346,23 @@ gcloud resource-manager org-policies describe constraints/iam.disableServiceAcco
 **Everything above is verified on `owc-dpar-d`. None of it is yet true of
 `owc-dpar-p`, which has not been built.**
 
-Dev proves the eleven roles are *sufficient* — it deploys end to end with
-nothing more. It does not prove they are *obtainable* on a production
+**Dev is strong evidence, and worth stating precisely.** Measured from
+`owc-dpar-d`'s IAM policy on 2026-09-30, `sa-owc-dpar-d-deploy-1` holds all
+eleven roles and **nothing else**, and every one of the six forbidden roles
+is absent from it. Both pipelines deploy and run on exactly that set. The
+claim is therefore not "about eleven roles" but "these eleven, no more,
+demonstrably run the platform."
+
+Five of the six forbidden roles appear against no principal in that
+project's policy, including `projectIamAdmin` and `serviceAccountAdmin` —
+with the inheritance caveat [above](#verification). The
+exception is `roles/serviceusage.serviceUsageAdmin`, still held by two human
+accounts that predate the split —
+[OPEN-ITEMS item 2](OPEN-ITEMS.md#dev-baseline) has the detail and the
+reasoning. **Prod should never create that situation**, which costs nothing
+to get right on a project being built from nothing.
+
+What dev does not prove is that the set is *obtainable* on a production
 project, where the review may be stricter and may be done by someone else.
 
 Only `roles/run.admin` has a fallback. **The other ten do not.** If a

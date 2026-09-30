@@ -297,7 +297,7 @@ Note the privilege moved in the right direction: **less** for the unattended
 pipeline, slightly more read scope for a read-only BI identity.
 
 **What would bring the layer back.** Authorized views exist to *withhold*
-columns or rows. If [open item 13](OPEN-ITEMS.md#license-audience) — whether the Lightcast
+columns or rows. If [open item 12](OPEN-ITEMS.md#license-audience) — whether the Lightcast
 license permits these derived tables for the intended PowerBI audience — turns
 out to restrict specific fields, a filtering view is the correct mechanism.
 Re-adding it is additive and needs no change to the `pipeline` module. A
@@ -336,10 +336,11 @@ owcdata rollback dim_area --run-id <run_id>    # a specific run
 ```
 
 That is an ordinary BigQuery load job, so `dataEditor` + `jobUser` is the
-entire permission set either pipeline needs. **There are no custom roles in
-this project**, and every role named anywhere in this repo is a predefined
-Google role — which is what makes the role set reviewable by someone who has
-never seen the code.
+entire permission set either pipeline needs. **This repo defines and grants
+no custom roles** — every role it names is a predefined Google role, which is
+what makes the set reviewable by someone who has never seen the code. An
+organization may attach custom roles of its own to the project; those are
+the organization's and outside this design.
 
 > **If that ever stops being true, amend this ADR in the same commit.** The
 > `roles/run.developer` fallback documented in `modules/pipeline/job.tf`
