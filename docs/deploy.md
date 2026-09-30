@@ -605,6 +605,27 @@ destroy the local copy. Then in the workspace: **semantic model → Settings →
 Data source credentials → Edit credentials**, authentication method
 **Service Account**, paste the file contents.
 
+### If a refresh fails on `bigquery.readsessions.create`
+
+```text
+ADBC: Status(StatusCode="PermissionDenied", Detail="request failed: the user
+does not have 'bigquery.readsessions.create' permission for 'projects/<p>'")
+```
+
+The credential is fine — it authenticated. The connector reads through the
+BigQuery Storage Read API, and that permission is **project-scoped**, so it
+cannot be granted on `owc_marts`. It is in the setup script's grants now, so
+a project set up after this is unaffected; one set up before needs an admin
+to run:
+
+```bash
+gcloud projects add-iam-policy-binding <project> --member serviceAccount:sa-<prefix>-powerbi-1@<project>.iam.gserviceaccount.com --role roles/bigquery.readSessionUser --condition=None
+```
+
+It does not let PowerBI read anything new — a read session still needs
+`bigquery.tables.getData` on the table, which this account holds on
+`owc_marts` only.
+
 ### It needs a permission the deploy account does not have
 
 `iam.serviceAccountKeys.create` is not in the eleven roles, and the deploy

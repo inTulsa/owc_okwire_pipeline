@@ -189,8 +189,15 @@ The alternative, per-user OAuth, breaks scheduled refresh the day that person
 leaves.
 
 **Decision:** one key for `sa-<name_prefix>-powerbi-1`, scoped to `bigquery.dataViewer`
-on `owc_marts` **only** plus `bigquery.jobUser` — read-only, and nothing on
+on `owc_marts` **only**, plus `bigquery.jobUser` and
+`bigquery.readSessionUser` at project level — read-only, and nothing on
 `owc_staging` (unvalidated data) or `owc_ops` (the run manifest).
+
+`readSessionUser` is there because the connector reads through the BigQuery
+Storage Read API, and `bigquery.readsessions.create` is project-scoped —
+there is no dataset-level equivalent. It does not widen the read surface:
+opening a read session still requires `bigquery.tables.getData` on the
+table, which this account has on `owc_marts` alone.
 
 **Not rotated on a schedule.** This said "rotate annually" and that was
 aspirational — nothing in this repo can enforce it, and a control written

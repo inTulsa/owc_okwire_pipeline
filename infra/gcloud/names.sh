@@ -159,6 +159,17 @@ RUNTIME_PROJECT_GRANTS=(
   # exist before the first build.
   "build|roles/storage.objectViewer"
   "powerbi|roles/bigquery.jobUser"
+  # The BigQuery Storage Read API, which PowerBI's connector uses for bulk
+  # extraction. bigquery.readsessions.create is NOT in bigquery.jobUser and
+  # is project-scoped only — it cannot be granted on a dataset. Without it a
+  # refresh fails with PermissionDenied on 'bigquery.readsessions.create',
+  # after the credential has already authenticated successfully.
+  #
+  # It does not widen what PowerBI can read. Creating a read session still
+  # requires bigquery.tables.getData on the table, which powerbi holds on
+  # owc_marts alone — so owc_staging and owc_ops stay unreachable and
+  # verify-separation's assertions still hold.
+  "powerbi|roles/bigquery.readSessionUser"
   "freshness|roles/bigquery.jobUser"
 )
 
