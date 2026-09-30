@@ -191,7 +191,21 @@ leaves.
 **Decision:** one key for `sa-<name_prefix>-powerbi-1`, scoped to `bigquery.dataViewer`
 on `owc_marts` **only** plus `bigquery.jobUser` — read-only, and nothing on
 `owc_staging` (unvalidated data) or `owc_ops` (the run manifest).
-Rotate annually.
+
+**Not rotated on a schedule.** This said "rotate annually" and that was
+aspirational — nothing in this repo can enforce it, and a control written
+down but never performed is worse than one that was never claimed. The
+accepted position is that the key lives until there is a reason to replace
+it. What makes that defensible is the scope, not the lifetime: it can read
+one dataset of published data and cannot write, cannot reach the raw
+bucket, cannot see `owc_ops` or `owc_staging`, and `make verify-separation`
+asserts each of those on every deploy.
+
+**Replace it when** someone with access to it leaves, it is pasted
+somewhere it should not be, or the organization turns on
+`constraints/iam.serviceAccountKeyExpiryHours` — which would expire it
+whatever this document says. `make powerbi-key` handles the rotation
+sequence: mint, repoint PowerBI, confirm a refresh, delete the old key.
 
 Decided and written down here rather than discovered at go-live.
 

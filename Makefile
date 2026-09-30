@@ -796,7 +796,8 @@ up: ## Stand $(ENV) up end to end, after gcloud-admin has run once
 # workspace, because a scheduled refresh has nobody to answer the prompt.
 #
 # So: one key, for sa-<prefix>-powerbi-1, which holds bigquery.jobUser plus
-# dataViewer on owc_marts and nothing else. Rotate annually.
+# dataViewer on owc_marts and nothing else. Not rotated on a schedule —
+# see ADR-006 for when to replace it.
 #
 # Minting needs iam.serviceAccountKeys.create on that account, which is NOT
 # in the deploy roles by default — see docs/deploy.md#powerbi.
@@ -836,7 +837,8 @@ powerbi-key: auth-check ## Mint the PowerBI service-account key (ADR-006). KEY_O
 	@echo "   2. Run a refresh and confirm it succeeds."
 	@echo "   3. Delete the local copy. It is a bearer credential for owc_marts:"
 	@echo "         shred -u $(KEY_OUT)   # or: rm -P $(KEY_OUT)"
-	@echo "   4. Set a reminder to rotate in 12 months (ADR-006)."
+	@echo "   4. No scheduled rotation (ADR-006). Replace it if someone with"
+	@echo "      access leaves, if it leaks, or if key expiry is enforced."
 	@echo ""
 	@echo "   To download it off Cloud Shell first:  cloudshell download $(KEY_OUT)"
 	@echo ""

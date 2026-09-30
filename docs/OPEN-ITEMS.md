@@ -282,7 +282,14 @@ key. There is no third option, and per-user OAuth breaks scheduled refresh the
 day that person leaves. One tightly-scoped key for `sa-<name_prefix>-powerbi-1` is the
 accepted answer — see
 [ADR-006](architecture.md#adr-006-one-tightly-scoped-json-key-for-powerbi).
-**Set a rotation reminder.**
+
+**Deliberately not rotated on a schedule.** The key lives until there is a
+reason to replace it: someone with access leaves, it leaks, or the
+organization enforces `constraints/iam.serviceAccountKeyExpiryHours`, which
+would expire it regardless. What carries the risk is its scope — read-only
+on `owc_marts` alone, asserted by `make verify-separation` on every deploy —
+not its age. `make powerbi-key ENV=<env>` does the replacement safely when
+one of those things happens.
 
 **Cloud NAT is not built.** If `oklahoma.gov` ever blocks Cloud Run's shared
 egress ranges, the fix is Cloud NAT with a static IP. Not built now, noted here
