@@ -176,7 +176,8 @@ to these types of accounts with a single-factor password."
 **Decision:** no auth migration. The password moves to Secret Manager; that is
 the only change, which matches "works the same way it currently does."
 
-**Outstanding (open item 3):** confirm `EMSIBG-READER_TULSA_FOR_YOU` is a true
+**Outstanding** ([the reader-account confirmation](OPEN-ITEMS.md#reader-account)):
+confirm `EMSIBG-READER_TULSA_FOR_YOU` is a true
 reader account and not a regular account holding a share. Run
 `SELECT CURRENT_ACCOUNT()`, or ask Lightcast. If it is the latter the exemption
 lapses and key-pair auth becomes time-sensitive.
@@ -297,7 +298,7 @@ Note the privilege moved in the right direction: **less** for the unattended
 pipeline, slightly more read scope for a read-only BI identity.
 
 **What would bring the layer back.** Authorized views exist to *withhold*
-columns or rows. If [open item 12](OPEN-ITEMS.md#license-audience) — whether the Lightcast
+columns or rows. If [the license-audience question](OPEN-ITEMS.md#license-audience) — whether the Lightcast
 license permits these derived tables for the intended PowerBI audience — turns
 out to restrict specific fields, a filtering view is the correct mechanism.
 Re-adding it is additive and needs no change to the `pipeline` module. A

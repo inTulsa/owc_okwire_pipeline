@@ -311,7 +311,7 @@ silent from this repo's side, only from Google's.
 > has been written and reviewed but not run. Treat the paragraphs above as
 > the design, not as a tested procedure, and budget time accordingly the
 > first time an environment needs it. Tracked as
-> [OPEN-ITEMS item 7](OPEN-ITEMS.md#scheduler-fallback).
+> [OPEN-ITEMS: the scheduler-IAM fallback](OPEN-ITEMS.md#scheduler-fallback).
 
 ## 3. Check the environment
 
@@ -369,17 +369,42 @@ the bottom tells you which of the two paths below you are on.
 The normal case, and the only step anyone else touches. Pick whichever the
 admin will actually agree to — all three produce the same result.
 
-First, do your own half. It needs no elevated rights and it keeps their
-file down to identity work alone:
+### First, find out whether you can do your own half {#prep}
 
 ```bash
 make prep ENV=dev
 ```
 
-Three steps: the 16 API enables, the BigQuery Data Transfer agent, and the
-two GCS buckets. All things your account can already do, so there is no
-reason for them to be in a request to somebody else — and a bucket creation
-sitting in the middle of an IAM request is a question, which costs days.
+Three steps: the 16 API enables, the BigQuery Data Transfer and Cloud
+Scheduler service agents, and the two GCS buckets. Running it keeps the
+admin's file down to identity work alone — and a bucket creation sitting in
+the middle of an IAM request is a question, which costs days.
+
+> **This needs elevated rights, despite being the "operator half".**
+> Enabling an API needs `serviceusage.services.enable`, which comes from
+> `roles/serviceusage.serviceUsageAdmin`; creating the buckets needs
+> `roles/storage.admin`. An operator set up the way this repo intends holds
+> neither — they hold one `tokenCreator` binding. So `make prep` is an
+> optimization available to whoever happens to have those rights, **not a
+> step every operator can run.** `make access-check` tells you which you are.
+
+**If you cannot run it, the admin's file has to cover those three steps too**,
+or the APIs and buckets are never created and the first `make up` fails a long
+way from the cause. Two ways:
+
+- **They run `make gcloud-admin`** from a clone — it does the APIs, the
+  agents and the buckets as well as the identities. Nothing is missed.
+- **Or generate the full standalone file rather than the identity-only one.**
+  `make omes-script` emits `--part admin`, which deliberately omits the three
+  operator steps. For an operator with no elevated rights, ask for all seven:
+
+  ```bash
+  infra/gcloud/04-standalone.sh owc-dpar-p --prefix owc-dpar-p --principal user:THE-PERSON@agency.ok.gov --location US --region us-central1 --part all > owc-setup.sh
+  ```
+
+**This is the likeliest silent failure in the whole procedure**, because both
+halves report success: the admin's identity-only file does exactly what it
+says, and the operator never learns there were three more steps.
 
 ### They run one file (no repo, no roles granted to you)
 
@@ -771,7 +796,7 @@ mistake costs.
 | **Which roles prod will actually grant** | The eleven roles have only ever been granted on dev. See [below](#prod-role-set) — this is the one that can stop the deploy dead. |
 | **`snowflake_user` is a placeholder** | `envs/prod/terraform.tfvars` ships `REPLACE_ME@…` and the plan rejects it on purpose. Put the real reader account in first. |
 | **Who deploys prod** | The privileged step runs **once** per project. Decide who gets `tokenCreator` on `sa-owc-dpar-p-deploy-1` before it runs — see [the deploy identity](#deploy-identity). Adding someone later is one binding; taking resource-admin roles back off a person is not. |
-| **Terraform state hosting** | [OPEN-ITEMS item 5](OPEN-ITEMS.md#state-hosting). Cheaper to answer now than to migrate state later. |
+| **Terraform state hosting** | [OPEN-ITEMS: state hosting](OPEN-ITEMS.md#state-hosting). Cheaper to answer now than to migrate state later. |
 
 `owc-dpar-p` has none of its seven service accounts yet, so the privileged
 step there creates everything from nothing.

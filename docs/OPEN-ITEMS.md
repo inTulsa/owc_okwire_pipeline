@@ -7,22 +7,74 @@ worry rather than a task.
 Solved problems are not listed. If something is described here, it is still
 true as of **2026-09-30**.
 
+---
+
+## Delivery status: the documentation is not final {#delivery-status}
+
+**This documentation set is complete in draft and not yet verified.** It
+should not be signed off as a deliverable until the items below close.
+
+The reason is specific rather than procedural. The central claim these
+documents make is:
+
+> Someone who was not present when `owc-dpar-d` was built can stand up
+> `owc-dpar-p` from [`deploy.md`](deploy.md) alone.
+
+**Nobody has tested that claim.** `deploy.md` has been reconciled against
+what actually happened on dev, including the eight things that went wrong
+and were not predicted — but a procedure is verified by being followed, not
+by being reviewed. Prod is the first and only real test of it.
+
+### What has to close first
+
+| Gate | Why it blocks sign-off |
+|---|---|
+| [Prod role set agreed](#prod-role-set) | If a role is refused, the design changes and so do the documents |
+| [Deploy identity on prod](#deploy-identity) | Until it exists, the identity model is described rather than demonstrated on prod |
+| [`serviceUsageAdmin` removed](#remove-serviceusageadmin) | The no-admin-roles claim is true of the deploy identity, not of the project |
+| [The `omes-script` gap](#omes-script-gap) | The documented admin path is incomplete for the operator it targets |
+| [`snowflake_user` set](#snowflake-user) | Prod cannot deploy without it |
+| [Dev schedulers paused](#pause-dev) | Both environments would bill Lightcast twice |
+| [State hosting answered](#state-hosting) | Cheaper before prod's first apply than after |
+
+Then **build prod from `deploy.md`, keeping notes**, and fold every
+correction back before sign-off. A step that needed improvising is a
+documentation defect, not operator skill.
+
+Everything under [known gaps](#known-gaps) and
+[decisions that need someone outside this repo](#external-decisions) is
+**expected to stay open** in a delivered document. Each is a genuine decision
+with a named owner-type — that is what this list is for, and their being open
+does not block delivery.
+
+### What is already verified
+
+- `make docs-check`, `shell-check`, `names-check` pass; `make validate`
+  reports 35 datasets.
+- Every command and cross-document link resolves to something that exists.
+- The IAM claims are measured against `owc-dpar-d`'s actual policy rather
+  than asserted — see [what dev's policy shows](#dev-baseline).
+- Both pipelines run end to end on dev, scheduler-started, 35 datasets
+  published.
+
 - [Before prod can be built](#before-prod)
   - [1. Agree the prod role set with the platform team](#prod-role-set)
   - [2. Create the deploy identity on `owc-dpar-p`](#deploy-identity)
-  - [3. `snowflake_user` in prod is a placeholder](#snowflake-user)
-  - [4. Pause dev's schedulers before prod goes live](#pause-dev)
-  - [5. Terraform state hosting](#state-hosting)
+  - [3. Remove `serviceUsageAdmin` from the developer account](#remove-serviceusageadmin)
+  - [4. `make omes-script` omits the APIs and the buckets](#omes-script-gap)
+  - [5. `snowflake_user` in prod is a placeholder](#snowflake-user)
+  - [6. Pause dev's schedulers before prod goes live](#pause-dev)
+  - [7. Terraform state hosting](#state-hosting)
 - [Known gaps in what is deployed](#known-gaps)
-  - [6. `monitoring.editor` lets the deploy identity enable APIs](#monitoring-editor)
-  - [7. The scheduler-IAM fallback has never been executed](#scheduler-fallback)
-  - [8. `make lock-check` is red](#lock-check)
+  - [8. `monitoring.editor` lets the deploy identity enable APIs](#monitoring-editor)
+  - [9. The scheduler-IAM fallback has never been executed](#scheduler-fallback)
+  - [10. `make lock-check` is red](#lock-check)
 - [Decisions that need someone outside this repo](#external-decisions)
-  - [9. Fill in the quarterly and yearly dataset lists](#dataset-groups)
-  - [10. Tell Lightcast before raising `parallelism` above 4](#parallelism)
-  - [11. Confirm the Snowflake account is a true reader account](#reader-account)
-  - [12. Confirm the Lightcast license permits this audience](#license-audience)
-  - [13. Move the enrollment repo in, preserving history](#enrollment-history)
+  - [11. Fill in the quarterly and yearly dataset lists](#dataset-groups)
+  - [12. Tell Lightcast before raising `parallelism` above 4](#parallelism)
+  - [13. Confirm the Snowflake account is a true reader account](#reader-account)
+  - [14. Confirm the Lightcast license permits this audience](#license-audience)
+  - [15. Move the enrollment repo in, preserving history](#enrollment-history)
 - [Also worth knowing](#also-worth-knowing)
 
 ---
@@ -79,7 +131,7 @@ prod's identity model is still to be created, which is the good case: there
 is no migration, and no human ever has to hold resource-admin roles there
 even temporarily.
 
-Run once, before anything else, after [item 1](#prod-role-set) is agreed:
+Run once, before anything else, after [the role set](#prod-role-set) is agreed:
 
 ```bash
 make gcloud-admin ENV=prod OPERATOR=group:THE-GROUP@agency.ok.gov
@@ -159,7 +211,95 @@ yet true of the project.
 
 ---
 
-## 3. `snowflake_user` in prod is a placeholder {#snowflake-user}
+## 3. Remove `serviceUsageAdmin` from the developer account {#remove-serviceusageadmin}
+
+**Owner:** an admin who can write the `owc-dpar-d` project IAM policy. The
+developer cannot remove their own binding — no human holds `projectIamAdmin`
+on this project, which is the design working correctly.
+
+`roles/serviceusage.serviceUsageAdmin` is one of the four roles the platform
+team named, and it is still on the developer account. **Removing it is safe**
+and should happen before prod, not after:
+
+```bash
+gcloud projects remove-iam-policy-binding owc-dpar-d --member user:THE-DEVELOPER@agency.ok.gov --role roles/serviceusage.serviceUsageAdmin --condition=None
+```
+
+Verify, naming the account explicitly — the default audits the deploy
+identity, not a person ([see the limits](#audit-limits)):
+
+```bash
+make iam-check ENV=dev STRICT=1 TF_PRINCIPAL=user:THE-DEVELOPER@agency.ok.gov
+```
+
+**Why it is safe.** Deploys run as `sa-owc-dpar-d-deploy-1`, which holds
+`serviceUsageConsumer`, and no Terraform resource enables an API. Dev's 16
+APIs are already enabled. On prod, `make gcloud-admin` enables them as part
+of the privileged step. Nothing in a deploy, a scheduled run or the runbook
+needs a human to hold this.
+
+**What it does cost.** That account can no longer run
+[`make prep`](deploy.md#prep), whose first step enables APIs. That is the
+correct outcome rather than a regression — `make prep` was never a step every
+operator could run — but it means prod's APIs and buckets must come from the
+admin's side. See [the `omes-script` gap](#omes-script-gap).
+
+**Why now rather than at the prod cutover.** Doing it on dev converts the
+prod role-set conversation from theory into evidence: a dev environment that
+keeps running with no human holding the role is the argument, and it is worth
+more the longer it has been true. It also keeps a permissions change out of
+the prod push.
+
+**Consequence of leaving it:** the property the whole split exists to achieve
+is true of the deploy identity and not of the project, and the platform
+team's original objection stands on its own terms.
+
+**The other roles are a separate conversation.** The developer account also
+holds ten resource-admin roles from the old model. Those are not in
+`TF_PRINCIPAL_FORBIDDEN_ROLES` and removing them is a bigger change with a
+handover in progress — see [what dev's policy shows](#dev-baseline).
+
+---
+
+## 4. `make omes-script` omits the APIs and the buckets {#omes-script-gap}
+
+**Owner:** whoever runs prod's privileged step. **Read this before, not
+after.**
+
+`make omes-script` generates the standalone file with `--part admin`: seven
+service accounts, their roles, `actAs`, and the operator's `tokenCreator`.
+It **does not** enable the 16 APIs, create the two service agents, or create
+the state and source buckets. Those three steps live in `--part operator`,
+which [`make prep`](deploy.md#prep) runs — and `make prep` needs
+`serviceUsageAdmin` plus `storage.admin`, which an operator set up the way
+this repo intends does not have.
+
+**So the documented "admin runs one file" path is incomplete for exactly the
+operator it was designed for.** Both halves report success. The admin's file
+does what it says; the operator never learns three steps were missing. The
+first symptom is a failure during `make up`, a long way from the cause.
+
+Pick one before prod's privileged step runs:
+
+- **The admin runs `make gcloud-admin` from a clone** — it covers all seven
+  steps. Simplest, and the path to prefer.
+- **Or generate all seven steps into the standalone file:**
+
+  ```bash
+  infra/gcloud/04-standalone.sh owc-dpar-p --prefix owc-dpar-p --principal user:THE-PERSON@agency.ok.gov --location US --region us-central1 --part all > owc-setup.sh
+  ```
+
+**Worth fixing in the Makefile** so the sharp edge is not documentation-only:
+`make omes-script` could take `PART=all`, or default to `all` whenever the
+operator cannot pass `access-check`. Not done here — it is a code change, and
+this pass is documentation.
+
+**Consequence:** prod's privileged step runs **once**. Discovering the gap
+afterwards means going back to the same admin a second time.
+
+---
+
+## 5. `snowflake_user` in prod is a placeholder {#snowflake-user}
 
 **Owner:** whoever holds the Lightcast reader-account credentials.
 
@@ -175,7 +315,7 @@ it is not a surprise.
 
 ---
 
-## 4. Pause dev's schedulers before prod goes live {#pause-dev}
+## 6. Pause dev's schedulers before prod goes live {#pause-dev}
 
 **Owner:** whoever runs the prod release.
 
@@ -229,7 +369,7 @@ receives, which is the kind of mistake that survives for months.
 
 ---
 
-## 5. Terraform state hosting {#state-hosting}
+## 7. Terraform state hosting {#state-hosting}
 
 **Owner:** the OMES platform team.
 
@@ -250,7 +390,7 @@ prod's first apply than to migrate state afterwards.
 
 ## Known gaps in what is deployed {#known-gaps}
 
-## 6. `monitoring.editor` lets the deploy identity enable APIs {#monitoring-editor}
+## 8. `monitoring.editor` lets the deploy identity enable APIs {#monitoring-editor}
 
 **Owner:** an admin, plus a verification pass. Not urgent.
 
@@ -286,12 +426,12 @@ both carry what the module needs and that neither carries
 **Consequence:** a reviewer who checks the claim finds it overstated. Worth
 raising proactively: the ask was for the deploy principal not to hold
 `serviceUsageAdmin`, and it does not — but the capability arrived through a
-different door. Fold this into [item 1](#prod-role-set) rather than raising
+different door. Fold this into [the prod role set](#prod-role-set) rather than raising
 it twice.
 
 ---
 
-## 7. The scheduler-IAM fallback has never been executed {#scheduler-fallback}
+## 9. The scheduler-IAM fallback has never been executed {#scheduler-fallback}
 
 **Owner:** whoever is willing to spend a throwaway project on it.
 
@@ -313,7 +453,7 @@ it deliberately instead.
 
 ---
 
-## 8. `make lock-check` is red {#lock-check}
+## 10. `make lock-check` is red {#lock-check}
 
 **Owner:** whoever does the next dependency pass. **Not during a release.**
 
@@ -338,7 +478,7 @@ else.
 
 ## Decisions that need someone outside this repo {#external-decisions}
 
-## 9. Fill in the quarterly and yearly dataset lists {#dataset-groups}
+## 11. Fill in the quarterly and yearly dataset lists {#dataset-groups}
 
 **Owner:** someone who knows Lightcast's actual refresh cycles per dataset.
 
@@ -364,7 +504,7 @@ benefit.
 
 ---
 
-## 10. Tell Lightcast before raising `parallelism` above 4 {#parallelism}
+## 12. Tell Lightcast before raising `parallelism` above 4 {#parallelism}
 
 **Owner:** a conversation with Lightcast, before the change.
 
@@ -390,7 +530,7 @@ is the only evidence there is.
 
 ---
 
-## 11. Confirm the Snowflake account is a true reader account {#reader-account}
+## 13. Confirm the Snowflake account is a true reader account {#reader-account}
 
 **Owner:** Lightcast, or one query.
 
@@ -415,7 +555,7 @@ isolated behind `connect()`. The risk is the deadline, not the work.
 
 ---
 
-## 12. Confirm the Lightcast license permits this audience {#license-audience}
+## 14. Confirm the Lightcast license permits this audience {#license-audience}
 
 **Owner:** whoever holds the Lightcast license agreement.
 
@@ -435,7 +575,7 @@ cannot enforce.
 
 ---
 
-## 13. Move the enrollment repo in, preserving history {#enrollment-history}
+## 15. Move the enrollment repo in, preserving history {#enrollment-history}
 
 **Owner:** needs an ownership conversation with the script's author.
 

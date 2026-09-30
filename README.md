@@ -18,7 +18,13 @@ live in [`pipelines.yml`](pipelines.yml).
 > deploy. What is not settled is prod: the privileged setup has never run
 > there, and the eleven roles the deploy account needs have only ever been
 > granted on dev. **Agree that role set before prod's first apply** —
-> [`OPEN-ITEMS.md` item 1](docs/OPEN-ITEMS.md#prod-role-set).
+> [`OPEN-ITEMS.md`: agree the prod role set](docs/OPEN-ITEMS.md#prod-role-set).
+>
+> **These documents are a verified draft, not a signed-off deliverable.**
+> Every command and link resolves and the IAM claims are measured rather than
+> asserted — but the claim that someone who was not here can build prod from
+> [`deploy.md`](docs/deploy.md) alone is untested until someone does it.
+> [What has to close first](docs/OPEN-ITEMS.md#delivery-status).
 
 ## Start here
 

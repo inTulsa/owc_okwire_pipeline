@@ -738,10 +738,23 @@ bq query --use_legacy_sql=false --project_id=$PROJECT \
  GROUP BY user_email ORDER BY gib_billed DESC'
 ```
 
-**Fix.** If `sa-*-powerbi-1` is the top consumer, PowerBI is on DirectQuery and
-is billing a scan per slicer click. Either move the model to Import mode or
-set a **custom daily query quota** on that service account. See open item 5 —
-Import mode on a Pro workspace caps a semantic model at 1 GB compressed.
+**Fix.** `sa-*-powerbi-1` should **not** be the top consumer. PowerBI runs
+**Import** on Premium capacity, so BigQuery sees one full read per scheduled
+refresh — a predictable cost that scales with refresh frequency, not with how
+many people are clicking.
+
+If it is the top consumer, one of two things changed:
+
+- **A model or report was switched to DirectQuery**, which bills a scan per
+  slicer click. Check the semantic model's storage mode before assuming a
+  runaway refresh schedule.
+- **Refreshes are running far more often than intended.** Check the refresh
+  schedule on the semantic model.
+
+Either way, a **custom daily query quota** on that service account caps the
+damage while you find out. Note the 1 GB semantic-model cap that makes Import
+painful applies to **Pro** workspaces; on Premium the ceiling depends on the
+capacity SKU, so moving *off* Import is rarely the right answer here.
 
 ---
 

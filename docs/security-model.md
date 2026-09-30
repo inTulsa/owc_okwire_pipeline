@@ -114,7 +114,7 @@ way it went, and prints the two follow-up commands the fallback needs. The
 trade-off is in [`deploy.md`](deploy.md#run-admin-decision).
 
 **That fallback has never been executed** — see
-[OPEN-ITEMS item 7](OPEN-ITEMS.md#scheduler-fallback). It is reviewed code,
+[OPEN-ITEMS: the scheduler-IAM fallback](OPEN-ITEMS.md#scheduler-fallback). It is reviewed code,
 not tested code.
 
 ---
@@ -258,7 +258,7 @@ overstated.
 **The narrower replacement** is `roles/monitoring.alertPolicyEditor` +
 `roles/monitoring.notificationChannelEditor`, which together cover the six
 alert policies and one notification channel that Terraform actually creates.
-Tracked as [OPEN-ITEMS item 6](OPEN-ITEMS.md#monitoring-editor). Worth
+Tracked as [OPEN-ITEMS: `monitoring.editor`](OPEN-ITEMS.md#monitoring-editor). Worth
 raising directly: the request was that the deploy principal not hold
 `serviceUsageAdmin`, and it does not — but an equivalent capability arrived
 through a different door.
@@ -358,7 +358,7 @@ project's policy, including `projectIamAdmin` and `serviceAccountAdmin` —
 with the inheritance caveat [above](#verification). The
 exception is `roles/serviceusage.serviceUsageAdmin`, still held by two human
 accounts that predate the split —
-[OPEN-ITEMS item 2](OPEN-ITEMS.md#dev-baseline) has the detail and the
+[OPEN-ITEMS: what dev's policy shows](OPEN-ITEMS.md#dev-baseline) has the detail and the
 reasoning. **Prod should never create that situation**, which costs nothing
 to get right on a project being built from nothing.
 
@@ -377,7 +377,7 @@ step runs:**
 make gcloud-admin-dry-run ENV=prod
 ```
 
-Tracked as [OPEN-ITEMS item 1](OPEN-ITEMS.md#prod-role-set). Deciding it in
+Tracked as [OPEN-ITEMS: agree the prod role set](OPEN-ITEMS.md#prod-role-set). Deciding it in
 advance costs an email. Discovering it mid-deploy costs a second round-trip
 with a half-built project in between.
 

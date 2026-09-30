@@ -145,7 +145,7 @@ LIMIT N
 **Dev and prod share one Snowflake reader account.** A local run bills
 Lightcast's warehouse, against the same `TULSA_FOR_YOU_WH`. Always use
 `--limit` unless you specifically need a full extract, and prefer off-peak.
-See open item 4.
+See [the parallelism open item](OPEN-ITEMS.md#parallelism).
 
 **The enrollment cache directory is deliberately not `data/`.** It defaults to
 `.owcdata-local/enrollment/data`, separate from the GCS-backed production
