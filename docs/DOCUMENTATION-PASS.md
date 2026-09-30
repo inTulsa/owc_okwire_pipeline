@@ -183,9 +183,10 @@ temporary.** It is commented as such, and dev's lightcast scheduler fires
 `0 6 1 * *`. The moment prod is live, both environments run the same 35
 Snowflake queries at the same minute and bill Lightcast twice. **Revert it
 as the first step of the migration** — see
-[the release section](#task-6-the-dev-to-prod-release). `make preflight`
-now refuses a prod apply while it is `false`, so the failure mode is a
-refusal rather than a duplicated bill.
+[the release section](#task-6-the-dev-to-prod-release). Every dev apply
+states that the schedulers are unpaused while they are, and
+`CHECK_OTHER_ENV=dev` is available on a prod apply for anyone who wants the
+cross-check — but the environments are otherwise independent by design.
 
 **3. `snowflake_user` in `envs/prod/terraform.tfvars` is `REPLACE_ME@`.**
 The plan rejects it on purpose.
@@ -249,13 +250,32 @@ cd ~/owc && eval "$(make -s env-exports ENV=dev)"
 gcloud scheduler jobs list --location $REGION --project $PROJECT --format="table(name,state,schedule)"
 ```
 
-Only then build prod. `make preflight` refuses a `ENV=prod` apply while
-dev's tfvars still says `false`, so this is enforced rather than remembered
-— `ALLOW_BOTH_LIVE=1` overrides it if that is ever genuinely wanted.
+Only then build prod.
+
+**The two environments are deliberately not coupled.** A prod deploy does
+not read dev's configuration and must not start doing so — they are separate
+projects, and a checkout pointed at a test project (see the header of
+`envs/dev/terraform.tfvars`) would make any such check meaningless.
+
+What exists instead:
+
+- **A notice on every apply**, from that environment's own tfvars: `make
+  tf-apply ENV=dev` states that the dev schedulers are unpaused, for as long
+  as they are. No other environment is consulted.
+- **An opt-in cross-check**, off by default, for exactly this moment:
+
+  ```bash
+  make tf-apply ENV=prod CHECK_OTHER_ENV=dev
+  ```
+
+  Naming the other environment is the whole interface — it refuses if that
+  environment's schedulers are live, and otherwise says so and continues.
+  Nothing consults another environment unless asked.
 
 Leaving dev unpaused does not break anything visibly. It doubles a bill
 somebody else receives, which is the kind of mistake that survives for
-months.
+months — so the reminder is worth having, and the coupling is not worth
+making permanent.
 
 ### Then the merge
 
@@ -307,7 +327,8 @@ Do not do these in the documentation pass:
 - Someone who was not in this session can build `owc-dpar-p` from
   `deploy.md` alone, including the eight surprises in task 3.
 - The README banner describes the real current blocker.
-- The migration sequence says to pause dev **first**, and `make preflight
-  ENV=prod` has been confirmed to refuse while dev is unpaused.
+- The migration sequence says to pause dev **first**, and the opt-in
+  `CHECK_OTHER_ENV=dev` is documented where someone doing the release will
+  see it. No environment gates another by default.
 - **This file is deleted**, and anything in it that is still true lives in
   `OPEN-ITEMS.md`, `deploy.md`, `gcp-reference.md` or the runbook.

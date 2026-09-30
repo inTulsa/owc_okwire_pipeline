@@ -472,37 +472,47 @@ verify-separation: auth-check ## Check each identity can reach only what it shou
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@scripts/verify-separation.sh $(PROJECT) $(NAME_PREFIX) $(REGION)
 
-preflight: auth-check ## Check the Snowflake secret has a version, and that dev is paused before a prod apply
+preflight: auth-check ## Check the Snowflake secret has a version. CHECK_OTHER_ENV=<env> also refuses if that env's schedulers are live
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@if [ -n "$(SKIP_PREFLIGHT)" ]; then echo ">> preflight skipped"; exit 0; fi
-	@# Two live environments read the same pipelines.yml, so they fire the
-	@# same 35 Snowflake queries at the same minute and bill Lightcast twice
-	@# — on someone else's warehouse, where we would not see the cost. dev
-	@# was unpaused deliberately for testing; this is the reminder that the
-	@# testing window closes when prod goes live, and it fires at the only
-	@# moment it matters rather than hoping a document was read.
-	@if [ "$(ENV)" = "prod" ] && grep -qE '^[[:space:]]*schedulers_paused[[:space:]]*=[[:space:]]*false' infra/terraform/envs/dev/terraform.tfvars 2>/dev/null; then \
-	  echo ""; \
-	  echo "REFUSING: the dev schedulers are still running."; \
-	  echo ""; \
-	  echo "  infra/terraform/envs/dev/terraform.tfvars has"; \
-	  echo "      schedulers_paused = false"; \
-	  echo ""; \
-	  echo "  Prod runs its schedulers unpaused by design. With dev unpaused too,"; \
-	  echo "  both environments fire the same schedule from the same pipelines.yml"; \
-	  echo "  — 35 Snowflake queries at 06:00 on the 1st, twice, billed to"; \
-	  echo "  the Lightcast warehouse, and contending for TULSA_FOR_YOU_WH."; \
-	  echo ""; \
-	  echo "  Pause dev first:"; \
-	  echo "      set schedulers_paused = true in envs/dev/terraform.tfvars"; \
-	  echo "      make tf-apply ENV=dev TF_ARGS=\"-var=image_digest=<digest>\""; \
-	  echo ""; \
-	  echo "  Then re-run this. To proceed anyway, deliberately:"; \
-	  echo "      make tf-apply ENV=prod ALLOW_BOTH_LIVE=1 ..."; \
-	  echo ""; \
-	  [ -n "$(ALLOW_BOTH_LIVE)" ] || exit 1; \
-	  echo "  ALLOW_BOTH_LIVE set — continuing."; \
-	  echo ""; \
+	@# A notice about THIS environment, read from THIS environment's own
+	@# tfvars. The two environments are separate projects and a deploy to one
+	@# must not read the other's configuration — an earlier version of this
+	@# refused a prod apply based on the dev tfvars, which coupled them in
+	@# the deploy path and would misfire on a branch pointed at a test
+	@# project.
+	@if grep -qE '^[[:space:]]*schedulers_paused[[:space:]]*=[[:space:]]*false' $(TFVARS) 2>/dev/null; then \
+	  echo ">> note: the $(ENV) schedulers are UNPAUSED (schedulers_paused = false)."; \
+	  echo "   Deliberate, and worth restating on every apply while it lasts: any other"; \
+	  echo "   environment reading the same pipelines.yml fires the same schedule at the"; \
+	  echo "   same minute, and the Lightcast warehouse is billed twice."; \
+	fi
+	@# OPT-IN cross-environment check. OFF by default, because one project
+	@# should not gate another. Name the other environment when you want it,
+	@# which is the dev-to-prod migration and nothing else:
+	@#   make tf-apply ENV=prod CHECK_OTHER_ENV=dev
+	@if [ -n "$(CHECK_OTHER_ENV)" ]; then \
+	  other="infra/terraform/envs/$(CHECK_OTHER_ENV)/terraform.tfvars"; \
+	  if [ ! -f "$$other" ]; then \
+	    echo "CHECK_OTHER_ENV=$(CHECK_OTHER_ENV): no such file $$other" >&2; exit 1; \
+	  fi; \
+	  if grep -qE '^[[:space:]]*schedulers_paused[[:space:]]*=[[:space:]]*false' "$$other" 2>/dev/null; then \
+	    echo ""; \
+	    echo "REFUSING: you asked to check $(CHECK_OTHER_ENV), and its schedulers are live."; \
+	    echo ""; \
+	    echo "  $$other has schedulers_paused = false"; \
+	    echo ""; \
+	    echo "  Both environments would fire the same pipelines.yml schedule at the same"; \
+	    echo "  minute — 35 Snowflake queries twice, on a warehouse whose bill is not"; \
+	    echo "  ours to see, contending for TULSA_FOR_YOU_WH."; \
+	    echo ""; \
+	    echo "  Pause it, then re-run:"; \
+	    echo "      set schedulers_paused = true in $$other"; \
+	    echo "      make tf-apply ENV=$(CHECK_OTHER_ENV)"; \
+	    echo ""; \
+	    exit 1; \
+	  fi; \
+	  echo ">> $(CHECK_OTHER_ENV) schedulers are paused — no schedule collision"; \
 	fi
 	@if ! gcloud secrets describe $(SECRET_NAME) --project $(PROJECT) >/dev/null 2>&1; then \
 	  echo ""; \
