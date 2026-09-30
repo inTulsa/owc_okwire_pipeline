@@ -1,14 +1,16 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: 
+-- Description:     Builds the completions fact table: total postsecondary completions for the
+--                   current year by area, program, institution, and award level.
 --
--- Author:          Nile Dixon
 -- Date:            2025-11-05
 --
 -- Notes:
--- 
---
+-- Source: LIGHTCAST.TULSA_FOR_YOU.DAT_COMPLETIONS_DEMOGRAPHICS, left joined to DIM_PROGRAMID
+-- (filtered to LEVEL = 3, the detailed program level) and DIM_UNITID (for AREAID).
+-- Filtered to AWLEVELID 3, 5, 7, 9, 11 (Associate's through Doctoral) and to RACEID = 0 /
+-- GENDERID = 0 (all-race, all-gender totals) to avoid double counting demographic breakouts.
 --
 ---------------------------------------------------------------------------------------------------
 */

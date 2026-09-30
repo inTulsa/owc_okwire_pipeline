@@ -1,14 +1,14 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: 
+-- Description:     Lagged (prior-year) counterpart to fact_completions, used for year-over-year
+--                   comparisons.
 --
--- Author:          Nile Dixon
 -- Date:            2025-11-05
 --
 -- Notes:
--- 
---
+-- Identical to fact_completions, except YEAR is shifted forward by 1 (YEAR + 1) so each row
+-- lines up with the following year's fact_completions row when joined on YEAR/AREAID/etc.
 --
 ---------------------------------------------------------------------------------------------------
 */

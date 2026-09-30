@@ -1,3 +1,18 @@
+/*
+---------------------------------------------------------------------------------------------------
+--
+-- Description:     Lagged (prior-year) counterpart to fact_emp, used for year-over-year
+--                   comparisons.
+--
+-- Date:            2025-11-05
+--
+-- Notes:
+-- Identical to fact_emp, except YEAR is shifted forward by 1 (YEAR + 1) in occ_totals,
+-- staffing_by_occ_ind, and ind_totals, so each row lines up with the following year's
+-- fact_emp row when joined on YEAR/AREAID/etc.
+--
+---------------------------------------------------------------------------------------------------
+*/
 WITH
 params AS (
     SELECT YEAR(CURRENT_DATE())  AS max_year

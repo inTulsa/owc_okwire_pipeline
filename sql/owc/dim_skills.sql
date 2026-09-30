@@ -1,14 +1,15 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: 
+-- Description:     Builds the SKILLS dimension by extracting the distinct skills referenced
+--                   in job postings, along with their category and subcategory classification.
 --
--- Author:          Nile Dixon
 -- Date:            2025-10-29
 --
 -- Notes:
--- 
---
+-- Source: LIGHTCAST.TULSA_FOR_YOU.POSTINGS_SKILLS.
+-- SKILL_ID is the dimension's natural key. SKILL_CATEGORY/SKILL_SUBCATEGORY group skills into
+-- a taxonomy; IS_SOFTWARE flags skills that represent specific software tools.
 --
 ---------------------------------------------------------------------------------------------------
 */

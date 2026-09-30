@@ -1,14 +1,15 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: This SQL query retrieves the total number of opneings for a year by occupation. 
+-- Description:     Builds the job openings fact table: total annual openings by county and
+--                   occupation.
 --
--- Author:          Nile Dixon
 -- Date:            2025-12-02
 --
 -- Notes:
--- 
---
+-- Source: LIGHTCAST.TULSA_FOR_YOU.DAT_OCC, filtered to AREAID_TYPE = 'COUNTY' and
+-- CLASSID <> 4 (excludes self-employed, which have no reported openings). NUM_OPENINGS
+-- sums REPLACEMENTS, i.e. openings from worker turnover (does not include growth openings).
 --
 ---------------------------------------------------------------------------------------------------
 */

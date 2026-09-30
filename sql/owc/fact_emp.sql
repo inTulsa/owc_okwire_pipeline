@@ -1,3 +1,23 @@
+/*
+---------------------------------------------------------------------------------------------------
+--
+-- Description:     Builds the employment (EMP) fact table by year, area, industry, and
+--                   occupation, allocating occupation-level employment totals across
+--                   industries using normalized staffing-pattern weights.
+--
+-- Date:            2025-11-05
+--
+-- Notes:
+-- occ_totals holds the authoritative occupation employment totals (DAT_OCC, CLASSID 1+2+3,
+-- detailed SOC level 5). staffing_by_occ_ind/staffing_weights derive each occupation's
+-- normalized share of employment across industries from DAT_STAFFING (CLASSID = 1, NAICS
+-- level 6). mapped applies those weights to occ_totals to get OCC_EMPS by industry; unmapped
+-- carries forward occupations with no matching staffing pattern (INDID NULL) so their totals
+-- aren't silently dropped. ind_totals (DAT_IND, CLASSID 1+2+3, NAICS level 6) supplies
+-- NUM_EMPS as the industry total for context.
+--
+---------------------------------------------------------------------------------------------------
+*/
 WITH
 params AS (
     SELECT YEAR(CURRENT_DATE()) AS max_year

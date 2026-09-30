@@ -1,14 +1,15 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: 
+-- Description:     Builds an annual statewide (Oklahoma) job postings index, indexed to a
+--                   2015 baseline (2015 = 1.0).
 --
--- Author:          Nile Dixon
 -- Date:            2025-11-19
 --
 -- Notes:
--- 
---
+-- Source: LIGHTCAST.TULSA_FOR_YOU.POSTINGS, from 2015 onward, excluding postings from
+-- staffing companies (COMPANY_IS_STAFFING = False). The statewide yearly posting count is
+-- self-joined to the 2015 count (BASE_2015_JOBS) to compute JOBS_INDEX_TO_2015.
 --
 ---------------------------------------------------------------------------------------------------
 */

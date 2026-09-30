@@ -1,14 +1,17 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: 
+-- Description:     Builds the industry location quotient (LQ) fact table by year and county,
+--                   comparing each county's industry employment concentration to the
+--                   statewide (Oklahoma) concentration.
 --
--- Author:          Nile Dixon
 -- Date:            2025-11-19
 --
 -- Notes:
--- 
---
+-- Source: LIGHTCAST.TULSA_FOR_YOU.DAT_STAFFING. INDID is truncated to 5 digits (industry
+-- subsector level). County and state industry concentration are each computed as
+-- industry EMP / total EMP for that area; LQ = county concentration / state concentration.
+-- An LQ above 1 indicates the industry is more concentrated locally than statewide.
 --
 ---------------------------------------------------------------------------------------------------
 */

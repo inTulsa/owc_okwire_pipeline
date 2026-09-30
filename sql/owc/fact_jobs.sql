@@ -17,12 +17,12 @@
     - MIN_EDULEVELS,
     - IS_INTERNSHIP
 --
--- Author:          Steven Vang
 -- Date:            2026-07-27
 --
 -- Notes:
--- 
---
+-- INDID is sourced from the industry crosswalk view (INDUSTRY_CROSSWALK_POSTINGS_TO_LC),
+-- which maps each posting's NAICS6 to a Lightcast bucket code, rather than using raw NAICS6
+-- directly.
 --
 ---------------------------------------------------------------------------------------------------
 */
@@ -32,8 +32,8 @@ SELECT
     QUARTER(P.POSTED) AS QUARTER_POSTED,  -- ADD quarterly; the past 3 months comparsions;
     MONTH(P.POSTED) AS MONTH_POSTED,      -- ADD monthly; the past 1 month comparsion
     P.COUNTY AS AREAID,
-    --NAICS6 AS INDID,                    -- STEVEN COMMENTED OUT
-    ICP.LC_BUCKET_INDID AS INDID,         -- STEVEN ADDED
+    --NAICS6 AS INDID,
+    ICP.LC_BUCKET_INDID AS INDID,
     P.SOC_5 AS OCCID,
     P.COMPANY,
     P.MIN_EDULEVELS,
@@ -47,9 +47,9 @@ SELECT
 FROM
     LIGHTCAST.TULSA_FOR_YOU.POSTINGS AS P
 LEFT JOIN
-    TULSA_FOR_YOU.VIEWS.INDUSTRY_CROSSWALK_POSTINGS_TO_LC AS ICP        -- STEVEN ADDED
+    TULSA_FOR_YOU.VIEWS.INDUSTRY_CROSSWALK_POSTINGS_TO_LC AS ICP
 ON
-    P.NAICS6 = ICP.POSTINGS_NAICS6                                      -- STEVEN ADDED
+    P.NAICS6 = ICP.POSTINGS_NAICS6
 WHERE
     COMPANY_IS_STAFFING = FALSE
 GROUP BY

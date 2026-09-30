@@ -4,7 +4,6 @@
 -- Description: This SQL query retrieves the lowest level and highest level NAICS code from the 
 	DIM_INDID table in lightcast.
 --
--- Author:          Steven Vang
 -- Date:            2026-09-21
 --
 -- Notes: Main data source used for OWC dashboards in the dim_ind table; sourced back to

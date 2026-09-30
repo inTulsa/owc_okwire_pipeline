@@ -1,19 +1,32 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: 
+-- Description:     Builds the regional indicators ("Fast Facts") fact table: one row per
+--                   county summarizing current-vs-prior-year labor force, unemployment,
+--                   population, income, job postings, enrollments, and completions.
 --
--- Author:          Nile Dixon
 -- Date:            2025-11-18
 --
 -- Notes:
--- 
---
+-- Combines DAT_LABOR_FORCE, DAT_ACS_INDICATORS, DAT_DEMOG, POSTINGS, DAT_ENROLLMENTS, and
+-- DAT_COMPLETIONS_DEMOGRAPHICS. The ACS_YEAR_CHANGE CTE hardcodes the current/prior ACS
+-- release years and must be updated manually when a new ACS data release comes out (see
+-- https://www.census.gov/programs-surveys/acs.html). Output columns are labeled with FF.x.x
+-- tags corresponding to the Fast Facts dashboard metrics they feed.
 --
 ---------------------------------------------------------------------------------------------------
 */
 
-WITH ACS_DATA AS (
+WITH ACS_YEAR_CHANGE AS (
+    -- Manual change the year here
+    -- This is due to ACS latest data release
+    -- For more infomation please visit: https://www.census.gov/programs-surveys/acs.html
+    SELECT
+        2024 AS CURR_YEAR_POP,
+        2023 AS PRIOR_YEAR_POP
+),
+
+ACS_DATA AS (
     SELECT 
         AREAID, 
         AREAID_NAME, 
@@ -24,48 +37,48 @@ WITH ACS_DATA AS (
     WHERE
         AREAID_TYPE = 'COUNTY'
 ),
--- Retrieve Labor Force Participation Rate, Unemployment Rate and Number Employed for Current Year
+
+--Retrieve Labor Force Participation Rate, Unemployment Rate and Number Employed for Current Year
 CURR_YEAR AS (
     SELECT
         AREAID,
         AREAID_NAME,
         LFP_DENOM,
-        AVG((EMP + UNEMP) / POP) AS LFPR, -- LFP_DENOM / POP (GABE CHANGED)
+        AVG((EMP + UNEMP) / POP) AS LFPR, -- LFP_DENOM / POP
         ROUND(AVG(UNEMP),0) AS UNEMP,
-        AVG(UNEMP / (EMP + UNEMP)) AS UNEMPR, -- UNEMP / LFP_DENOM (GABE CHANGED)
+        AVG(UNEMP / (EMP + UNEMP)) AS UNEMPR, -- UNEMP / LFP_DENOM
         ROUND(AVG(EMP),0) AS EMP
 
     FROM LIGHTCAST.TULSA_FOR_YOU.DAT_LABOR_FORCE
     WHERE
-        AREAID_TYPE = 'COUNTY'
-        AND YEAR = 2025
-        -- AND MONTH = MONTH(CURRENT_DATE()) - 3 (GABE CHANGED by COMMENTING LINE)
+        YEAR = (SELECT MAX(YEAR) FROM LIGHTCAST.TULSA_FOR_YOU.DAT_LABOR_FORCE WHERE AREAID_TYPE = 'COUNTY')
+        AND AREAID <> 40
     GROUP BY
         AREAID,
         AREAID_NAME,
         LFP_DENOM
-),
+), 
 
--- Retrieve Labor Force Participation Rate, Unemployment Rate and Number Employed for Previous Year
+--Retrieve Labor Force Participation Rate, Unemployment Rate and Number Employed for Previous Year
 PRIOR_YEAR AS (
     SELECT
         AREAID,
         AREAID_NAME,
         LFP_DENOM,
-        AVG((EMP + UNEMP) / POP) AS LFPR, -- LFP_DENOM / POP (GABE CHANGED)
+        AVG((EMP + UNEMP) / POP) AS LFPR, -- LFP_DENOM / POP
         ROUND(AVG(UNEMP),0) AS UNEMP,
-        AVG(UNEMP / (EMP + UNEMP)) AS UNEMPR, -- UNEMP / LFP_DENOM (GABE CHANGED)
+        AVG(UNEMP / (EMP + UNEMP)) AS UNEMPR, -- UNEMP / LFP_DENOM
         ROUND(AVG(EMP),0) AS EMP
     FROM LIGHTCAST.TULSA_FOR_YOU.DAT_LABOR_FORCE
     WHERE
-        AREAID_TYPE = 'COUNTY'
-        AND YEAR = 2024
-        -- AND MONTH = MONTH(CURRENT_DATE()) - 3 (GABE CHANGED by COMMENTING LINE)
+        YEAR = (SELECT MAX(YEAR) - 1 FROM LIGHTCAST.TULSA_FOR_YOU.DAT_LABOR_FORCE WHERE AREAID_TYPE = 'COUNTY')
+        AND AREAID <> 40
     GROUP BY
         AREAID,
         AREAID_NAME,
         LFP_DENOM
 ),
+
 -- Retrieve Population for Current Year
 CURR_YEAR_POP AS (
     SELECT
@@ -80,7 +93,7 @@ CURR_YEAR_POP AS (
         AND RACEID = 0
         AND GENDERID = 0
         AND AREAID_TYPE = 'COUNTY'
-        AND YEAR = 2024 -- GABE CHANGED
+        AND YEAR = (SELECT CURR_YEAR_POP FROM ACS_YEAR_CHANGE)
     GROUP BY
         YEAR,
         AREAID,
@@ -101,7 +114,7 @@ PRIOR_YEAR_POP AS (
         AND RACEID = 0
         AND GENDERID = 0
         AND AREAID_TYPE = 'COUNTY'
-        AND YEAR = 2023 -- GABE CHANGED
+        AND YEAR = (SELECT PRIOR_YEAR_POP FROM ACS_YEAR_CHANGE)
     GROUP BY
         YEAR,
         AREAID,
@@ -135,7 +148,7 @@ PRIOR_JOB_POSTINGS AS (
     FROM 
         LIGHTCAST.TULSA_FOR_YOU.POSTINGS
     WHERE
-        YEAR(POSTED) = YEAR(CURRENT_DATE())
+        YEAR(POSTED) = YEAR(CURRENT_DATE()) - 1 --YEAR(CURRENT_DATE()) 
     GROUP BY 
         YEAR,
         AREAID,
@@ -490,8 +503,8 @@ PRIOR_CERTS AS (
 SELECT
     CURR_YEAR.AREAID AS AREAID,
     CURR_YEAR.AREAID_NAME AS COUNTY_NAME,
-    CURR_YEAR.EMP + CURR_YEAR.UNEMP AS CURRENT_YEAR_LABOR_FORCE, -- FF.1.1 (GABE CHANGED)
-    PRIOR_YEAR.EMP + PRIOR_YEAR.UNEMP AS PRIOR_YEAR_LABOR_FORCE, -- (GABE CHANGED)
+    CURR_YEAR.EMP + CURR_YEAR.UNEMP AS CURRENT_YEAR_LABOR_FORCE, -- FF.1.1
+    PRIOR_YEAR.EMP + PRIOR_YEAR.UNEMP AS PRIOR_YEAR_LABOR_FORCE,
     CURR_YEAR.LFPR AS CURRENT_LABOR_FORCE_PARTICIPATION_RATE, -- FF.1.2
     PRIOR_YEAR.LFPR AS PRIOR_LABOR_FORCE_PARTICIPATION_RATE,
     CURRENT_YEAR_LABOR_FORCE - PRIOR_YEAR_LABOR_FORCE AS RAW_CHANGE_IN_LABOR_FORCE, -- FF.1.3

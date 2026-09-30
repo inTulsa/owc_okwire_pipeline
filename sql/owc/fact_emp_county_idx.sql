@@ -1,14 +1,15 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: 
+-- Description:     Builds a monthly employment index by county, indexed to a January 2015
+--                   baseline (2015 = 1.0).
 --
--- Author:          Nile Dixon
 -- Date:            2025-11-19
 --
 -- Notes:
--- 
---
+-- Source: LIGHTCAST.TULSA_FOR_YOU.DAT_LABOR_FORCE (AREAID_TYPE = 'COUNTY'), from 2015 onward.
+-- Each county's monthly EMP is self-joined to that same county's January 2015 EMP
+-- (BASE_2015_EMP) to compute EMP_INDEX_TO_2015 = current EMP / base EMP.
 --
 ---------------------------------------------------------------------------------------------------
 */

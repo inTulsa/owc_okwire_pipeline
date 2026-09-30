@@ -1,14 +1,17 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: 
+-- Description:     Builds the hires-and-separations (HAS) fact table by year, area, industry,
+--                   and occupation.
 --
--- Author:          Nile Dixon
 -- Date:            2025-11-05
 --
 -- Notes:
--- 
---
+-- DAT_IND_RACE_ETHN_HIRESSEPS only reports hires (HIRA) and separations (SEP) at the
+-- industry level, with no occupation breakdown. DAT_STAFFING provides each occupation's
+-- share (PERCENT) of employment within an industry (CLASSID = '1'). The industry-level
+-- hires/separations are allocated to occupations by multiplying by that staffing percentage,
+-- giving OCC_HIRES and OCC_SEPS.
 --
 ---------------------------------------------------------------------------------------------------
 */

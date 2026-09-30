@@ -1,14 +1,17 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: 
+-- Description:     Builds the occupation location quotient (LQ) fact table by year and county,
+--                   comparing each county's occupation employment concentration to the
+--                   statewide (Oklahoma) concentration.
 --
--- Author:          Nile Dixon
 -- Date:            2025-11-19
 --
 -- Notes:
--- 
---
+-- Source: LIGHTCAST.TULSA_FOR_YOU.DAT_STAFFING. County and state occupation concentration
+-- are each computed as occupation EMP / total EMP for that area; LQ = county concentration
+-- / state concentration. An LQ above 1 indicates the occupation is more concentrated
+-- locally than statewide.
 --
 ---------------------------------------------------------------------------------------------------
 */

@@ -1,14 +1,15 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: 
+-- Description:     Builds the enrollments fact table: total enrollments by year, area, and
+--                   institution.
 --
--- Author:          Nile Dixon
 -- Date:            2025-11-05
 --
 -- Notes:
--- 
---
+-- Source: LIGHTCAST.TULSA_FOR_YOU.DAT_ENROLLMENTS, left joined to DIM_UNITID (for AREAID).
+-- Filtered to RACEID = 0 / GENDERID = 0 (all-race, all-gender totals) and ENRLEVELID = 1,
+-- to avoid double counting demographic and enrollment-level breakouts.
 --
 ---------------------------------------------------------------------------------------------------
 */

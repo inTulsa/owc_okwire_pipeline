@@ -1,17 +1,16 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: This SQL query retrieves the lowest level and highest level SOC code from the 
-	DIM_OCCID table in lightcast.
+-- Description:     Builds the occupation (OCC) dimension, pairing each detailed SOC occupation
+--                   from DIM_OCCID with its top-level (2-digit) SOC group.
 --
--- Author:          Nile Dixon
 -- Date:            2025-12-01
 --
--- Notes: The DIM_OCCID table only contains the information about the lowest level SOC code and none of the 
-	intermdiary levels. However, the POSTINGS table contains the soc codes for each higher level. Therefore,
-	I joined the SOC codes with the distinct list of the highest level socs present in the POSTINGS table.
--- 
---
+-- Notes:
+-- DIM_OCCID only contains detailed (lowest-level) SOC codes with no intermediary levels, while
+-- POSTINGS contains the top-level SOC codes and names. The top-level SOC codes derived from
+-- POSTINGS are joined back to DIM_OCCID (matching on the first 2 digits) to attach the
+-- top-level grouping to each detailed occupation record.
 --
 ---------------------------------------------------------------------------------------------------
 */

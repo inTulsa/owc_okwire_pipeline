@@ -1,16 +1,16 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: This table obtains the average hourly salary 
+-- Description:     Builds the occupation wages fact table: average hourly and yearly wages
+--                   by year, county, and occupation.
 --
--- Author:          Nile Dixon
 -- Date:            2025-12-02
 --
--- Notes: To simplify the query, I just obtained the hourly wages for individuals with a classid of 1 (QCEW Employees).
-    If you want to include all types of employees when retrieving the average hourly salary, you need to do a weighted average 
-    based on the EMP and EARN_AVG columns.
--- 
---
+-- Notes:
+-- Source: LIGHTCAST.TULSA_FOR_YOU.DAT_OCC, filtered to CLASSID = 1 (QCEW employees only) and
+-- AREAID_TYPE = 'COUNTY'. YEARLY_WAGE is derived as HOURLY_WAGE * 2080 (standard full-time
+-- hours/year). To include other employee classes, EARN_AVG would need to be combined via a
+-- weighted average across EMP by CLASSID rather than filtered to CLASSID = 1 alone.
 --
 ---------------------------------------------------------------------------------------------------
 */

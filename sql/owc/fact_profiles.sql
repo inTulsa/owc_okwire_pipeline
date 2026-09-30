@@ -1,14 +1,16 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: 
+-- Description:     Builds a fact table counting candidate profiles by area, industry,
+--                   occupation, and school attended.
 --
--- Author:          Nile Dixon
 -- Date:            2025-11-14
 --
 -- Notes:
--- 
---
+-- Source: LIGHTCAST.TULSA_FOR_YOU.PROFILES and PROFILES_EDUCATIONS. Each dimension
+-- (county, industry, occupation, school) is first reduced to its distinct ID-to-value
+-- pairs before joining, so a profile with multiple values for one dimension can appear
+-- in more than one combination.
 --
 ---------------------------------------------------------------------------------------------------
 */

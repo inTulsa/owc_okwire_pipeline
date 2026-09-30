@@ -1,14 +1,16 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: 
+-- Description:     Builds the certifications fact table: counts of job postings that list
+--                   each certification skill, by year, area, industry, occupation, company,
+--                   minimum education, and internship flag.
 --
--- Author:          Nile Dixon
 -- Date:            2025-11-14
 --
 -- Notes:
--- 
---
+-- Source: LIGHTCAST.TULSA_FOR_YOU.POSTINGS_SKILLS left joined to POSTINGS. Filtered to
+-- SKILL_TYPE = 'Certification', excluding "Valid Driver's License" (which Lightcast tags
+-- as a certification but isn't one).
 --
 ---------------------------------------------------------------------------------------------------
 */
@@ -28,7 +30,7 @@ ON
     PS.ID = P.ID
 WHERE 
     SKILL_TYPE = 'Certification'
-    AND SKILL_NAME <> 'Valid Driver\'s License'
+    AND SKILL_NAME <> 'Valid Driver''s License'
 GROUP BY 
     YEAR_POSTED,
     AREAID,

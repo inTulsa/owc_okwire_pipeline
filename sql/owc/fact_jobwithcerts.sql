@@ -1,14 +1,17 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: 
+-- Description:     Builds a fact table comparing total job postings against the subset of
+--                   those postings that list a certification requirement, by year, area,
+--                   industry, occupation, company, minimum education, and internship flag.
 --
--- Author:          Nile Dixon
 -- Date:            2025-11-14
 --
 -- Notes:
--- 
---
+-- Source: LIGHTCAST.TULSA_FOR_YOU.POSTINGS, grouped to NUM_JOBS. NUM_JOBS_WITH_CERT is a
+-- correlated subquery counting distinct postings that have a matching row in
+-- POSTINGS_SKILLS with SKILL_TYPE = 'Certification' (excluding "Valid Driver's License",
+-- which Lightcast tags as a certification but isn't one) across the same grouping dimensions.
 --
 ---------------------------------------------------------------------------------------------------
 */
@@ -29,7 +32,7 @@ SELECT
         ON PS2.ID = P2.ID
         WHERE
             PS2.SKILL_TYPE = 'Certification'
-            AND PS2.SKILL_NAME <> 'Valid Driver\'s License'
+            AND PS2.SKILL_NAME <> 'Valid Driver''s License'
             AND YEAR(P2.POSTED) = YEAR(P.POSTED)
             AND P2.COUNTY = P.COUNTY -- AREAID
             AND P2.NAICS6 = P.NAICS6 -- INDID
