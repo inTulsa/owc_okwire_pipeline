@@ -316,10 +316,33 @@ module "enrollment" {
         outright. Fix it on your schedule rather than Oklahoma's.
 
         Diff this run's page snapshot against the previous one:
-        `gs://<raw-bucket>/enrollment/page_snapshots/<run_id>.html`. Then save
-        the new HTML over `tests/fixtures/enrollment/page.html` and run
-        `make test` — the failing assertions tell you exactly which selector
-        moved.
+        `gs://<raw-bucket>/enrollment/page_snapshots/<run_id>.html`, then
+        follow case B of alert 6 in docs/runbook.md.
+      EOT
+    },
+    {
+      key         = "alert-6c-newer-year"
+      event       = "newer_school_year_unscraped"
+      title       = "ALERT 6c: Oklahoma published a school year this pipeline does not collect"
+      description = <<-EOT
+        The workbook on `newer_year_check_url` (pipelines.yml) has a newer
+        school year than anything the scrape found on `page_url`. The run
+        failed with exit code 9 and published nothing, so the table still
+        holds the previous years, which are correct but no longer complete.
+
+        Oklahoma has put the new year somewhere the scraper does not look.
+        See alert 6c in docs/runbook.md.
+      EOT
+    },
+    {
+      key         = "alert-6d-newer-year-check-unavailable"
+      event       = "newer_year_check_unavailable"
+      title       = "ALERT 6d: enrollment newer-year check could not run (run still succeeded)"
+      description = <<-EOT
+        The check that catches a new school year on `newer_year_check_url`
+        could not run, usually because that page changed. The run itself
+        succeeded. Until this is fixed, a new year published only on that
+        page will go unnoticed. See alert 6d in docs/runbook.md.
       EOT
     },
     {

@@ -13,10 +13,16 @@ infrastructure around it:
   and every freshly downloaded workbook is archived immutably. When parsing
   breaks on Oklahoma's schedule, that turns the investigation into a diff.
 * **Real exit codes.** Zero files found, or any recorded skip, exits non-zero.
+* **A newer school year elsewhere.** Oklahoma publishes on two pages. When
+  ``newer_year_check_url`` is set, a school year there that the scrape did
+  not collect fails the run rather than short-circuiting as "nothing new".
 """
 
 from __future__ import annotations
 
+import io
+import re
+import time
 import urllib.parse
 import urllib.robotparser
 from dataclasses import dataclass
@@ -28,7 +34,7 @@ from owcdata.core.manifest import ManifestWriter, RunRecord
 from owcdata.core.parquet import write_parquet_stream
 from owcdata.core.publish import land_parquet
 from owcdata.core.sinks import Sink, build_sink
-from owcdata.errors import ExtractError, WorkbookReshapeError
+from owcdata.errors import ExtractError, NewerSchoolYearNotScraped, WorkbookReshapeError
 from owcdata.logging import get_logger
 from owcdata.pipelines.enrollment import scrape
 
@@ -91,6 +97,99 @@ def _install_hooks(sink: Sink, run_id: str) -> dict[str, Any]:
     scrape.ON_PAGE_HTML = on_page_html
     scrape.ON_FILE_DOWNLOADED = on_file_downloaded
     return state
+
+
+def _end_year(value: Any) -> int | None:
+    """2026, "2026", or "2025-2026" -> 2026, via the same clean_year() the
+    merged output uses, so both sides of the comparison share one convention."""
+    cleaned = scrape.clean_year(value)
+    match = re.fullmatch(r"20\d{2}-(20\d{2})", str(cleaned))
+    return int(match.group(1)) if match else None
+
+
+def newest_scraped_year(records: list[dict]) -> int | None:
+    """The newest school year among the files the scrape found, as an end year."""
+    years = [_end_year(r["fiscal_year"]) for r in records if r.get("fiscal_year")]
+    return max((y for y in years if y is not None), default=None)
+
+
+def newest_published_year(page_url: str, delay_seconds: float = 0.0) -> int:
+    """The newest School Year in any workbook ``page_url`` links.
+
+    Only a sheet the scraper itself would accept counts (a known race/gender
+    column signature), and only its School Year column is read. Raises
+    ``ValueError`` when nothing on the page qualifies, which the caller logs
+    as the check being unavailable.
+    """
+    import pandas as pd
+    import requests
+    from bs4 import BeautifulSoup
+
+    resp = requests.get(page_url, headers=scrape.HEADERS, timeout=60)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
+    workbook_urls = []
+    for a_tag in soup.find_all("a", href=True):
+        url = urllib.parse.urljoin(page_url, str(a_tag["href"]).strip())
+        is_workbook = re.search(r"\.xlsx?$", urllib.parse.urlsplit(url).path, re.IGNORECASE)
+        if is_workbook and url not in workbook_urls:
+            workbook_urls.append(url)
+    if not workbook_urls:
+        raise ValueError(f"{page_url} links no workbook")
+
+    newest: int | None = None
+    for url in workbook_urls:
+        if delay_seconds:
+            time.sleep(delay_seconds)
+        file_resp = requests.get(url, headers=scrape.HEADERS, timeout=120)
+        file_resp.raise_for_status()
+        with pd.ExcelFile(io.BytesIO(file_resp.content)) as xls:
+            sheet, header = scrape.find_sheet_by_column_signature(xls)
+            if sheet is None:
+                continue
+            columns = pd.read_excel(xls, sheet_name=sheet, header=header, nrows=0).columns
+            year_col = next((c for c in columns if scrape.normalize(c) == "schoolyear"), None)
+            if year_col is None:
+                continue
+            values = pd.read_excel(xls, sheet_name=sheet, header=header, usecols=[year_col])
+        years = [y for y in (_end_year(v) for v in values[year_col].dropna()) if y is not None]
+        if years:
+            newest = max(years) if newest is None else max(newest, *years)
+    if newest is None:
+        raise ValueError(
+            f"no workbook linked from {page_url} has a recognizable race/gender "
+            "sheet with a School Year column"
+        )
+    return newest
+
+
+def _check_for_newer_year(records: list[dict], check_url: str, delay_seconds: float) -> None:
+    """Fail when ``check_url`` has a school year the scrape did not collect.
+
+    The check failing to run is a warning, not a failure: a change to a page
+    we only watch must not block publishing the one we scrape. The warning has
+    its own alert, so a check that has silently stopped working is still seen.
+    """
+    scraped = newest_scraped_year(records)
+    if scraped is None:
+        log.warning(
+            "newer_year_check_unavailable",
+            url=check_url,
+            error="no scraped file carries a fiscal year heading to compare against",
+        )
+        return
+    try:
+        published = newest_published_year(check_url, delay_seconds)
+    except Exception as exc:
+        log.warning("newer_year_check_unavailable", url=check_url, error=str(exc))
+        return
+    log.info("newer_year_checked", url=check_url, scraped=scraped, published=published)
+    if published > scraped:
+        raise NewerSchoolYearNotScraped(
+            f"{check_url} has school year {published - 1}-{published}, but the newest "
+            f"year scraped from the enrollment page is {scraped - 1}-{scraped}. "
+            "Oklahoma has published a year this pipeline does not collect yet."
+        )
 
 
 def run(
@@ -205,6 +304,15 @@ def _run_inner(
         error = WorkbookReshapeError(f"{len(result.skips)} file(s) skipped — {message}")
         mark_failed(error)
         raise error
+
+    # Before publishing, and before the short-circuit: a new year that exists
+    # only on the other page is exactly the case where the scrape finds
+    # nothing new and would otherwise report success.
+    if enroll.newer_year_check_url:
+        _check_robots(enroll.newer_year_check_url, scrape.HEADERS["User-Agent"])
+        _check_for_newer_year(
+            result.records, enroll.newer_year_check_url, enroll.download_delay_seconds
+        )
 
     record.source_uri = hook_state["snapshot_uri"] or ""
 

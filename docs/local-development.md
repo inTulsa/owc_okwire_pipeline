@@ -174,7 +174,7 @@ not, which is exactly why the second is the one that gets forgotten.
 ## Testing
 
 ```bash
-make test          # unit only, no network — 128 tests, ~3s
+make test          # unit only, no network — 148 tests, ~4s
 make test-all      # adds integration: Snowflake, a live scrape, GCS, BigQuery
 make check         # lint + types + derive-check + validate + unit. The full gate.
 ```
@@ -192,8 +192,11 @@ current parsing behavior is pinned without a live scrape:
   above the header, a `Grade Code`/`Grade` collision, a blank-County backfill,
   and an unrecognizable sheet
 
-When Oklahoma next changes the page, **save the new HTML over `page.html`** —
-the failing tests then tell you exactly what broke.
+When Oklahoma next changes the page's markup, **edit `page.html` by hand** to
+match it. Don't save the live HTML over it: the live page's links point at
+oklahoma.gov, which the fixture server 404s, so every test would fail for a
+reason unrelated to the change. The full procedure is
+[alert 6 in the runbook](runbook.md#alert-6-no-files).
 
 ## The enrollment script is generated
 
@@ -202,7 +205,7 @@ the failing tests then tell you exactly what broke.
 original. Do not edit it directly.
 
 ```bash
-make diff-enrollment   # the complete change set: 9 removed lines
+make diff-enrollment   # the complete change set: 10 removed lines
 make derive-scrape     # regenerate after editing the derivation
 make derive-check      # part of `make check`
 ```

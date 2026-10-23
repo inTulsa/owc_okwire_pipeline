@@ -2,7 +2,11 @@
 OWC Primary Enrollment Data: Business Process Report & Step-by-Step Procedure
 -------------------------------------------------------------------------------------------------
 Link source of OWC primary enrollment data:
-https://oklahoma.gov/education/services/student-information/state-public-enrollment-totals.html
+https://oklahoma.gov/education/services/student-information/achieved-years-enrollment-totals.html
+(Moved here in October 2026. The original page,
+https://oklahoma.gov/education/services/student-information/state-public-enrollment-totals.html,
+now has only one combined multi-year export, which the pipeline watches
+for a newer school year but does not ingest.)
 
 -------------------------------------------------------------------------------------------------
 HTTP status codes
@@ -11,7 +15,7 @@ https://en.wikipedia.org/wiki/List_of_HTTP_status_codes
 -------------------------------------------------------------------------------------------------
 
 1a. Under this script. From the website, make sure it grabs these files and downloads it:
-https://oklahoma.gov/education/services/student-information/state-public-enrollment-totals.html
+https://oklahoma.gov/education/services/student-information/achieved-years-enrollment-totals.html
 
 1b. Before searching and parsing the excel files from the html web page. If the original source files downloaded from the website already exists in the data directory then keep those existing files and only update the newly one comprehensive .csv file with the latest data files or latest data files not added prior. If no new sources are added inform the user. Ensure correct HTTP status codes are implemented from 1xx, 2xx, 3xx, 4xx, to 5xx. 
 

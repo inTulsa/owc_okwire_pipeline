@@ -31,6 +31,7 @@ Every failure exits non-zero, and the code names the cause. From
 | 6 | `load_failed` | BigQuery load job errors |
 | 7 | `quality_check_failed` | [Alert 4](#alert-4-quality) — publish was blocked |
 | 8 | `publish_failed` | Snapshot, copy, or view wiring |
+| 9 | `newer_school_year_unscraped` | [Alert 6c](#alert-6c-newer-year) — Oklahoma published a year we don't collect |
 
 ## First moves for any alert
 
@@ -573,44 +574,134 @@ diff <(python3 -c "import sys,re;print(re.sub(r'>\s*<','>\n<',open(sys.argv[1]).
      | head -60
 ```
 
-**Then check which selector broke.** These are the four things the scraper
-depends on, all at the top of
+**Then reproduce it locally.** A local run uses the same code and
+`pipelines.yml` as the deployed job, needs no credentials, and writes only
+under the gitignored `.owcdata-local/`:
+
+```bash
+make run PIPELINE=enrollment TARGET=local
+```
+
+It should fail the same way, with `discovery found 0 matching files`.
+
+**Then work out which of two things happened.** The scraper depends on five
+things. `page_url` is in [`pipelines.yml`](../pipelines.yml); the other four
+are constants at the top of
 [`scrape.py`](../src/owcdata/pipelines/enrollment/scrape.py):
 
-| Constant | Current value | What breaks it |
+| Setting | Current value | What breaks it |
 |---|---|---|
+| `page_url` | `.../student-information/achieved-years-enrollment-totals.html` | The links moving to a different page |
 | `GRID_WRAPPER_CLASSES` | `aem-Grid aem-Grid--12 aem-Grid--default--12` | A CMS upgrade or a template change |
 | `CONTAINER_CLASS` | `aem-GridColumn--default--12` | Same |
 | `SCHOOL_ETHGEN_LI_TEXT` | `School Site Totals w/Ethnicity and Gender` | Someone rewording the link |
 | `SCHOOL_TOTALS_SHEET` | `School Totals by Race` | A renamed worksheet |
 
 ```bash
-# Which one is missing from the new page?
+# Does the page still carry the selectors and the per-year links?
 grep -c 'aem-Grid--default--12' /tmp/bad.html
 grep -io 'School Site Totals[^<]*' /tmp/bad.html | sort -u
+grep -oiE 'href="[^"]+\.xlsx?"' /tmp/bad.html | wc -l
 ```
 
-**Fix.**
+**A. The links moved to another page.** The page has few or no workbook links
+left, but links to another page. This happened in October 2026: Oklahoma
+replaced the per-year links on `state-public-enrollment-totals.html` with one
+combined export and moved every fiscal year, unchanged, to
+`achieved-years-enrollment-totals.html`. Find the new page, then confirm the
+unchanged scraper reads it before you change anything:
 
-1. Save the new page as a test fixture — this is the important step, because
-   it turns the fix into a test:
-   ```bash
-   cp /tmp/bad.html tests/fixtures/enrollment/page.html
-   ```
-2. Run the parsing tests. They will fail, and *how* they fail tells you what
-   changed:
-   ```bash
-   make test
-   ```
-3. Update the selector constants until they pass.
-4. Open a PR. The fixture goes in with it, so this exact regression is now
-   covered.
+```bash
+.venv/bin/python -c "
+from owcdata.pipelines.enrollment import scrape
+scrape.PAGE_URL = 'THE_NEW_PAGE_URL'
+scrape.configure('/tmp/enrollment-try', delay_seconds=1.0)
+r = scrape.main()
+print(r.merged_rows, 'rows from', r.reshaped_files, 'files; skips:', r.skips)
+"
+```
+
+If that prints every fiscal year and no skips, the fix is the URL in two
+places:
+
+1. `page_url` in [`pipelines.yml`](../pipelines.yml). This is what the
+   deployed job reads.
+2. The `PAGE_URL` substitution in
+   [`scripts/derive_scrape.py`](../scripts/derive_scrape.py), then
+   `make derive-scrape`. This keeps a standalone run of `scrape.py` on the
+   same page.
+
+**B. The links are on the page but the markup changed.** The selector
+constants need updating. `scrape.py` is **generated**, so don't edit it
+directly; `make derive-check` (part of `make check`) will reject that.
+Instead:
+
+1. Add a substitution to `SUBSTITUTIONS` in
+   [`scripts/derive_scrape.py`](../scripts/derive_scrape.py) that replaces
+   the constant, and add a line for it to the numbered change list in that
+   file's `HEADER`. Then run `make derive-scrape`.
+2. Update the test fixture by hand to the new markup. Copy
+   `tests/fixtures/enrollment/page.html` and change its classes or link text
+   to match the new page. **Don't copy the live HTML over `page.html`:** its
+   links point at oklahoma.gov, and the test server only serves the local
+   fixture workbooks. Every link would 404, and every parsing test would fail
+   for a reason unrelated to your fix.
+3. `make test` until it passes.
+
+**Either way, prove it before you deploy:**
+
+```bash
+make check                                # lint, types, derive-check, unit tests
+make run PIPELINE=enrollment TARGET=local # the real page, end to end, locally
+.venv/bin/pytest -m integration tests/integration/test_live.py -k "live_scrape or second_run"
+```
+
+The local run should report every fiscal year with no `[skip]` lines. The two
+integration tests scrape the live page, need no credentials, and also prove
+the cache short-circuit still works. Then [ship it](#ship-a-scraper-fix).
 
 **If the page is merely restructured but the links are still findable,** you
 may instead see a `grid_wrapper_not_found` warning with a successful run — the
 scraper falls back to a whole-page search. That is a warning, not a failure,
 and it is your advance notice that the selectors are drifting. Fix it before
 it becomes alert 6.
+
+### Ship a scraper fix {#ship-a-scraper-fix}
+
+`pipelines.yml` and the code are baked into the image, so a fix reaches the
+job only through a new image. Terraform is only involved if the change also
+touched `infra/`, for example to add an alert (step 4).
+
+1. **Commit first, then build.** `make build` tags the image with the commit
+   checked out at the time. Building before committing leaves an image no
+   commit identifies ([why that matters](#roll-back-the-image)). Merge the fix
+   to the branch you deploy from.
+2. In Cloud Shell, bring the checkout up to that commit and deploy it:
+   ```bash
+   cd ~/owc && git pull
+   make deploy ENV=dev        # build the image, and point both jobs at it
+   make which-image ENV=dev   # both jobs should show the newest build's digest
+   ```
+   `make build` alone is not enough. A job pins an image digest that
+   Terraform ignores, so only `set-image` (which `deploy` runs) moves it. See
+   [A fix was deployed but the old behavior persists](#a-fix-was-deployed-but-the-old-behavior-persists).
+3. Run the job once, rather than waiting for the 5th of the month:
+   ```bash
+   gcloud run jobs execute cr-$PREFIX-enrollment-1 --region=$REGION --project=$PROJECT --wait
+   make runs ENV=dev          # the newest enrollment row should be status = success
+   ```
+   If every source workbook is already in the cache, this run short-circuits
+   and republishes nothing. That is a success: the fix found the same files.
+   To force a rebuild of the table, see
+   [Force the enrollment pipeline to rebuild from scratch](#force-the-enrollment-pipeline-to-rebuild-from-scratch).
+4. **Only if the change touched `infra/`:** apply it too, pinned to the image
+   you just deployed:
+   ```bash
+   make tf-apply ENV=dev TF_ARGS="-var=image_digest=$(make -s image-digest ENV=dev)"
+   ```
+   Read the plan before typing `yes`. For a new alert it should only add a
+   `google_logging_metric` and a `google_monitoring_alert_policy`.
+5. Repeat steps 2 to 4 with `ENV=prod` once prod exists.
 
 ---
 
@@ -635,10 +726,82 @@ diff <(python3 -c "import sys,re;print(re.sub(r'>\s*<','>\n<',open('/tmp/old.htm
      <(python3 -c "import sys,re;print(re.sub(r'>\s*<','>\n<',open('/tmp/new.html').read()))") | head -40
 ```
 
-**Fix.** Same procedure as alert 6, but unhurried: save the new HTML over
-`tests/fixtures/enrollment/page.html`, run `make test`, and update the
-selector constants until the assertions pass. The fixture goes in with the
-PR, so the regression is covered from then on.
+**Fix.** Same procedure as [alert 6](#alert-6-no-files), case B, but
+unhurried: update the constants through `scripts/derive_scrape.py`, update
+`tests/fixtures/enrollment/page.html` by hand to the new markup, and
+`make test` until it passes. The fixture goes in with the PR, so the
+regression is covered from then on.
+
+## ALERT 6c: Oklahoma published a school year we don't collect {#alert-6c-newer-year}
+
+**Symptom.** `newer_school_year_unscraped`. Exit code 9. The error names both
+years, for example *"has school year 2026-2027, but the newest year scraped
+from the enrollment page is 2025-2026"*.
+
+**What it means.** Each run reads the newest School Year from the workbook on
+`newer_year_check_url` (the original `state-public-enrollment-totals.html`,
+which since October 2026 has one combined export). That workbook is ahead of
+everything the scraper found on `page_url`. The run failed before publishing,
+so the table still holds every earlier year. Those are correct; the table is
+just missing the newest year.
+
+**Nothing is broken yet,** and every monthly run will keep failing this way
+until the new year is collected. The one question is where Oklahoma put it.
+
+**Diagnose.**
+
+```bash
+# Is the new year on the page we scrape yet?
+curl -s -A "Mozilla/5.0 (compatible; PythonScript/1.0)" \
+  https://oklahoma.gov/education/services/student-information/achieved-years-enrollment-totals.html \
+  | grep -oE 'FY 20[0-9]{2}/20[0-9]{2}' | head -3
+```
+
+**Fix, depending on the answer:**
+
+- **The new year is on `page_url` now, just late.** Oklahoma sometimes posts
+  the export first and the per-year file afterwards. Re-run the job once the
+  file is there; the scrape picks it up and the check passes. No code change.
+- **The new year is on `page_url` but the scrape missed it.** Its link or
+  heading is new. This is [alert 6](#alert-6-no-files), case B.
+- **The new year exists only in the export.** The pipeline has to start
+  reading the export. This is a design change, not a selector fix: the export
+  repeats the four most recent years, so it needs a decision about which
+  source wins for the overlapping years. Its race/gender sheet already
+  matches the column names the scraper knows, which makes the reshape
+  straightforward. Decide the overlap rule first.
+
+To publish the years you already have in the meantime, temporarily remove
+`newer_year_check_url` from `pipelines.yml` and
+[ship it](#ship-a-scraper-fix). Put it back with the real fix.
+
+---
+
+## ALERT 6d: the newer-year check could not run {#alert-6d-newer-year-check-unavailable}
+
+**Symptom.** `newer_year_check_unavailable`, and **the run succeeded.**
+
+The check behind [alert 6c](#alert-6c-newer-year) could not read
+`newer_year_check_url`. Common causes: the page moved, its workbook link
+disappeared, or the workbook no longer has a race/gender sheet with a
+School Year column. It is a warning so that a change to a page we only watch
+cannot block publishing the page we scrape. But until it is fixed, a new
+school year published only there goes unnoticed.
+
+**Diagnose.** The log line's `error` field says which step failed:
+
+```bash
+gcloud logging read \
+  'resource.type="cloud_run_job" jsonPayload.event="newer_year_check_unavailable"' \
+  --project=$PROJECT --limit=5 --format='value(jsonPayload.error)'
+```
+
+**Fix.** Open the page in a browser and find where the combined export went.
+If it moved, update `newer_year_check_url` in `pipelines.yml`. If Oklahoma
+stopped publishing it, remove the line, which turns the check off. Then
+[ship it](#ship-a-scraper-fix).
+
+---
 
 ## ALERT 7: enrollment workbook skipped {#alert-7-reshape-skipped}
 

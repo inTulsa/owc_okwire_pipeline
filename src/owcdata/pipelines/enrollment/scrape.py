@@ -23,6 +23,10 @@
 #      DOWNLOAD_DELAY_SECONDS — so the caller can snapshot the page HTML,
 #      archive the raw workbooks, and space out downloads without this file
 #      knowing anything about GCS.
+#   5. PAGE_URL points at the "Achieved Years" page. In October 2026 Oklahoma
+#      moved every fiscal year's links there, unchanged, and left only a
+#      combined export on the original page. Production reads page_url from
+#      pipelines.yml; this default only matters for a standalone run.
 #
 # Nothing else. No selector, no sheet-name preference, no column mapping, no
 # grade or year formatting rule, and no cache decision was touched.
@@ -53,7 +57,7 @@ from owcdata.errors import NoSourceFilesFound, PipelineError, WorkbookReshapeErr
 # ---------------------------------------------------------------------------
 PAGE_URL = (
     "https://oklahoma.gov/education/services/student-information/"
-    "state-public-enrollment-totals.html"
+    "achieved-years-enrollment-totals.html"
 )
 
 # Step 2a: the page's main content grid — the outer scope every container

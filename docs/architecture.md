@@ -265,7 +265,7 @@ via an explicit ordered list of substitutions that must each match exactly
 once. It is excluded from `ruff format`, and `make check` runs
 `derive_scrape.py --check`.
 
-The result: `make diff-enrollment` shows exactly 9 removed lines, forever, and
+The result: `make diff-enrollment` shows exactly 10 removed lines, and
 any drift fails `make check` rather than slowly eroding the claim.
 
 ## ADR-009: No reporting layer — the pipeline stops at owc_marts

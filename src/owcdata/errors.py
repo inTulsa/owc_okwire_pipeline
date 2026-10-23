@@ -47,6 +47,20 @@ class NoSourceFilesFound(ExtractError):
     exit_code = 4
 
 
+class NewerSchoolYearNotScraped(ExtractError):
+    """Oklahoma has published a school year the scrape did not collect.
+
+    In October 2026 Oklahoma moved the per-year links to a separate page and
+    left a combined multi-year export on the original one. A new year may
+    land in that export before, or instead of, the page we scrape. Without
+    this check the run would short-circuit as "nothing new" and report
+    success while the year sat unpublished.
+    """
+
+    event = "newer_school_year_unscraped"
+    exit_code = 9
+
+
 class WorkbookReshapeError(PipelineError):
     """One or more workbooks were skipped during reshape.
 

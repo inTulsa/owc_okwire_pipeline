@@ -325,6 +325,7 @@ def test_a_publish_failure_still_records_a_manifest_row(
 
     config = PipelinesConfig.load()
     config.enrollment.page_url = "https://example.test/page.html"
+    config.enrollment.newer_year_check_url = None  # tested on its own below
     config.enrollment.download_delay_seconds = 0.0
 
     def fake_main():
@@ -413,6 +414,7 @@ def test_short_circuit_records_the_published_row_count_not_zero(
 
     config = PipelinesConfig.load()
     config.enrollment.page_url = "https://example.test/page.html"
+    config.enrollment.newer_year_check_url = None  # tested on its own below
 
     monkeypatch.setattr(enrollment_run, "_check_robots", lambda *_a, **_k: None)
     monkeypatch.setattr(
@@ -465,6 +467,7 @@ def test_short_circuit_leaves_row_count_unset_when_marts_has_no_table_yet(
 
     config = PipelinesConfig.load()
     config.enrollment.page_url = "https://example.test/page.html"
+    config.enrollment.newer_year_check_url = None  # tested on its own below
 
     monkeypatch.setattr(enrollment_run, "_check_robots", lambda *_a, **_k: None)
     monkeypatch.setattr(
@@ -503,3 +506,122 @@ def test_short_circuit_leaves_row_count_unset_when_marts_has_no_table_yet(
     )
     assert written[-1]["status"] == "success_no_change"
     assert written[-1]["row_count"] is None
+
+
+# ---------------------------------------------------------------------------
+# A newer school year on the page we watch but do not scrape
+# ---------------------------------------------------------------------------
+EXPORT_PAGE_URL = "https://example.test/enrollment/export_page.html"
+
+
+@pytest.mark.parametrize(
+    "fiscal_years,expected",
+    [
+        (["2023-2024", "2022-2023"], 2024),
+        (["2016-2017"], 2017),
+        ([None], None),
+        ([], None),
+    ],
+)
+def test_newest_scraped_year(fiscal_years, expected):
+    from owcdata.pipelines.enrollment import run as enrollment_run
+
+    records = [{"fiscal_year": fy} for fy in fiscal_years]
+    assert enrollment_run.newest_scraped_year(records) == expected
+
+
+def test_newest_published_year_reads_only_a_race_gender_sheet(serve_fixtures):
+    """export_combined.xlsx has a summary sheet listing 2030 first. Only the
+    sheet the scraper would accept counts, so the answer is its 2024."""
+    from owcdata.pipelines.enrollment import run as enrollment_run
+
+    serve_fixtures("page.html")
+    assert enrollment_run.newest_published_year(EXPORT_PAGE_URL) == 2024
+
+
+def test_check_passes_when_the_scrape_has_the_newest_year(serve_fixtures):
+    from owcdata.pipelines.enrollment import run as enrollment_run
+
+    serve_fixtures("page.html")
+    records = [{"fiscal_year": "2023-2024"}, {"fiscal_year": "2022-2023"}]
+    enrollment_run._check_for_newer_year(records, EXPORT_PAGE_URL, 0.0)
+
+
+def test_check_fails_when_the_export_is_a_year_ahead(serve_fixtures):
+    from owcdata.errors import NewerSchoolYearNotScraped
+    from owcdata.pipelines.enrollment import run as enrollment_run
+
+    serve_fixtures("page.html")
+    with pytest.raises(NewerSchoolYearNotScraped, match="2023-2024") as exc:
+        enrollment_run._check_for_newer_year([{"fiscal_year": "2022-2023"}], EXPORT_PAGE_URL, 0.0)
+    assert exc.value.exit_code == 9
+
+
+@pytest.mark.parametrize(
+    "check_url,records",
+    [
+        # the watched page lost its workbook link
+        (
+            "https://example.test/enrollment/export_page_no_workbook.html",
+            [{"fiscal_year": "2022-2023"}],
+        ),
+        # the watched page itself is gone (the fixture server 404s it)
+        ("https://example.test/enrollment/missing.html", [{"fiscal_year": "2022-2023"}]),
+        # nothing scraped carries a year to compare against
+        (EXPORT_PAGE_URL, [{"fiscal_year": None}]),
+    ],
+)
+def test_check_that_cannot_run_warns_instead_of_failing(serve_fixtures, check_url, records):
+    """A change to a page we only watch must not block publishing the one we
+    scrape. It is logged under its own event, which has its own alert."""
+    from structlog.testing import capture_logs
+
+    from owcdata.pipelines.enrollment import run as enrollment_run
+
+    serve_fixtures("page.html")
+    with capture_logs() as logs:
+        enrollment_run._check_for_newer_year(records, check_url, 0.0)
+    assert [e["event"] for e in logs] == ["newer_year_check_unavailable"]
+
+
+def test_newer_year_fails_a_run_that_would_have_short_circuited(
+    serve_fixtures, enrollment_env, settings, monkeypatch
+):
+    """The case the check exists for: the scrape finds nothing new, which on
+    its own reports success, while the export already has the next year."""
+    from owcdata.config import PipelinesConfig
+    from owcdata.core.manifest import ManifestWriter
+    from owcdata.errors import NewerSchoolYearNotScraped
+    from owcdata.pipelines.enrollment import run as enrollment_run
+
+    serve_fixtures("page.html")
+    config = PipelinesConfig.load()
+    config.enrollment.page_url = "https://example.test/page.html"
+    config.enrollment.newer_year_check_url = EXPORT_PAGE_URL
+    config.enrollment.download_delay_seconds = 0.0
+
+    def fake_main():
+        return scrape.RunResult(
+            records=[{"title": "t", "cached": True, "fiscal_year": "2022-2023"}],
+            merged_path=None,
+            short_circuited=True,
+            skips=[],
+            warnings=[],
+        )
+
+    monkeypatch.setattr(enrollment_run, "_check_robots", lambda *_a, **_k: None)
+    monkeypatch.setattr(scrape, "main", fake_main)
+
+    written: list[dict] = []
+
+    class RecordingManifest(ManifestWriter):
+        def __init__(self) -> None:
+            super().__init__(bq=None, local_path=None)
+
+        def write(self, record) -> None:  # type: ignore[override]
+            written.append(record.to_row())
+
+    with pytest.raises(NewerSchoolYearNotScraped):
+        enrollment_run.run(settings, config, manifest=RecordingManifest(), data_dir=enrollment_env)
+
+    assert [r["status"] for r in written] == ["failed"], "must not also record success_no_change"

@@ -21,6 +21,7 @@ import pytest
 
 from owcdata.errors import (
     ConfigError,
+    NewerSchoolYearNotScraped,
     NoSourceFilesFound,
     PipelineError,
     QualityCheckError,
@@ -67,6 +68,7 @@ def _all_subclasses(cls: type[PipelineError]) -> list[type[PipelineError]]:
     "cls,event",
     [
         (NoSourceFilesFound, "no_source_files_found"),
+        (NewerSchoolYearNotScraped, "newer_school_year_unscraped"),
         (WorkbookReshapeError, "workbook_reshape_skipped"),
         (QualityCheckError, "quality_check_failed"),
         (ConfigError, "config_invalid"),
