@@ -21,35 +21,40 @@ WITH combined_naics AS (
     indid,
     indid_parent,
     'dim_indid' AS source
-  FROM dim_indid
+  FROM LIGHTCAST_DATA.CORELMI_US_V3.DIM_INDID
 
   UNION ALL
   SELECT DISTINCT naics6_name, 6, naics6, naics5, 'postings'
-  FROM postings
+  FROM LIGHTCAST_DATA.US.POSTINGS
   WHERE naics6 IS NOT NULL
+    AND LEFT(LPAD(COUNTY, 5, '0'), 2) = '40'
 
   UNION ALL
   SELECT DISTINCT naics5_name, 5, naics5, naics4, 'postings'
-  FROM postings
+  FROM LIGHTCAST_DATA.US.POSTINGS
   WHERE naics5 IS NOT NULL
+    AND LEFT(LPAD(COUNTY, 5, '0'), 2) = '40'
 
   UNION ALL
   SELECT DISTINCT naics4_name, 4, naics4, naics3, 'postings'
-  FROM postings
+  FROM LIGHTCAST_DATA.US.POSTINGS
   WHERE naics4 IS NOT NULL
+    AND LEFT(LPAD(COUNTY, 5, '0'), 2) = '40'
 
   UNION ALL
   SELECT DISTINCT naics3_name, 3, naics3, naics2, 'postings'
-  FROM postings
+  FROM LIGHTCAST_DATA.US.POSTINGS
   WHERE naics3 IS NOT NULL
+    AND LEFT(LPAD(COUNTY, 5, '0'), 2) = '40'
 
   UNION ALL
   SELECT DISTINCT naics2_name, 2, naics2, NULL, 'postings'
-  FROM postings
+  FROM LIGHTCAST_DATA.US.POSTINGS
   WHERE naics2 IS NOT NULL
+    AND LEFT(LPAD(COUNTY, 5, '0'), 2) = '40'
 ),
 
-/* ✅ FIX: one row per INDID (prevents dirty parent chains + dupes) */
+/* one row per INDID (prevents dirty parent chains + dupes) */
 prioritized_naics AS (
   SELECT indid, name, level, indid_parent
   FROM (
@@ -96,7 +101,7 @@ level6_dim AS (
    ----------------------------- */
 bucket_keys AS (
   SELECT DISTINCT TRIM(LC_BUCKET_INDID) AS INDID
-  FROM TULSA_FOR_YOU.VIEWS.INDUSTRY_CROSSWALK_POSTINGS_TO_LC
+  FROM TULSA_FOR_YOU.VIEWS.INDUSTRY_CROSSWALK_POSTINGS_TO_LC_OK
   WHERE LC_BUCKET_INDID IS NOT NULL
     AND LENGTH(TRIM(LC_BUCKET_INDID)) <> 6
 ),

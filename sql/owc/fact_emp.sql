@@ -30,11 +30,12 @@ occ_totals AS (
         o.AREAID,
         o.OCCID,
         SUM(o.EMP) AS occ_total_emp
-    FROM LIGHTCAST.TULSA_FOR_YOU.DAT_OCC o
-    JOIN LIGHTCAST.TULSA_FOR_YOU.DIM_OCCID docc
+    FROM LIGHTCAST_DATA.CORELMI_US_V3.DAT_OCC o
+    JOIN LIGHTCAST_DATA.CORELMI_US_V3.DIM_OCCID docc
       ON o.OCCID = docc.OCCID
     CROSS JOIN params p
     WHERE o.AREAID_TYPE = 'COUNTY'
+      AND LEFT(LPAD(o.AREAID, 5, '0'), 2) = '40'
       AND o.CLASSID <> '4'
       AND o.YEAR <= p.max_year
       AND docc.LEVEL = 5  -- detailed SOC only; avoids aggregates like 00-0000
@@ -49,13 +50,14 @@ staffing_by_occ_ind AS (
         s.OCCID,
         s.INDID,
         SUM(s.EMP) AS staff_emp
-    FROM LIGHTCAST.TULSA_FOR_YOU.DAT_STAFFING s
-    JOIN LIGHTCAST.TULSA_FOR_YOU.DIM_OCCID docc
+    FROM LIGHTCAST_DATA.CORELMI_US_V3.DAT_STAFFING s
+    JOIN LIGHTCAST_DATA.CORELMI_US_V3.DIM_OCCID docc
       ON s.OCCID = docc.OCCID
-    JOIN LIGHTCAST.TULSA_FOR_YOU.DIM_INDID dind
+    JOIN LIGHTCAST_DATA.CORELMI_US_V3.DIM_INDID dind
       ON s.INDID = dind.INDID
     CROSS JOIN params p
     WHERE s.AREAID_TYPE = 'COUNTY'
+      AND LEFT(LPAD(s.AREAID, 5, '0'), 2) = '40'
       AND s.CLASSID = '1'
       AND s.YEAR <= p.max_year
       AND docc.LEVEL = 5  -- aligns to detailed SOC
@@ -82,11 +84,12 @@ ind_totals AS (
         i.AREAID,
         i.INDID,
         SUM(i.EMP) AS num_emps
-    FROM LIGHTCAST.TULSA_FOR_YOU.DAT_IND i
-    JOIN LIGHTCAST.TULSA_FOR_YOU.DIM_INDID dind
+    FROM LIGHTCAST_DATA.CORELMI_US_V3.DAT_IND i
+    JOIN LIGHTCAST_DATA.CORELMI_US_V3.DIM_INDID dind
       ON i.INDID = dind.INDID
     CROSS JOIN params p
     WHERE i.AREAID_TYPE = 'COUNTY'
+      AND LEFT(LPAD(i.AREAID, 5, '0'), 2) = '40'
       AND i.CLASSID <> '4'
       AND i.YEAR <= p.max_year
       AND dind.LEVEL = 6

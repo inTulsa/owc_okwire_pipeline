@@ -8,7 +8,7 @@
 -- Date:            2025-11-14
 --
 -- Notes:
--- Source: LIGHTCAST.TULSA_FOR_YOU.POSTINGS_SKILLS left joined to POSTINGS. Filtered to
+-- Source: LIGHTCAST_DATA.US.POSTINGS_SKILLS left joined to POSTINGS. Filtered to
 -- SKILL_TYPE = 'Certification', excluding "Valid Driver's License" (which Lightcast tags
 -- as a certification but isn't one).
 --
@@ -24,12 +24,13 @@ SELECT
     P.IS_INTERNSHIP AS INTERNSHIP,
     PS.SKILL_ID AS SKILL_ID,
     COUNT(*) AS TOTAL_CERTS_COUNT
-FROM LIGHTCAST.TULSA_FOR_YOU.POSTINGS_SKILLS AS PS
-LEFT JOIN LIGHTCAST.TULSA_FOR_YOU.POSTINGS AS P
+FROM LIGHTCAST_DATA.US.POSTINGS_SKILLS AS PS
+LEFT JOIN LIGHTCAST_DATA.US.POSTINGS AS P
 ON
     PS.ID = P.ID
-WHERE 
-    SKILL_TYPE = 'Certification'
+WHERE
+    LEFT(LPAD(P.COUNTY, 5, '0'), 2) = '40'
+    AND SKILL_TYPE = 'Certification'
     AND SKILL_NAME <> 'Valid Driver''s License'
 GROUP BY 
     YEAR_POSTED,
@@ -39,4 +40,4 @@ GROUP BY
     COMPANY,
     MIN_EDULEVELS,
     INTERNSHIP,
-    SKILL_ID 
+    SKILL_ID

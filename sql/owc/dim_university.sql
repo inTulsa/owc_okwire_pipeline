@@ -13,7 +13,6 @@
 --
 ---------------------------------------------------------------------------------------------------
 */
-
 SELECT DISTINCT 
     DU.UNITID,
     DU.NAME as INSTNM,
@@ -25,7 +24,9 @@ SELECT DISTINCT
     RA.AREAID_NAME AS COUNTYNM,
     DU.LONGITUDE as LONGITUD,
     DU.LATITUDE as LATITUDE    
-FROM DIM_UNITID DU
-LEFT JOIN REF_AREAID RA
+FROM LIGHTCAST_DATA.CORELMI_US_V3.DIM_UNITID DU
+LEFT JOIN LIGHTCAST_DATA.CORELMI_US_V3.REF_AREAID RA
 ON DU.COUNTY = RA.AREAID
-WHERE NAME NOT LIKE '%not current%'
+WHERE
+    NAME NOT LIKE '%not current%'
+    AND LEFT(LPAD(COUNTY, 5, '0'), 2) = '40'

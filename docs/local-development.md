@@ -127,15 +127,13 @@ LIMIT N
 ```
 
 - **Files on disk are never modified.** The wrapping happens in memory.
-- Seven of the 35 files end in a semicolon (`dim_area`, `dim_company`,
-  `dim_edulevels`, `dim_schools`, `dim_skills`, `fact_completions`,
-  `fact_completions_lagged`). A semicolon inside a subquery is a syntax error,
-  so it is stripped first.
-- Four files carry a semicolon **inside a `--` comment**
-  (`fact_emp_2`, `fact_emp_lagged_2`, `fact_jobs_qoq`,
-  `fact_jobs_lagged_qoq`). The safety scan is comment- and
-  string-literal-aware so those are not mistaken for a second statement — a
-  naive scan flags them and fails `make check` for nothing.
+- No file ends in a semicolon today, but a trailing one is stripped first if
+  it comes back: a semicolon inside a subquery is a syntax error.
+- Most files carry a semicolon **inside a `--` comment** (`fact_emp_lagged`,
+  `fact_jobs`, `fact_jobs_lagged`, and prose in the header notes). The safety
+  scan is comment- and string-literal-aware so those are not mistaken for a
+  second statement — a naive scan flags them and fails `make check` for
+  nothing.
 - All 35 files are verified single-statement by
   `test_every_sql_file_is_single_statement_so_limit_is_safe`, and
   `prepare_query` refuses to wrap anything that is not.

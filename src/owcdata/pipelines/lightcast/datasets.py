@@ -13,10 +13,10 @@ from pathlib import Path
 from owcdata.config import REPO_ROOT, LightcastConfig
 from owcdata.errors import ConfigError
 
-# Trailing semicolons plus any whitespace after them. Seven of the 35 files
-# end in one (dim_area, dim_company, dim_edulevels, dim_schools, dim_skills,
-# fact_completions, fact_completions_lagged) and a semicolon inside a
-# subquery is a syntax error, so it has to come off before wrapping.
+# Trailing semicolons plus any whitespace after them. None of the 35 files
+# ends in one today (upstream dropped them in c1b4988), but a semicolon inside
+# a subquery is a syntax error, so one that reappears has to come off before
+# wrapping.
 _TRAILING_SEMICOLONS = re.compile(r"(?:\s*;)+\s*\Z")
 
 # For the safety scan below. Order matters: block comments first, then line
@@ -62,11 +62,11 @@ def _blank_comments_and_strings(sql: str) -> str:
 def statement_semicolons(sql: str) -> list[int]:
     """Offsets of semicolons that actually terminate a statement.
 
-    Comment-aware on purpose. Five of the 35 files carry a semicolon inside a
-    ``--`` comment ("detailed SOC only; avoids aggregates like 00-0000" and
-    three variants of "ADD quarterly; the past 3 months"), which is harmless
-    and must not be mistaken for a second statement — a naive scan for ``;``
-    flags those files and blocks CI for no reason.
+    Comment-aware on purpose. Most of the 35 files carry a semicolon inside a
+    ``--`` comment ("detailed SOC only; avoids aggregates like 00-0000",
+    "ADD quarterly; the past 3 months", and prose in the header notes), which
+    is harmless and must not be mistaken for a second statement — a naive scan
+    for ``;`` flags those files and blocks CI for no reason.
     """
     scrubbed = _blank_comments_and_strings(sql)
     return [m.start() for m in re.finditer(";", scrubbed)]

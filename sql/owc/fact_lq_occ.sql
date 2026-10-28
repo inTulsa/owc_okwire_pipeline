@@ -8,7 +8,7 @@
 -- Date:            2025-11-19
 --
 -- Notes:
--- Source: LIGHTCAST.TULSA_FOR_YOU.DAT_STAFFING. County and state occupation concentration
+-- Source: LIGHTCAST_DATA.CORELMI_US_V3.DAT_STAFFING. County and state occupation concentration
 -- are each computed as occupation EMP / total EMP for that area; LQ = county concentration
 -- / state concentration. An LQ above 1 indicates the occupation is more concentrated
 -- locally than statewide.
@@ -20,7 +20,7 @@ WITH OK_STATE_TOTALS AS (
         YEAR,
         SUM(EMP) AS NUM_EMPS
     FROM
-        LIGHTCAST.TULSA_FOR_YOU.DAT_STAFFING
+        LIGHTCAST_DATA.CORELMI_US_V3.DAT_STAFFING
     WHERE
         YEAR <= YEAR(CURRENT_DATE())
         AND AREAID = '40'
@@ -37,7 +37,7 @@ OK_STATE_OCCS AS (
         OK_STATE_TOTALS.NUM_EMPS AS STATE_TOTAL_EMPS,
         STATE_OCC_EMPS / STATE_TOTAL_EMPS AS STATE_OCC_CONC
     FROM
-        LIGHTCAST.TULSA_FOR_YOU.DAT_STAFFING AS DS
+        LIGHTCAST_DATA.CORELMI_US_V3.DAT_STAFFING AS DS
     LEFT JOIN 
         OK_STATE_TOTALS
     ON
@@ -58,10 +58,11 @@ OK_COUNTY_TOTALS AS (
         AREAID,
         SUM(EMP) AS NUM_EMPS
     FROM
-        LIGHTCAST.TULSA_FOR_YOU.DAT_STAFFING
+        LIGHTCAST_DATA.CORELMI_US_V3.DAT_STAFFING
     WHERE
         YEAR <= YEAR(CURRENT_DATE())
         AND AREAID_TYPE = 'COUNTY'
+        AND LEFT(LPAD(AREAID, 5, '0'), 2) = '40'
     GROUP BY
         YEAR,
         AREAID
@@ -75,7 +76,7 @@ OK_COUNTY_OCCS AS (
         OK_COUNTY_TOTALS.NUM_EMPS AS COUNTY_TOTAL_EMPS,
         COUNTY_OCC_EMPS / COUNTY_TOTAL_EMPS AS COUNTY_OCC_CONC
     FROM
-        LIGHTCAST.TULSA_FOR_YOU.DAT_STAFFING AS DS
+        LIGHTCAST_DATA.CORELMI_US_V3.DAT_STAFFING AS DS
     LEFT JOIN
         OK_COUNTY_TOTALS
     ON
@@ -84,6 +85,7 @@ OK_COUNTY_OCCS AS (
     WHERE
         DS.YEAR <= YEAR(CURRENT_DATE())
         AND DS.AREAID_TYPE = 'COUNTY'
+        AND LEFT(LPAD(DS.AREAID, 5, '0'), 2) = '40'
     GROUP BY
         DS.YEAR,
         DS.AREAID,

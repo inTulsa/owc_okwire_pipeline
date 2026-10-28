@@ -15,18 +15,6 @@ from owcdata.pipelines.lightcast.datasets import (
     strip_trailing_semicolon,
 )
 
-# The seven files that end in a semicolon. A semicolon inside a subquery is a
-# syntax error, so --limit must strip it.
-SEMICOLON_FILES = [
-    "dim_area",
-    "dim_company",
-    "dim_edulevels",
-    "dim_schools",
-    "dim_skills",
-    "fact_completions",
-    "fact_completions_lagged",
-]
-
 
 @pytest.fixture(scope="module")
 def lc():
@@ -38,15 +26,14 @@ def test_every_sql_file_is_single_statement_so_limit_is_safe(lc):
         assert is_single_statement(ds.read_sql()), f"{ds.name}.sql is not a single statement"
 
 
-def test_the_seven_semicolon_files_are_still_the_seven(lc):
-    """If this list changes, --limit just started or stopped mattering for a file."""
+def test_no_sql_file_ends_in_a_semicolon(lc):
+    """Upstream dropped them all in c1b4988. If one comes back, --limit strips it."""
     found = sorted(ds.name for ds in resolve(lc) if ds.read_sql().rstrip().endswith(";"))
-    assert found == sorted(SEMICOLON_FILES)
+    assert found == []
 
 
-@pytest.mark.parametrize("name", SEMICOLON_FILES)
-def test_limit_wrapping_strips_the_trailing_semicolon(lc, name):
-    wrapped = resolve(lc, dataset=name)[0].query(limit=100)
+def test_limit_wrapping_strips_the_trailing_semicolon():
+    wrapped = prepare_query("SELECT 1 AS x FROM t;\n", limit=100)
     assert not statement_semicolons(wrapped)
     assert wrapped.endswith("LIMIT 100")
     assert "_owc_limited" in wrapped

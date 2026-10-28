@@ -7,7 +7,7 @@
 -- Date:            2025-11-19
 --
 -- Notes:
--- Source: LIGHTCAST.TULSA_FOR_YOU.DAT_LABOR_FORCE (AREAID_TYPE = 'STATE', AREAID_NAME =
+-- Source: LIGHTCAST_DATA.CORELMI_US_V3.DAT_LABOR_FORCE (AREAID_TYPE = 'STATE', AREAID_NAME =
 -- 'Oklahoma'), from 2015 onward. Statewide monthly EMP is self-joined to January 2015 EMP
 -- (BASE_2015_EMP) to compute EMP_INDEX_TO_2015 = current EMP / base EMP.
 --
@@ -20,7 +20,7 @@ WITH OK_COUNTY AS (
         AREAID_NAME,
         EMP
     FROM
-        LIGHTCAST.TULSA_FOR_YOU.DAT_LABOR_FORCE
+        LIGHTCAST_DATA.CORELMI_US_V3.DAT_LABOR_FORCE
     WHERE
         AREAID_TYPE = 'STATE'
         AND AREAID_NAME = 'Oklahoma'

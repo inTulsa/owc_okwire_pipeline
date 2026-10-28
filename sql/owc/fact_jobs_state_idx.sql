@@ -7,7 +7,7 @@
 -- Date:            2025-11-19
 --
 -- Notes:
--- Source: LIGHTCAST.TULSA_FOR_YOU.POSTINGS, from 2015 onward, excluding postings from
+-- Source: LIGHTCAST_DATA.US.POSTINGS, from 2015 onward, excluding postings from
 -- staffing companies (COMPANY_IS_STAFFING = False). The statewide yearly posting count is
 -- self-joined to the 2015 count (BASE_2015_JOBS) to compute JOBS_INDEX_TO_2015.
 --
@@ -20,9 +20,10 @@ WITH OK_STATE AS (
         'Oklahoma' AS AREAID,
         COUNT(*) AS CURR_NUM_JOBS
     FROM
-        LIGHTCAST.TULSA_FOR_YOU.POSTINGS
+        LIGHTCAST_DATA.US.POSTINGS
     WHERE
-        COMPANY_IS_STAFFING = False
+        LEFT(LPAD(COUNTY, 5, '0'), 2) = '40'
+        AND COMPANY_IS_STAFFING = False
         AND YEAR_POSTED >= 2015
     GROUP BY
         YEAR_POSTED,
