@@ -1,6 +1,6 @@
 # Deploy
 
-**The whole procedure, and the only one.** Eight steps, about 20 minutes, run
+**The whole procedure, and the only one.** Nine steps, about 20 minutes, run
 entirely in Google Cloud Shell — nothing installed on your machine, no CI, and
 no `projectIamAdmin` on Terraform.
 
@@ -578,11 +578,35 @@ make smoke ENV=dev
 One real run of each pipeline — `dim_area` is 78 rows, unlimited, so it
 actually publishes — then the run manifest. Look for `status = success`.
 
+## 9. Connect PowerBI {#connect-powerbi}
+
+The pipelines are running, but nothing can read `owc_marts` from the PowerBI
+workspace until it has a key for `sa-<prefix>-powerbi-1`. Skip this and the
+first sign is a failed scheduled refresh.
+
+Two things have to be true first, and both are an admin's to settle:
+
+- **Someone can create the key.** The deploy account cannot, by design. An
+  admin either runs the command below themselves, or grants the deploy
+  account key-admin on that one account — see
+  [the permission it needs](#powerbi-key-permission).
+- **The organization allows keys at all.** If
+  `iam.disableServiceAccountKeyCreation` is enforced, nobody can create one
+  — see [check the org policy](#powerbi-org-policy).
+
+```bash
+make powerbi-key ENV=dev
+```
+
+It writes the key outside the repository, then prints the rest: paste it
+into the workspace's data source credentials, confirm a refresh succeeds,
+and delete the local copy. [PowerBI credentials](#powerbi) has the detail.
+
 ---
 
 ## Running this in an OMES project {#omes}
 
-The eight steps are the same. What differs is **who runs step 5**, and that
+The nine steps are the same. What differs is **who runs step 5**, and that
 changes what the other steps look like.
 
 ### Step 5 is theirs, not yours
@@ -708,13 +732,13 @@ It does not let PowerBI read anything new — a read session still needs
 `bigquery.tables.getData` on the table, which this account holds on
 `owc_marts` only.
 
-### It needs a permission the deploy account does not have
+### It needs a permission the deploy account does not have {#powerbi-key-permission}
 
 `iam.serviceAccountKeys.create` is not in the eleven roles, and the deploy
 account has no `actAs` on `powerbi` either — that account is deliberately
 outside `ATTACHED_SAS` because nothing attaches it. So either an admin mints
 the key, or they grant the deploy account key-admin on **that one account**,
-which makes the annual rotation self-service:
+which makes replacing it later self-service:
 
 ```bash
 gcloud iam service-accounts add-iam-policy-binding sa-<prefix>-powerbi-1@<project>.iam.gserviceaccount.com --project <project> --member serviceAccount:sa-<prefix>-deploy-1@<project>.iam.gserviceaccount.com --role roles/iam.serviceAccountKeyAdmin
@@ -723,7 +747,7 @@ gcloud iam service-accounts add-iam-policy-binding sa-<prefix>-powerbi-1@<projec
 Resource-scoped to one service account, and held by an identity no human
 logs in as.
 
-### Check the org policy first
+### Check the org policy first {#powerbi-org-policy}
 
 ```bash
 gcloud resource-manager org-policies describe constraints/iam.disableServiceAccountKeyCreation --project $PROJECT --effective
@@ -921,7 +945,7 @@ the job's own IAM policy.
 
 ## Rehearsing against your own project
 
-The same eight steps with one extra variable. Nothing is edited, nothing is
+The same nine steps with one extra variable. Nothing is edited, nothing is
 committed, nothing has to be changed back:
 
 ```bash

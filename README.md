@@ -29,7 +29,7 @@ live in [`pipelines.yml`](pipelines.yml).
 ## Start here
 
 **Standing an environment up, or deploying a change?**
-→ **[`docs/deploy.md`](docs/deploy.md)**. That is the whole procedure, eight
+→ **[`docs/deploy.md`](docs/deploy.md)**. That is the whole procedure, nine
 steps, and it is the only one. Everything else below is reference.
 
 From Google Cloud Shell:
@@ -73,10 +73,15 @@ make up ENV=dev
 
 # 8. one real run of each pipeline
 make smoke ENV=dev
+
+# 9. give PowerBI its key. needs an admin's grant first: deploy.md#connect-powerbi
+make powerbi-key ENV=dev
 ```
 
-Step 5 is the only one that needs elevated rights, and the only one someone
-else may have to run. `make access-check` tells you which of those you are.
+Step 5 is the one that needs elevated rights, and the one someone else may
+have to run. `make access-check` tells you which of those you are. Step 9
+also needs an admin, once: the deploy account cannot create the PowerBI key
+until it is granted key-admin on that one account.
 
 Add `PROJECT=your-project` to every command to aim the same process at a
 different project. Nothing is edited and nothing has to be changed back.
