@@ -92,7 +92,7 @@ from scratch.
 | About | Ask |
 |---|---|
 | A dashboard number | Whoever owns that dashboard |
-| Data freshness or an alert email | The data platform on-call |
+| Data freshness or an alert email | The OWC administrator |
 | The Lightcast relationship, license, or their bill | The Lightcast account owner at Tulsa For You |
 | The Oklahoma enrollment data itself | Oklahoma State Department of Education |
 

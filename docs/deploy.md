@@ -388,23 +388,9 @@ the middle of an IAM request is a question, which costs days.
 > optimization available to whoever happens to have those rights, **not a
 > step every operator can run.** `make access-check` tells you which you are.
 
-**If you cannot run it, the admin's file has to cover those three steps too**,
-or the APIs and buckets are never created and the first `make up` fails a long
-way from the cause. Two ways:
-
-- **They run `make gcloud-admin`** from a clone — it does the APIs, the
-  agents and the buckets as well as the identities. Nothing is missed.
-- **Or generate the full standalone file rather than the identity-only one.**
-  `make omes-script` emits `--part admin`, which deliberately omits the three
-  operator steps. For an operator with no elevated rights, ask for all seven:
-
-  ```bash
-  infra/gcloud/04-standalone.sh owc-dpar-p --prefix owc-dpar-p --principal user:THE-PERSON@agency.ok.gov --location US --region us-central1 --part all > owc-setup.sh
-  ```
-
-**This is the likeliest silent failure in the whole procedure**, because both
-halves report success: the admin's identity-only file does exactly what it
-says, and the operator never learns there were three more steps.
+**If you cannot run it, the admin does those three steps too.** Every route
+below covers them by default. If you did run it, `PART=admin` on
+`make omes-script` leaves them out of the admin's file.
 
 ### They run one file (no repo, no roles granted to you)
 
@@ -444,12 +430,12 @@ bash ~/owc-setup.sh
 bash owc-setup.sh
 ```
 
-You cannot run it yourself — it fails at the fourth step with a 403 on
-`iam.serviceAccounts.create`, which is exactly the permission this whole
-split exists to avoid needing. It stops there rather than half-finishing,
-and the steps before it are idempotent, so a mistaken run costs nothing.
+You cannot run it yourself — it stops with a 403 at the first step you lack
+rights for, which is the point of handing it over. Every step is
+idempotent, so a mistaken run costs nothing.
 
-Four steps, and nothing but identities: create the seven service accounts
+Seven steps. First the three above: the API enables, the two service agents
+and the two buckets. Then the identities: create the seven service accounts
 (six runtime, one deploy), grant the runtime ones their project roles, give
 the **deploy account** the resource-admin roles and `actAs` on the five it
 attaches, and grant **you** `tokenCreator` on the deploy account. It refuses

@@ -15,16 +15,13 @@ live in [`pipelines.yml`](pipelines.yml).
 > **`owc-dpar-d` is live. `owc-dpar-p` has not been built.** Dev runs both
 > pipelines end to end on the deploy-identity model — deploys run as
 > `sa-<prefix>-deploy-1`, impersonated, and no human needs an admin role to
-> deploy. What is not settled is prod: the privileged setup has never run
-> there, and the eleven roles the deploy account needs have only ever been
-> granted on dev. **Agree that role set before prod's first apply** —
-> [`OPEN-ITEMS.md`: agree the prod role set](docs/OPEN-ITEMS.md#prod-role-set).
+> deploy. Prod is built by following [`deploy.md`](docs/deploy.md), after
+> the eleven roles the deploy account needs are
+> [agreed with the platform team](docs/OPEN-ITEMS.md#prod-role-set).
 >
-> **These documents are a verified draft, not a signed-off deliverable.**
-> Every command and link resolves and the IAM claims are measured rather than
-> asserted — but the claim that someone who was not here can build prod from
-> [`deploy.md`](docs/deploy.md) alone is untested until someone does it.
-> [What has to close first](docs/OPEN-ITEMS.md#delivery-status).
+> Building prod is also the first real test of these documents. Keep notes,
+> and fix the document wherever a step needed improvising —
+> [handoff status](docs/OPEN-ITEMS.md#delivery-status).
 
 ## Start here
 

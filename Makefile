@@ -424,7 +424,12 @@ lock: ## Regenerate requirements.txt from pyproject.toml (run after changing dep
 	  --python-platform x86_64-unknown-linux-gnu -o requirements.txt
 	@echo ">> requirements.txt regenerated — commit it with the pyproject change"
 
+# Seeded with the committed pins, exactly as `make lock` is: uv keeps an
+# existing pin while it still satisfies pyproject.toml. Resolving from
+# scratch instead picked up every upstream release, so this went red every
+# few weeks with no change to pyproject.toml, and `make lock` could not fix it.
 lock-check: ## Verify requirements.txt matches pyproject.toml (part of `make check`)
+	@cp requirements.txt /tmp/owc-req-check.txt
 	@uv pip compile pyproject.toml --quiet --python-version 3.12 \
 	  --python-platform x86_64-unknown-linux-gnu -o /tmp/owc-req-check.txt
 	@# Compare the pins only: uv writes the -o path into a header comment, so
@@ -718,12 +723,16 @@ prep: auth-check ## Do the setup that needs no elevated rights (APIs, buckets)
 	  bash "$$tmp"; rc=$$?; rm -f "$$tmp"; exit $$rc
 
 # A single file to hand a project admin who will not grant you the roles and
-# will not clone your repo. Identity work only — the parts you can do
-# yourself are in `make prep`, so nothing in their file needs explaining.
-omes-script: ## Write a standalone setup script for your project admin to run
+# will not clone your repo. All seven steps by default: an operator set up the
+# way this repo intends cannot run `make prep`, and an identity-only file
+# would leave the APIs and buckets uncreated while both halves report success.
+# PART=admin trims it to the identity work, for an operator who already ran
+# `make prep` themselves.
+PART ?= all
+omes-script: ## Write a standalone setup script for your project admin to run. PART=admin if you ran make prep
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@infra/gcloud/04-standalone.sh $(PROJECT) --prefix $(NAME_PREFIX) \
-	  $(foreach o,$(OPERATOR),--principal $(o)) --location $(call tfvar,location) --region $(REGION) --part admin
+	  $(foreach o,$(OPERATOR),--principal $(o)) --location $(call tfvar,location) --region $(REGION) --part $(PART)
 
 gcloud-admin-dry-run: ## Print every privileged command the one-time setup would run, and change nothing
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }

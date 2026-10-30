@@ -23,15 +23,15 @@ lightcast:
     quarterly:
       schedule: "0 6 1 1,4,7,10 *" # 06:00 on the 1st of Jan/Apr/Jul/Oct
       freshness_grace_hours: 96
-      # TODO(open item 1): needs Lightcast's actual refresh cycles. Until a
-      # dataset is named here it runs monthly, which is never wrong — only
+      # Name a dataset here once Lightcast's refresh cycle for it is known.
+      # Until then it runs monthly, which is never wrong — only
       # more often than necessary.
       datasets: []
 
     yearly:
       schedule: "0 6 15 1 *" # 06:00 on Jan 15
       freshness_grace_hours: 168
-      # TODO(open item 1): same as above.
+      # Same as quarterly.
       datasets: []
 
   # Quality gate. Checked against staging before publish; a failure blocks
