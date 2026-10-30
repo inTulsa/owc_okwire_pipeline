@@ -1,10 +1,11 @@
 # ---------------------------------------------------------------------------
 # prod environment.
 #
-# Intentionally identical to envs/dev/main.tf except for the two lines noted
-# below, so a change verified in dev reaches prod verbatim. `diff dev prod`
-# should show only backend.tf, terraform.tfvars, env_name, and the
-# force_destroy guardrail.
+# Intentionally identical to envs/dev/main.tf except where noted below, so a
+# change verified in dev reaches prod verbatim. `diff dev prod` should show
+# only backend.tf, terraform.tfvars, env_name, the force_destroy guardrail,
+# freshness_check_enabled, and schedulers_paused (a dev variable, fixed false
+# here).
 #
 # Read pipelines.yml and sql/owc/ directly, so the schedules and task counts
 # in GCP are derived from the same files the Python reads. A schedule cannot

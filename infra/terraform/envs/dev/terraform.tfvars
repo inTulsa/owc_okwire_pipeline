@@ -19,7 +19,7 @@ alert_emails = ["gurtaj.singh@workforce.ok.gov"]
 snowflake_user = "analytics@tulsaforyou.com"
 
 # Required. Build first: `make build ENV=dev`, then pass the digest it prints.
-# CI supplies this with -var; it has no default on purpose.
+# `make up` supplies this with -var; it has no default on purpose.
 # image_digest = "us-central1-docker.pkg.dev/owc-dpar-d/ar-owc-dpar-d-images-1/owcdata@sha256:..."
 
 # Paused: dev runs when someone deploys or runs `make smoke`, not on a

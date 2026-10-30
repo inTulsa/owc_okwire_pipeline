@@ -311,10 +311,6 @@ Manager by hand during [`deploy.md` step 7](deploy.md#stand-it-up).
 **Consequence:** prod's first `make up` stops here. Cheap to fix, listed so
 it is not a surprise.
 
-**Check `alert_emails` in the same file while you are there.** It still names
-the previous developer's distribution list, which nothing rejects, so prod
-alerts would go there silently. Set it to an OWC list before the first apply.
-
 ---
 
 ## 6. Terraform state hosting {#state-hosting}
