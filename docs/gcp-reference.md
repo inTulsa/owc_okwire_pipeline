@@ -53,7 +53,7 @@ Six values, and this is the whole file:
 | `region` | `us-central1`. Cloud Run, Artifact Registry, Cloud Scheduler. |
 | `location` | `US`. GCS **and** all three BigQuery datasets — see [region co-location](#region-co-location-is-mandatory). |
 | `alert_emails` | A distribution list, not an individual. |
-| `snowflake_user` | The login. Not a secret; the password goes to Secret Manager. Rejected at plan time if left as the `REPLACE_ME` placeholder, which prod still carries. |
+| `snowflake_user` | The login. Not a secret; the password goes to Secret Manager. Rejected at plan time if it contains `REPLACE_ME`. Dev and prod use the same login. |
 | `billing_budget_amount` | `0` disables the budget alert entirely, which is the default in both environments. Set an amount *and* `billing_account` to turn it on. |
 
 Two things are deliberately **not** here:
@@ -274,12 +274,8 @@ apply pauses it again:
 gcloud scheduler jobs resume cs-$PREFIX-lightcast-monthly-1 --location $REGION
 ```
 
-Three things are genuinely prod-only:
+Two things are genuinely prod-only:
 
-- **`snowflake_user`** — the prod tfvars ship a `REPLACE_ME@` placeholder,
-  rejected at plan time. This value is only used at runtime, so a wrong one
-  applies perfectly cleanly and then fails at 06:00 on the 1st, unattended, a
-  month after the mistake.
 - **The password** goes into `sm-owc-dpar-p-snowflake-password-1` — a different
   secret in a different project. Dev's value is not reachable from prod.
 - **The freshness scheduled query exists only in prod**, which means the

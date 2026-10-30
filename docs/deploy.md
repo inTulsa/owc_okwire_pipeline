@@ -794,7 +794,6 @@ mistake costs.
 | | |
 |---|---|
 | **Which roles prod will actually grant** | The eleven roles have only ever been granted on dev. See [below](#prod-role-set) — this is the one that can stop the deploy dead. |
-| **`snowflake_user` is a placeholder** | `envs/prod/terraform.tfvars` ships `REPLACE_ME@…` and the plan rejects it on purpose. Put the real reader account in first. |
 | **Who deploys prod** | The privileged step runs **once** per project. Decide who gets `tokenCreator` on `sa-owc-dpar-p-deploy-1` before it runs — see [the deploy identity](#deploy-identity). Adding someone later is one binding; taking resource-admin roles back off a person is not. |
 | **Terraform state hosting** | [OPEN-ITEMS: state hosting](OPEN-ITEMS.md#state-hosting). Cheaper to answer now than to migrate state later. |
 
