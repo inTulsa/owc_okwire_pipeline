@@ -38,6 +38,20 @@ ATTACHED_SAS=("$SA_LIGHTCAST" "$SA_ENROLLMENT" "$SA_SCHEDULER" "$SA_BUILD" "$SA_
 # All six, for existence checks.
 ALL_SAS=("${ATTACHED_SAS[@]}" "$SA_POWERBI")
 
+# The identity that RUNS the deploy, as opposed to the six the deploy
+# creates. Deliberately outside ALL_SAS and ATTACHED_SAS: nothing attaches it
+# to a resource, Terraform never sees it, and `make names-check` compares
+# ALL_SAS against the Terraform naming convention — which does not and should
+# not know about it.
+#
+# It exists so that no human holds resource-admin roles. It carries them all;
+# a named person is granted roles/iam.serviceAccountTokenCreator on this one
+# account and impersonates it to deploy. That is auditable (every action is
+# attributable to the person who minted the token), revocable with one
+# binding, and satisfies OMES's rule that an operator hold no admin-level
+# role. See docs/deploy.md#deploy-identity.
+SA_DEPLOY=$(sa_email deploy)
+
 BUCKET_RAW="gcs-${PREFIX}-raw-1"
 BUCKET_ENROLLMENT_STATE="gcs-${PREFIX}-enrollment-state-1"
 BUCKET_STATE="gcs-${PROJECT}-tfstate-1"
@@ -80,7 +94,16 @@ TF_PRINCIPAL_ROLES=(
   # Datasets, tables, views, and the freshness scheduled query (a Data
   # Transfer Service resource).
   roles/bigquery.admin
-  roles/run.developer
+  # run.ADMIN, not run.developer. modules/pipeline/job.tf grants the scheduler
+  # run.developer on each job, and writing that binding needs
+  # run.jobs.setIamPolicy — which run.developer does not carry and run.admin
+  # does. With run.developer here the apply dies on that one resource and the
+  # schedulers 403 forever. Confirm with:
+  #   gcloud iam roles describe roles/run.admin
+  # This is the one role in this list that is broader than "administer the
+  # resource". It is acceptable because it is held by SA_DEPLOY, which no
+  # human logs in as — it would not be acceptable on a person's account.
+  roles/run.admin
   roles/cloudscheduler.admin
   # The secret CONTAINER. The value is added by hand and never enters state.
   roles/secretmanager.admin
@@ -101,7 +124,7 @@ TF_PRINCIPAL_ROLES=(
 
 # The roles this split REMOVES, which 02-verify-admin.sh asserts are absent.
 #
-# These are the four Stephen Jones named, or their direct consequences:
+# These are the four the platform team named, or their direct consequences:
 #   projectIamAdmin          every google_project_iam_member read-modify-wrote
 #                            the project IAM policy, so all 24 of them needed
 #                            getIamPolicy just to refresh
@@ -119,8 +142,9 @@ TF_PRINCIPAL_FORBIDDEN_ROLES=(
 
 # Project-level grants for the runtime identities, "<sa-key>|<role>".
 #
-# Scheduler is absent on purpose: it holds run.invoker on the two jobs
-# specifically, which is resource-scoped and stays in Terraform.
+# Scheduler is absent on purpose: it holds run.developer on the two jobs
+# specifically, which is resource-scoped and stays in Terraform. Not
+# run.invoker — the schedulers post an overrides body. See job.tf.
 RUNTIME_PROJECT_GRANTS=(
   "lightcast|roles/bigquery.jobUser"
   "lightcast|roles/logging.logWriter"
@@ -135,6 +159,17 @@ RUNTIME_PROJECT_GRANTS=(
   # exist before the first build.
   "build|roles/storage.objectViewer"
   "powerbi|roles/bigquery.jobUser"
+  # The BigQuery Storage Read API, which PowerBI's connector uses for bulk
+  # extraction. bigquery.readsessions.create is NOT in bigquery.jobUser and
+  # is project-scoped only — it cannot be granted on a dataset. Without it a
+  # refresh fails with PermissionDenied on 'bigquery.readsessions.create',
+  # after the credential has already authenticated successfully.
+  #
+  # It does not widen what PowerBI can read. Creating a read session still
+  # requires bigquery.tables.getData on the table, which powerbi holds on
+  # owc_marts alone — so owc_staging and owc_ops stay unreachable and
+  # verify-separation's assertions still hold.
+  "powerbi|roles/bigquery.readSessionUser"
   "freshness|roles/bigquery.jobUser"
 )
 

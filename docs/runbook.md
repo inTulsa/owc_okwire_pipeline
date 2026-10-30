@@ -31,6 +31,7 @@ Every failure exits non-zero, and the code names the cause. From
 | 6 | `load_failed` | BigQuery load job errors |
 | 7 | `quality_check_failed` | [Alert 4](#alert-4-quality) — publish was blocked |
 | 8 | `publish_failed` | Snapshot, copy, or view wiring |
+| 9 | `newer_school_year_unscraped` | [Alert 6c](#alert-6c-newer-year) — Oklahoma published a year we don't collect |
 
 ## First moves for any alert
 
@@ -60,6 +61,45 @@ bq query --use_legacy_sql=false --project_id=$PROJECT \
 gcloud logging read \
   'resource.type="cloud_run_job" jsonPayload.run_id="RUN_ID"' \
   --project=$PROJECT --limit=200 --format='value(jsonPayload.event,jsonPayload.dataset,jsonPayload.error)'
+```
+
+### Which datasets are running right now
+
+**Not from `pipeline_runs`.** A row is written by `record.finish()`, so it
+appears only once a dataset is *done* — the table is the completed picture,
+never the in-flight one. `status` defaults to `running` in the dataclass and
+no row is ever inserted carrying it.
+
+For in-flight work, read the logs:
+
+```bash
+make logs ENV=$ENV                      # both pipelines, last hour, oldest first
+```
+
+```bash
+make logs ENV=$ENV PIPELINE=lightcast SINCE=6h
+```
+
+```bash
+make logs ENV=$ENV FAILED=1             # errors only
+```
+
+It filters to the events that mark dataset boundaries — `extract_started`,
+`snowflake_query_submitted`, `bq_load_started`, `bq_published`,
+`dataset_failed` — so the output reads as a per-dataset timeline rather than
+every line the job emitted.
+
+For the completed picture with row counts and durations:
+
+```bash
+make runs ENV=$ENV
+```
+
+And for overall progress on one execution, which is counts rather than
+names:
+
+```bash
+gcloud run jobs executions describe EXECUTION_ID --region $REGION --project $PROJECT --format="value(status.runningCount,status.succeededCount,status.failedCount)"
 ```
 
 ---
@@ -135,7 +175,7 @@ gcloud scheduler jobs describe cs-$PREFIX-lightcast-monthly-1 --location=$REGION
 | Cause | Fix |
 |---|---|
 | Scheduler is PAUSED **in prod** | `gcloud scheduler jobs resume cs-$PREFIX-lightcast-monthly-1 --location=$REGION` |
-| Scheduler is PAUSED **in dev** | Expected — do not resume. Dev's schedulers are paused by Terraform (`schedulers_paused = true`) so dev does not re-run prod's 41 Snowflake queries and bill Lightcast twice. This alert is also disabled in dev, so you should not be reading this there. |
+| Scheduler is PAUSED **in dev** | Expected — do not resume. Dev's schedulers are paused by Terraform (`schedulers_paused = true`) so dev does not re-run prod's 35 Snowflake queries and bill Lightcast twice. This alert is also disabled in dev, so you should not be reading this there. |
 | Scheduler was deleted | `make tf-apply ENV=$ENV` |
 | Scheduler fires but jobs never start | That is [alert 3](#alert-3-scheduler-failing) |
 | Jobs run but the manifest is empty | Check for `manifest_write_failed` in the logs — the run may be fine while the record-keeping is broken, which disables this alert. Verify `bigquery.dataEditor` on `owc_ops`. |
@@ -144,8 +184,102 @@ Then catch up manually:
 
 ```bash
 gcloud run jobs execute cr-$PREFIX-lightcast-1 --region=$REGION --project=$PROJECT \
-  --args="run,lightcast,--group,monthly" --tasks=41 --wait
+  --args="run,lightcast,--group,monthly" --tasks=35 --wait
 ```
+
+---
+
+## `terraform apply` fails with "cannot assign requested address" {#ipv6}
+
+```text
+Error: Error when reading or editing BigQueryDataset "...owc_staging":
+  dial tcp [2607:f8b0:4001:c2f::5f]:443: connect: cannot assign requested address
+```
+
+**Networking, not IAM.** Terraform resolved the API to an IPv6 address and
+the machine has no usable IPv6 route, so the socket could not be opened
+locally — Google never saw the request. Cloud Shell frequently has no IPv6,
+and Go falls back to IPv4 on some code paths and not others, which is why
+this is intermittent and why it hits some resources and not their
+neighbours.
+
+**Nothing was changed.** These are refresh-phase errors, raised before any
+resource is modified, so the apply aborts having written nothing. The plan
+summary printed above them is partial for the same reason: refresh stopped
+early, so modules that depend on it were never evaluated. A
+"Changes to Outputs" block with no resource changes does **not** mean there
+is nothing to do.
+
+**gcloud is unaffected**, which is the confusing part. gcloud is Python and
+falls back to IPv4 cleanly; Terraform is Go, and Go's dialer will keep
+choosing an AAAA record it cannot route to. So every `make` target that
+shells out to gcloud works while `terraform apply` fails.
+
+**Two fixes that look right and do nothing.** Terraform's official binary is
+built `CGO_ENABLED=0` — pure Go, statically linked. So:
+
+- `GODEBUG=netdns=cgo` is **ignored**. The cgo resolver is not compiled in.
+- `/etc/gai.conf` is **never read**, because only `getaddrinfo` reads it.
+
+`getent ahosts` will happily show IPv4 first after a gai.conf edit while
+Terraform carries on dialling IPv6. Do not take `getent` as evidence the
+problem is fixed — it is testing a resolver Terraform does not use.
+
+**What does work: `/etc/hosts`.** Go's own resolver reads it, so pinning the
+API hostnames to their IPv4 addresses forces the issue for every endpoint
+Terraform touches:
+
+```bash
+for h in bigquery.googleapis.com storage.googleapis.com cloudresourcemanager.googleapis.com artifactregistry.googleapis.com logging.googleapis.com secretmanager.googleapis.com monitoring.googleapis.com cloudscheduler.googleapis.com run.googleapis.com iam.googleapis.com iamcredentials.googleapis.com serviceusage.googleapis.com bigquerydatatransfer.googleapis.com sts.googleapis.com oauth2.googleapis.com; do ip=$(getent ahostsv4 "$h" | awk 'NR==1{print $1}'); [ -n "$ip" ] && echo "$ip $h"; done | sudo tee -a /etc/hosts
+```
+
+It is a blunt instrument: it pins one IP per host and bypasses DNS load
+balancing, so treat it as a workaround for the length of a deploy, not a
+setting. Cloud Shell sessions are disposable, so it disappears on its own.
+
+**Or start a new Cloud Shell session**, which is often quicker. You get a
+different VM that may have no IPv6 address at all, in which case Go skips
+AAAA by itself. You will need to redo `gcloud auth application-default
+login` and the `env-exports` eval, because the gcloud config lives in a
+per-session `/tmp` directory.
+
+Then re-run the apply:
+
+```bash
+make tf-apply ENV=$ENV TF_ARGS="-var=image_digest=<the digest make build printed>"
+```
+
+There is no need to re-run `make up` — the build is the slow part and the
+image it pushed is still good.
+
+---
+
+## `tf-bootstrap` fails with "Moved resource instances excluded by targeting" {#state-mv}
+
+```text
+Error: Moved resource instances excluded by targeting
+  -target="module.enrollment.google_cloud_run_v2_job_iam_member.scheduler_invoker"
+  -target="module.lightcast.google_cloud_run_v2_job_iam_member.scheduler_invoker"
+```
+
+One-time, and only on a project whose state predates
+`scheduler_job_iam_in_terraform`. That variable gave the scheduler binding a
+`count`, which moves its address from `...scheduler_invoker` to
+`...scheduler_invoker[0]`. `tf-bootstrap` runs with `-target`, and Terraform
+will not plan a targeted run while a move is outstanding.
+
+Move the two state entries once, then re-run `make up`:
+
+```bash
+cd infra/terraform/envs/$ENV && terraform state mv 'module.lightcast.google_cloud_run_v2_job_iam_member.scheduler_invoker' 'module.lightcast.google_cloud_run_v2_job_iam_member.scheduler_invoker[0]'
+```
+
+```bash
+cd infra/terraform/envs/$ENV && terraform state mv 'module.enrollment.google_cloud_run_v2_job_iam_member.scheduler_invoker' 'module.enrollment.google_cloud_run_v2_job_iam_member.scheduler_invoker[0]'
+```
+
+Nothing in the project changes — this only renames the entries Terraform
+uses to track two bindings that already exist.
 
 ---
 
@@ -153,12 +287,28 @@ gcloud run jobs execute cr-$PREFIX-lightcast-1 --region=$REGION --project=$PROJE
 
 ### `PERMISSION_DENIED` 403 on `jobs/...:run` {#scheduler-403}
 
-> **This entry's diagnosis is incomplete.** On `owc-dpar-d` every check below
-> passes and the 403 persists. The leading explanation is that the scheduler
-> posts an `overrides` body, which needs `run.jobs.runWithOverrides` —
-> a permission `roles/run.invoker` does not grant. See
-> [`HANDOFF.md`](HANDOFF.md#open-issue-1-the-scheduler-403) for the test and
-> the fix options before working through the rest of this.
+> **Check this first — it is the cause that passes every other check.** The
+> scheduler posts an `overrides` body, and running a job with overrides needs
+> `run.jobs.runWithOverrides`. `roles/run.invoker` grants only
+> `run.instances.invoke`, `run.jobs.run` and `run.routes.invoke`, so the
+> binding reads as correct and every fire still 403s.
+>
+> `modules/pipeline/job.tf` grants `roles/run.developer` for this reason. A
+> project built before that change, or one whose binding was set by hand, can
+> still carry the old grant:
+>
+> ```bash
+> gcloud run jobs get-iam-policy cr-$PREFIX-lightcast-1 --region $REGION --project $PROJECT
+> ```
+>
+> If the scheduler account appears under `roles/run.invoker` and not
+> `roles/run.developer`, that is the bug. Correcting it needs
+> `run.jobs.setIamPolicy`, which the deploy account does not hold — it is an
+> admin task, on each job:
+>
+> ```bash
+> gcloud run jobs add-iam-policy-binding cr-$PREFIX-lightcast-1 --region $REGION --project $PROJECT --member serviceAccount:sa-$PREFIX-scheduler-1@$PROJECT.iam.gserviceaccount.com --role roles/run.developer
+> ```
 
 ```json
 "status": "PERMISSION_DENIED",
@@ -173,10 +323,11 @@ this before the checks existed:
 make scheduler-debug ENV=$ENV
 ```
 
-Five checks in one pass: the exact `run.invoker` binding on each job, what
-each scheduler is configured to send, whether the **Cloud Scheduler service
-agent** exists, whether that agent can impersonate the scheduler account, and
-the most recent attempt in full rather than truncated.
+Six checks in one pass: whether each job's binding actually permits a run
+**with overrides**, what each scheduler is configured to send, whether the
+**Cloud Scheduler service agent** exists, whether that agent can impersonate
+the scheduler account, the most recent attempt in full rather than truncated,
+and the most recent execution of each job.
 
 **The agent is the one that surprises people.** Cloud Scheduler does not call
 Cloud Run as the scheduler account directly — its service agent
@@ -194,8 +345,7 @@ Transfer agent; a project set up before that may not have either.
 **The order is load-bearing.** IAM accepts a binding for a principal that
 does not exist yet: the grant is recorded, reports success, and does nothing.
 So a `tokenCreator` grant applied before the agent was provisioned looks
-exactly like a fix and is not — which is what happened on `owc-dpar-d`, where
-the grant succeeded and the next fire was still `PERMISSION_DENIED`.
+exactly like a fix and is not.
 
 Create the agent first. The deploy account can do this itself:
 
@@ -207,28 +357,62 @@ It is idempotent and prints the agent's real address. **Then** have the
 `tokenCreator` grant re-applied, and fire the scheduler again. The script
 does these in that order; a hand-run grant on its own may not have.
 
-**Checks 3 and 4 can come back `????`, and that is not a failure.** Reading a
-service account's IAM policy needs `iam.serviceAccounts.getIamPolicy`, and
-Google-managed service agents are often not describable by a project member —
-neither of which the deploy account has. When the script cannot see something
-it says so rather than reporting NO, because an inconclusive check reported as
-a failure sends an admin to fix what was never broken.
+**Checks 3 and 4 can come back `????`, and that is not a failure.** When the
+script cannot see something it says so rather than reporting NO, because an
+inconclusive check reported as a failure sends an admin to fix what was never
+broken.
+
+- **Check 3 does not resolve for anyone**, including a project admin.
+  Google-managed service agents live outside the project and are not
+  describable. Treat `????` there as normal and read check 4 instead.
+- **Check 4 resolves for an admin**, who has `iam.serviceAccounts.getIamPolicy`.
+  If you need it answered, that is the person to ask.
+
+A 403 carrying `Original HTTP response code number` is itself evidence the
+impersonation worked: the token was minted and the call reached Cloud Run,
+which then refused it. That points at the job's binding, not the agent.
 
 When those two are inconclusive, **fire the scheduler — that is the
 definitive test**:
 
 ```bash
-gcloud scheduler jobs run cs-$PREFIX-lightcast-monthly-1 --location $REGION --project $PROJECT
+gcloud scheduler jobs run cs-$PREFIX-enrollment-monthly-1 --location $REGION --project $PROJECT
 ```
 
-then read checks 5 and 6 together. The scheduler's own history shows success
+**In dev the schedulers are paused, and `jobs run` refuses a paused job** with
+`FAILED_PRECONDITION: Job.state must be ENABLED`. Resume it, fire, then pause
+it back — and pause it back even if the test fails, or it will fire on its own
+at the next cron:
+
+```bash
+gcloud scheduler jobs resume cs-$PREFIX-enrollment-monthly-1 --location $REGION --project $PROJECT
+```
+
+```bash
+gcloud scheduler jobs pause cs-$PREFIX-enrollment-monthly-1 --location $REGION --project $PROJECT
+```
+
+Use **enrollment**, not lightcast: enrollment short-circuits on its cache,
+while lightcast fans out to 35 tasks and bills Lightcast's warehouse.
+
+Then read checks 5 and 6 together. The scheduler's own history shows success
 either way, because `jobs:run` returns an Operation.
 
 **An execution in check 6 does not prove the scheduler worked.** `make smoke`
 and `gcloud run jobs execute` create executions too. A scheduler fire that
 succeeded has an execution within seconds of its attempt in check 5; if the
-newest execution predates the newest attempt, the scheduler is still
-failing.
+newest execution predates the newest attempt, the scheduler is still failing.
+
+**The `RUN BY` column settles it without comparing timestamps at all:**
+
+```bash
+gcloud run jobs executions list --job cr-$PREFIX-enrollment-1 --region $REGION --project $PROJECT --limit 3
+```
+
+A scheduler-started execution reads
+`RUN BY: sa-$PREFIX-scheduler-1@$PROJECT.iam.gserviceaccount.com`. One a human
+started reads their address. That is the definitive test for this whole
+entry.
 
 Propagation is the other common cause: resource-level IAM takes a minute or
 two, so a forced run fired straight after `tf-apply` can beat it. Retry once
@@ -357,8 +541,8 @@ null check would catch.
 
 ```sql
 -- against Snowflake
-SELECT MAX(YEAR) FROM LIGHTCAST.TULSA_FOR_YOU.DAT_LABOR_FORCE;
-SELECT MAX(YEAR) FROM LIGHTCAST.TULSA_FOR_YOU.DAT_DEMOG;
+SELECT MAX(YEAR) FROM LIGHTCAST_DATA.CORELMI_US_V3.DAT_LABOR_FORCE;
+SELECT MAX(YEAR) FROM LIGHTCAST_DATA.CORELMI_US_V3.DAT_DEMOG;
 ```
 
 Edit the literal in the `.sql` file, open a PR, and re-run that one dataset.
@@ -390,44 +574,134 @@ diff <(python3 -c "import sys,re;print(re.sub(r'>\s*<','>\n<',open(sys.argv[1]).
      | head -60
 ```
 
-**Then check which selector broke.** These are the four things the scraper
-depends on, all at the top of
+**Then reproduce it locally.** A local run uses the same code and
+`pipelines.yml` as the deployed job, needs no credentials, and writes only
+under the gitignored `.owcdata-local/`:
+
+```bash
+make run PIPELINE=enrollment TARGET=local
+```
+
+It should fail the same way, with `discovery found 0 matching files`.
+
+**Then work out which of two things happened.** The scraper depends on five
+things. `page_url` is in [`pipelines.yml`](../pipelines.yml); the other four
+are constants at the top of
 [`scrape.py`](../src/owcdata/pipelines/enrollment/scrape.py):
 
-| Constant | Current value | What breaks it |
+| Setting | Current value | What breaks it |
 |---|---|---|
+| `page_url` | `.../student-information/achieved-years-enrollment-totals.html` | The links moving to a different page |
 | `GRID_WRAPPER_CLASSES` | `aem-Grid aem-Grid--12 aem-Grid--default--12` | A CMS upgrade or a template change |
 | `CONTAINER_CLASS` | `aem-GridColumn--default--12` | Same |
 | `SCHOOL_ETHGEN_LI_TEXT` | `School Site Totals w/Ethnicity and Gender` | Someone rewording the link |
 | `SCHOOL_TOTALS_SHEET` | `School Totals by Race` | A renamed worksheet |
 
 ```bash
-# Which one is missing from the new page?
+# Does the page still carry the selectors and the per-year links?
 grep -c 'aem-Grid--default--12' /tmp/bad.html
 grep -io 'School Site Totals[^<]*' /tmp/bad.html | sort -u
+grep -oiE 'href="[^"]+\.xlsx?"' /tmp/bad.html | wc -l
 ```
 
-**Fix.**
+**A. The links moved to another page.** The page has few or no workbook links
+left, but links to another page. This happened in October 2026: Oklahoma
+replaced the per-year links on `state-public-enrollment-totals.html` with one
+combined export and moved every fiscal year, unchanged, to
+`achieved-years-enrollment-totals.html`. Find the new page, then confirm the
+unchanged scraper reads it before you change anything:
 
-1. Save the new page as a test fixture — this is the important step, because
-   it turns the fix into a test:
-   ```bash
-   cp /tmp/bad.html tests/fixtures/enrollment/page.html
-   ```
-2. Run the parsing tests. They will fail, and *how* they fail tells you what
-   changed:
-   ```bash
-   make test
-   ```
-3. Update the selector constants until they pass.
-4. Open a PR. The fixture goes in with it, so this exact regression is now
-   covered.
+```bash
+.venv/bin/python -c "
+from owcdata.pipelines.enrollment import scrape
+scrape.PAGE_URL = 'THE_NEW_PAGE_URL'
+scrape.configure('/tmp/enrollment-try', delay_seconds=1.0)
+r = scrape.main()
+print(r.merged_rows, 'rows from', r.reshaped_files, 'files; skips:', r.skips)
+"
+```
+
+If that prints every fiscal year and no skips, the fix is the URL in two
+places:
+
+1. `page_url` in [`pipelines.yml`](../pipelines.yml). This is what the
+   deployed job reads.
+2. The `PAGE_URL` substitution in
+   [`scripts/derive_scrape.py`](../scripts/derive_scrape.py), then
+   `make derive-scrape`. This keeps a standalone run of `scrape.py` on the
+   same page.
+
+**B. The links are on the page but the markup changed.** The selector
+constants need updating. `scrape.py` is **generated**, so don't edit it
+directly; `make derive-check` (part of `make check`) will reject that.
+Instead:
+
+1. Add a substitution to `SUBSTITUTIONS` in
+   [`scripts/derive_scrape.py`](../scripts/derive_scrape.py) that replaces
+   the constant, and add a line for it to the numbered change list in that
+   file's `HEADER`. Then run `make derive-scrape`.
+2. Update the test fixture by hand to the new markup. Copy
+   `tests/fixtures/enrollment/page.html` and change its classes or link text
+   to match the new page. **Don't copy the live HTML over `page.html`:** its
+   links point at oklahoma.gov, and the test server only serves the local
+   fixture workbooks. Every link would 404, and every parsing test would fail
+   for a reason unrelated to your fix.
+3. `make test` until it passes.
+
+**Either way, prove it before you deploy:**
+
+```bash
+make check                                # lint, types, derive-check, unit tests
+make run PIPELINE=enrollment TARGET=local # the real page, end to end, locally
+.venv/bin/pytest -m integration tests/integration/test_live.py -k "live_scrape or second_run"
+```
+
+The local run should report every fiscal year with no `[skip]` lines. The two
+integration tests scrape the live page, need no credentials, and also prove
+the cache short-circuit still works. Then [ship it](#ship-a-scraper-fix).
 
 **If the page is merely restructured but the links are still findable,** you
 may instead see a `grid_wrapper_not_found` warning with a successful run — the
 scraper falls back to a whole-page search. That is a warning, not a failure,
 and it is your advance notice that the selectors are drifting. Fix it before
 it becomes alert 6.
+
+### Ship a scraper fix {#ship-a-scraper-fix}
+
+`pipelines.yml` and the code are baked into the image, so a fix reaches the
+job only through a new image. Terraform is only involved if the change also
+touched `infra/`, for example to add an alert (step 4).
+
+1. **Commit first, then build.** `make build` tags the image with the commit
+   checked out at the time. Building before committing leaves an image no
+   commit identifies ([why that matters](#roll-back-the-image)). Merge the fix
+   to the branch you deploy from.
+2. In Cloud Shell, bring the checkout up to that commit and deploy it:
+   ```bash
+   cd ~/owc && git pull
+   make deploy ENV=dev        # build the image, and point both jobs at it
+   make which-image ENV=dev   # both jobs should show the newest build's digest
+   ```
+   `make build` alone is not enough. A job pins an image digest that
+   Terraform ignores, so only `set-image` (which `deploy` runs) moves it. See
+   [A fix was deployed but the old behavior persists](#a-fix-was-deployed-but-the-old-behavior-persists).
+3. Run the job once, rather than waiting for the 5th of the month:
+   ```bash
+   gcloud run jobs execute cr-$PREFIX-enrollment-1 --region=$REGION --project=$PROJECT --wait
+   make runs ENV=dev          # the newest enrollment row should be status = success
+   ```
+   If every source workbook is already in the cache, this run short-circuits
+   and republishes nothing. That is a success: the fix found the same files.
+   To force a rebuild of the table, see
+   [Force the enrollment pipeline to rebuild from scratch](#force-the-enrollment-pipeline-to-rebuild-from-scratch).
+4. **Only if the change touched `infra/`:** apply it too, pinned to the image
+   you just deployed:
+   ```bash
+   make tf-apply ENV=dev TF_ARGS="-var=image_digest=$(make -s image-digest ENV=dev)"
+   ```
+   Read the plan before typing `yes`. For a new alert it should only add a
+   `google_logging_metric` and a `google_monitoring_alert_policy`.
+5. Repeat steps 2 to 4 with `ENV=prod` once prod exists.
 
 ---
 
@@ -452,10 +726,82 @@ diff <(python3 -c "import sys,re;print(re.sub(r'>\s*<','>\n<',open('/tmp/old.htm
      <(python3 -c "import sys,re;print(re.sub(r'>\s*<','>\n<',open('/tmp/new.html').read()))") | head -40
 ```
 
-**Fix.** Same procedure as alert 6, but unhurried: save the new HTML over
-`tests/fixtures/enrollment/page.html`, run `make test`, and update the
-selector constants until the assertions pass. The fixture goes in with the
-PR, so the regression is covered from then on.
+**Fix.** Same procedure as [alert 6](#alert-6-no-files), case B, but
+unhurried: update the constants through `scripts/derive_scrape.py`, update
+`tests/fixtures/enrollment/page.html` by hand to the new markup, and
+`make test` until it passes. The fixture goes in with the PR, so the
+regression is covered from then on.
+
+## ALERT 6c: Oklahoma published a school year we don't collect {#alert-6c-newer-year}
+
+**Symptom.** `newer_school_year_unscraped`. Exit code 9. The error names both
+years, for example *"has school year 2026-2027, but the newest year scraped
+from the enrollment page is 2025-2026"*.
+
+**What it means.** Each run reads the newest School Year from the workbook on
+`newer_year_check_url` (the original `state-public-enrollment-totals.html`,
+which since October 2026 has one combined export). That workbook is ahead of
+everything the scraper found on `page_url`. The run failed before publishing,
+so the table still holds every earlier year. Those are correct; the table is
+just missing the newest year.
+
+**Nothing is broken yet,** and every monthly run will keep failing this way
+until the new year is collected. The one question is where Oklahoma put it.
+
+**Diagnose.**
+
+```bash
+# Is the new year on the page we scrape yet?
+curl -s -A "Mozilla/5.0 (compatible; PythonScript/1.0)" \
+  https://oklahoma.gov/education/services/student-information/achieved-years-enrollment-totals.html \
+  | grep -oE 'FY 20[0-9]{2}/20[0-9]{2}' | head -3
+```
+
+**Fix, depending on the answer:**
+
+- **The new year is on `page_url` now, just late.** Oklahoma sometimes posts
+  the export first and the per-year file afterwards. Re-run the job once the
+  file is there; the scrape picks it up and the check passes. No code change.
+- **The new year is on `page_url` but the scrape missed it.** Its link or
+  heading is new. This is [alert 6](#alert-6-no-files), case B.
+- **The new year exists only in the export.** The pipeline has to start
+  reading the export. This is a design change, not a selector fix: the export
+  repeats the four most recent years, so it needs a decision about which
+  source wins for the overlapping years. Its race/gender sheet already
+  matches the column names the scraper knows, which makes the reshape
+  straightforward. Decide the overlap rule first.
+
+To publish the years you already have in the meantime, temporarily remove
+`newer_year_check_url` from `pipelines.yml` and
+[ship it](#ship-a-scraper-fix). Put it back with the real fix.
+
+---
+
+## ALERT 6d: the newer-year check could not run {#alert-6d-newer-year-check-unavailable}
+
+**Symptom.** `newer_year_check_unavailable`, and **the run succeeded.**
+
+The check behind [alert 6c](#alert-6c-newer-year) could not read
+`newer_year_check_url`. Common causes: the page moved, its workbook link
+disappeared, or the workbook no longer has a race/gender sheet with a
+School Year column. It is a warning so that a change to a page we only watch
+cannot block publishing the page we scrape. But until it is fixed, a new
+school year published only there goes unnoticed.
+
+**Diagnose.** The log line's `error` field says which step failed:
+
+```bash
+gcloud logging read \
+  'resource.type="cloud_run_job" jsonPayload.event="newer_year_check_unavailable"' \
+  --project=$PROJECT --limit=5 --format='value(jsonPayload.error)'
+```
+
+**Fix.** Open the page in a browser and find where the combined export went.
+If it moved, update `newer_year_check_url` in `pipelines.yml`. If Oklahoma
+stopped publishing it, remove the line, which turns the check off. Then
+[ship it](#ship-a-scraper-fix).
+
+---
 
 ## ALERT 7: enrollment workbook skipped {#alert-7-reshape-skipped}
 
@@ -555,10 +901,23 @@ bq query --use_legacy_sql=false --project_id=$PROJECT \
  GROUP BY user_email ORDER BY gib_billed DESC'
 ```
 
-**Fix.** If `sa-*-powerbi-1` is the top consumer, PowerBI is on DirectQuery and
-is billing a scan per slicer click. Either move the model to Import mode or
-set a **custom daily query quota** on that service account. See open item 5 —
-Import mode on a Pro workspace caps a semantic model at 1 GB compressed.
+**Fix.** `sa-*-powerbi-1` should **not** be the top consumer. PowerBI runs
+**Import** on Premium capacity, so BigQuery sees one full read per scheduled
+refresh — a predictable cost that scales with refresh frequency, not with how
+many people are clicking.
+
+If it is the top consumer, one of two things changed:
+
+- **A model or report was switched to DirectQuery**, which bills a scan per
+  slicer click. Check the semantic model's storage mode before assuming a
+  runaway refresh schedule.
+- **Refreshes are running far more often than intended.** Check the refresh
+  schedule on the semantic model.
+
+Either way, a **custom daily query quota** on that service account caps the
+damage while you find out. Note the 1 GB semantic-model cap that makes Import
+painful applies to **Pro** workspaces; on Premium the ceiling depends on the
+capacity SKU, so moving *off* Import is rarely the right answer here.
 
 ---
 
@@ -1210,7 +1569,7 @@ cd infra/terraform/envs/$ENV && terraform force-unlock <ID>
 — a realistic interval for a pipeline that runs monthly. Clone it again:
 
 ```bash
-cd ~ && git clone https://github.com/inTulsa/owc_okwire_pipeline.git owc
+cd ~ && git clone https://github.com/Oklahoma-Workforce-Commission-840/OK-wire-data-pipeline.git owc
 ```
 
 Without GitHub access, use the project's own mirror:
@@ -1399,7 +1758,7 @@ gcloud run jobs execute cr-$PREFIX-lightcast-1 --region=$REGION --project=$PROJE
 
 ```bash
 gcloud run jobs execute cr-$PREFIX-lightcast-1 --region=$REGION --project=$PROJECT \
-  --args="run,lightcast,--group,monthly" --tasks=41 --wait
+  --args="run,lightcast,--group,monthly" --tasks=35 --wait
 ```
 
 ### Reprocess enrollment without re-scraping

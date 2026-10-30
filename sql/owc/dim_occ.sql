@@ -1,17 +1,16 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: This SQL query retrieves the lowest level and highest level SOC code from the 
-	DIM_OCCID table in lightcast.
+-- Description:     Builds the occupation (OCC) dimension, pairing each detailed SOC occupation
+--                   from DIM_OCCID with its top-level (2-digit) SOC group.
 --
--- Author:          Nile Dixon
 -- Date:            2025-12-01
 --
--- Notes: The DIM_OCCID table only contains the information about the lowest level SOC code and none of the 
-	intermdiary levels. However, the POSTINGS table contains the soc codes for each higher level. Therefore,
-	I joined the SOC codes with the distinct list of the highest level socs present in the POSTINGS table.
--- 
---
+-- Notes:
+-- DIM_OCCID only contains detailed (lowest-level) SOC codes with no intermediary levels, while
+-- POSTINGS contains the top-level SOC codes and names. The top-level SOC codes derived from
+-- POSTINGS are joined back to DIM_OCCID (matching on the first 2 digits) to attach the
+-- top-level grouping to each detailed occupation record.
 --
 ---------------------------------------------------------------------------------------------------
 */
@@ -20,7 +19,8 @@ WITH SOC_CODES AS (
         CONCAT(LEFT(SOC_2, 2),'-0000') AS TL_SOC_CODE, 
         SOC_2_NAME 
     FROM 
-        LIGHTCAST.TULSA_FOR_YOU.POSTINGS
+        LIGHTCAST_DATA.US.POSTINGS
+    WHERE LEFT(LPAD(COUNTY, 5, '0'), 2) = '40'
 )
 SELECT 
     CONCAT(LEFT(OCCID, 2),'-0000') AS TLOCCID,
@@ -32,8 +32,10 @@ SELECT
     TYPICALEXPERIENCE,
     TYPICALTRAINING
 FROM
-    LIGHTCAST.TULSA_FOR_YOU.DIM_OCCID AS DIMOCCID
+    LIGHTCAST_DATA.CORELMI_US_V3.DIM_OCCID AS DIMOCCID
 RIGHT JOIN
     SOC_CODES
 ON
     SOC_CODES.TL_SOC_CODE = CONCAT(LEFT(OCCID, 2),'-0000')
+WHERE
+    RIGHT(OCCID, 1) <> '0'

@@ -13,7 +13,7 @@ make tf-plan ENV=dev
 That is the entire procedure. Unlisted `.sql` files fall into
 `defaults.group`, which preserves the original pipeline's
 glob-the-directory behavior, and Terraform derives the Cloud Run task count
-from the files on disk — so the count goes from 41 to 42 with no config edit.
+from the files on disk — so the count goes from 35 to 36 with no config edit.
 
 Requirements on the file:
 
@@ -46,7 +46,7 @@ those two are about as different as two pipelines get:
 
 | | lightcast | enrollment |
 |---|---|---|
-| tasks | one per dataset (41) | 1 |
+| tasks | one per dataset (35) | 1 |
 | parallelism | 4 | 1 |
 | timeout | 2h | 30m |
 | secrets | the Snowflake password | **none** |

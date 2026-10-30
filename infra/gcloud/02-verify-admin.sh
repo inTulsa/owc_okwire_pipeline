@@ -5,7 +5,7 @@
 # split was supposed to remove.
 #
 #   ./infra/gcloud/02-verify-admin.sh owc-dpar-d \
-#       --principal user:gabriel.torianyk@tulsaforyou.com
+#       --principal user:THE-OPERATOR@agency.ok.gov
 #
 # Every assertion separates "the command worked" from "the answer was no",
 # because `cmd | grep -q X && echo OK` prints OK when the command FAILS —
@@ -46,6 +46,12 @@ fail=0
 pass() { printf '  \033[32mOK\033[0m       %s\n' "$1"; }
 bad()  { printf '  \033[31mPROBLEM\033[0m  %s\n' "$1"; fail=1; }
 err()  { printf '  \033[33mERROR\033[0m    %s\n' "$1"; fail=1; }
+# Distinct from PROBLEM, and deliberately NOT a failure. Most of what this
+# script reads needs permissions the deploy identity does not have, and
+# reporting "cannot see" as "is missing" sends someone to re-run a setup
+# that already worked.
+huh()  { printf '  \033[33m????\033[0m     %s\n' "$1"; }
+note() { printf '           %s\n' "$1"; }
 # Does NOT set fail. Used for excess privilege, which does not block a deploy
 # — see --strict. Defined here because the forbidden-role loop selects
 # between `bad` and `warn` by name; without it those lines printed
@@ -90,7 +96,7 @@ fi
 #
 # Exact, not a grep. `grep projectIamAdmin` would also match the role name
 # inside a condition expression or a longer role, and a substring match on the
-# member would let "user:gabe@x.com" be satisfied by "user:gabe@x.com.evil".
+# member would let "user:a@x.com" be satisfied by "user:a@x.com.evil".
 # Both make a "does not have" assertion pass when it should fail, which is the
 # one direction that must never be wrong here.
 POLICY_MATCHER='
@@ -110,13 +116,29 @@ has_binding() {
 
 # --- the six identities exist ----------------------------------------------
 head2 "Service accounts"
+unreadable=0
 for email in "${ALL_SAS[@]}"; do
   if out=$(gcloud iam service-accounts describe "$email" --project "$PROJECT" 2>&1); then
     pass "${email%%@*} exists"
   else
-    bad "${email%%@*} is MISSING — re-run 01-admin-identities.sh"
+    case "$out" in
+      *NOT_FOUND*|*"not found"*|*"Unknown service account"*)
+        bad "${email%%@*} is MISSING — re-run 01-admin-identities.sh" ;;
+      *)
+        # Reading a service account needs iam.serviceAccounts.get. The deploy
+        # identity has it only via serviceAccountUser on the five accounts it
+        # attaches, so powerbi — which nothing attaches — is invisible to it.
+        huh "${email%%@*} cannot be read as this identity"
+        unreadable=$((unreadable+1)) ;;
+    esac
   fi
 done
+if (( unreadable )); then
+  note "Not evidence of absence. Reading a service account needs"
+  note "iam.serviceAccounts.get, which the deploy identity holds only via"
+  note "serviceAccountUser on the five accounts it attaches — powerbi is"
+  note "deliberately not one of them. Run as the admin for a full audit."
+fi
 
 # --- runtime project bindings ----------------------------------------------
 if (( ! REDUCED )); then
@@ -143,7 +165,15 @@ if pol=$(gcloud iam service-accounts get-iam-policy "$SA_FRESHNESS" \
     bad "  freshness scheduled query will fail (prod only; dev disables it)"
   fi
 else
-  err "could not read the freshness SA's policy: $(tail -1 <<<"$pol")"
+  case "$pol" in
+    *PERMISSION_DENIED*|*IAM_PERMISSION_DENIED*|*"does not have"*)
+      huh "cannot read the freshness SA's policy as this identity"
+      note "Needs iam.serviceAccounts.getIamPolicy, which the deploy"
+      note "identity does not have. Expected in REDUCED mode, and not"
+      note "evidence either way. Run as the admin to check it." ;;
+    *)
+      err "could not read the freshness SA's policy: $(tail -1 <<<"$pol")" ;;
+  esac
 fi
 
 # --- the Terraform principal ------------------------------------------------
@@ -213,6 +243,33 @@ else
       err "could not read ${target%%@*}'s policy: $(tail -1 <<<"$pol")"
     fi
   done
+
+  # The one binding the whole model rests on. A deploy account nobody can
+  # impersonate blocks every deploy; one that too many people can impersonate
+  # quietly gives them all of the roles above.
+  head2 "Deploy identity ${SA_DEPLOY%%@*} — who may impersonate it"
+  if pol=$(gcloud iam service-accounts get-iam-policy "$SA_DEPLOY" \
+       --project "$PROJECT" --format=json 2>&1); then
+    holders=$(python3 -c '
+import json, sys
+pol = json.load(sys.stdin)
+print("\n".join(sorted(
+    m for b in pol.get("bindings", [])
+    if b.get("role") == "roles/iam.serviceAccountTokenCreator"
+    for m in b.get("members", []))))
+' <<<"$pol")
+    if [[ -z "$holders" ]]; then
+      bad "nobody can impersonate it — no deploy is possible"
+      bad "  gcloud iam service-accounts add-iam-policy-binding $SA_DEPLOY \\"
+      bad "    --project $PROJECT --member user:<address> \\"
+      bad "    --role roles/iam.serviceAccountTokenCreator"
+    else
+      while read -r m; do [[ -n "$m" ]] && pass "may impersonate: $m"; done <<<"$holders"
+      printf '  \033[2m%s\033[0m\n' "Each of these acts with every role above. Keep the list short."
+    fi
+  else
+    err "could not read the deploy account's policy: $(tail -1 <<<"$pol")"
+  fi
 fi
 
 # --- APIs -------------------------------------------------------------------

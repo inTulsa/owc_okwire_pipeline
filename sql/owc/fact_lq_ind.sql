@@ -1,14 +1,17 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: 
+-- Description:     Builds the industry location quotient (LQ) fact table by year and county,
+--                   comparing each county's industry employment concentration to the
+--                   statewide (Oklahoma) concentration.
 --
--- Author:          Nile Dixon
 -- Date:            2025-11-19
 --
 -- Notes:
--- 
---
+-- Source: LIGHTCAST_DATA.CORELMI_US_V3.DAT_STAFFING. INDID is truncated to 5 digits (industry
+-- subsector level). County and state industry concentration are each computed as
+-- industry EMP / total EMP for that area; LQ = county concentration / state concentration.
+-- An LQ above 1 indicates the industry is more concentrated locally than statewide.
 --
 ---------------------------------------------------------------------------------------------------
 */
@@ -17,7 +20,7 @@ WITH OK_STATE_TOTALS AS (
         YEAR,
         SUM(EMP) AS NUM_EMPS
     FROM
-        LIGHTCAST.TULSA_FOR_YOU.DAT_STAFFING
+        LIGHTCAST_DATA.CORELMI_US_V3.DAT_STAFFING
     WHERE
         YEAR <= YEAR(CURRENT_DATE())
         AND AREAID = '40'
@@ -34,7 +37,7 @@ OK_STATE_INDS AS (
         OK_STATE_TOTALS.NUM_EMPS AS STATE_TOTAL_EMPS,
         STATE_IND_EMPS / STATE_TOTAL_EMPS AS STATE_IND_CONC
     FROM
-        LIGHTCAST.TULSA_FOR_YOU.DAT_STAFFING AS DS
+        LIGHTCAST_DATA.CORELMI_US_V3.DAT_STAFFING AS DS
     LEFT JOIN 
         OK_STATE_TOTALS
     ON
@@ -55,10 +58,11 @@ OK_COUNTY_TOTALS AS (
         AREAID,
         SUM(EMP) AS NUM_EMPS
     FROM
-        LIGHTCAST.TULSA_FOR_YOU.DAT_STAFFING
+        LIGHTCAST_DATA.CORELMI_US_V3.DAT_STAFFING
     WHERE
         YEAR <= YEAR(CURRENT_DATE())
         AND AREAID_TYPE = 'COUNTY'
+        AND LEFT(LPAD(AREAID, 5, '0'), 2) = '40'
     GROUP BY
         YEAR,
         AREAID
@@ -72,7 +76,7 @@ OK_COUNTY_INDS AS (
         OK_COUNTY_TOTALS.NUM_EMPS AS COUNTY_TOTAL_EMPS,
         COUNTY_IND_EMPS / COUNTY_TOTAL_EMPS AS COUNTY_IND_CONC
     FROM
-        LIGHTCAST.TULSA_FOR_YOU.DAT_STAFFING AS DS
+        LIGHTCAST_DATA.CORELMI_US_V3.DAT_STAFFING AS DS
     LEFT JOIN
         OK_COUNTY_TOTALS
     ON
@@ -81,6 +85,7 @@ OK_COUNTY_INDS AS (
     WHERE
         DS.YEAR <= YEAR(CURRENT_DATE())
         AND DS.AREAID_TYPE = 'COUNTY'
+        AND LEFT(LPAD(DS.AREAID, 5, '0'), 2) = '40'
     GROUP BY
         DS.YEAR,
         DS.AREAID,

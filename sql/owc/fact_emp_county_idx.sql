@@ -1,14 +1,15 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: 
+-- Description:     Builds a monthly employment index by county, indexed to a January 2015
+--                   baseline (2015 = 1.0).
 --
--- Author:          Nile Dixon
 -- Date:            2025-11-19
 --
 -- Notes:
--- 
---
+-- Source: LIGHTCAST_DATA.CORELMI_US_V3.DAT_LABOR_FORCE (AREAID_TYPE = 'COUNTY'), from 2015 onward.
+-- Each county's monthly EMP is self-joined to that same county's January 2015 EMP
+-- (BASE_2015_EMP) to compute EMP_INDEX_TO_2015 = current EMP / base EMP.
 --
 ---------------------------------------------------------------------------------------------------
 */
@@ -19,9 +20,10 @@ WITH OK_COUNTY AS (
         AREAID_NAME,
         EMP
     FROM
-        LIGHTCAST.TULSA_FOR_YOU.DAT_LABOR_FORCE
+        LIGHTCAST_DATA.CORELMI_US_V3.DAT_LABOR_FORCE
     WHERE
         AREAID_TYPE = 'COUNTY'
+        AND LEFT(LPAD(AREAID, 5, '0'), 2) = '40'
         AND YEAR >= 2015
 )
 SELECT

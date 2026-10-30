@@ -72,11 +72,10 @@ numbers, which is the worst failure mode there is.
 (alert 5). A smoke detector, not a fix. Fixing it means editing the SQL, which
 was out of scope.
 
-### 2. The seven `*_lagged` datasets are year-shifted copies
+### 2. The four `*_lagged` datasets are year-shifted copies
 
-`fact_emp_lagged`, `fact_has_lagged`, `fact_jobs_lagged`,
-`fact_skills_lagged`, `fact_completions_lagged`, `fact_enrollments_lagged`,
-`fact_emp_lagged_2` roughly double extract cost for two of the three largest
+`fact_completions_lagged`, `fact_emp_lagged`, `fact_enrollments_lagged` and
+`fact_has_lagged` roughly double extract cost for two of the three largest
 tables. Left as-is. Nothing here blocks revisiting it — they are ordinary
 datasets in `pipelines.yml`.
 
@@ -118,12 +117,34 @@ Partitioning on `YEAR` with `YEAR >= 2015` gives ~11 partitions of ~100–150 MB
 metadata overhead for pruning nobody needs.
 
 Clustering prunes on a **left prefix** only, so column order is load-bearing
-and has to match what PowerBI actually filters on. That is unknowable until
-the PowerBI mode is settled (open item 5), and guessing at four columns now
-would likely be wrong.
+and has to match what the consumer actually filters on. This originally
+deferred to "whenever the PowerBI mode is settled." **It is settled:
+PowerBI runs Import on Premium capacity, in the Government cloud.**
 
-**Decision:** ship unpartitioned and unclustered. Measure. Partition only if a
-table passes ~10 GB, and cluster only once the real filter columns are known.
+That resolves the deferral by removing the question rather than answering
+it. Import copies the data into the semantic model, so every slicer, filter
+and cross-highlight is served from PowerBI's own engine and **never reaches
+BigQuery**. BigQuery sees one full table read per scheduled refresh.
+Clustering cannot prune a full read, so there is no column order that would
+help.
+
+**Decision:** ship unpartitioned and unclustered, and treat that as settled
+rather than deferred. Partition only if a table passes ~10 GB.
+
+**What would reopen it:** a consumer that issues selective queries against
+BigQuery — a DirectQuery model, a composite model with a DirectQuery
+partition, or analysts querying `owc_marts` directly. Any of those makes
+clustering matter again, and the filter columns would then be observable
+from `owc_ops` rather than guessed at.
+
+**One residual, if incremental refresh is ever wanted.** PowerBI's
+incremental refresh needs a datetime column to range-partition on, and the
+fact tables carry a bare `YEAR` integer. Adding one **would touch the
+Lightcast SQL**, which is deliberately unmodified
+([ADR-008](#adr-008-the-enrollment-script-is-a-generated-derivation-not-a-hand-edited-copy)
+covers the equivalent commitment on the enrollment side). A full refresh
+needs nothing, so this is a cost to weigh if refresh duration ever becomes a
+problem — not something to pre-build.
 
 `owc_ops.pipeline_runs` *is* partitioned and clustered, because that table is
 genuinely queried by time on every freshness check.
@@ -155,7 +176,8 @@ to these types of accounts with a single-factor password."
 **Decision:** no auth migration. The password moves to Secret Manager; that is
 the only change, which matches "works the same way it currently does."
 
-**Outstanding (open item 3):** confirm `EMSIBG-READER_TULSA_FOR_YOU` is a true
+**Outstanding** ([the reader-account confirmation](OPEN-ITEMS.md#reader-account)):
+confirm `EMSIBG-READER_TULSA_FOR_YOU` is a true
 reader account and not a regular account holding a share. Run
 `SELECT CURRENT_ACCOUNT()`, or ask Lightcast. If it is the latter the exemption
 lapses and key-pair auth becomes time-sensitive.
@@ -190,11 +212,61 @@ The alternative, per-user OAuth, breaks scheduled refresh the day that person
 leaves.
 
 **Decision:** one key for `sa-<name_prefix>-powerbi-1`, scoped to `bigquery.dataViewer`
-on `owc_marts` **only** plus `bigquery.jobUser` — read-only, and nothing on
+on `owc_marts` **only**, plus `bigquery.jobUser` and
+`bigquery.readSessionUser` at project level — read-only, and nothing on
 `owc_staging` (unvalidated data) or `owc_ops` (the run manifest).
-Rotate annually.
+
+`readSessionUser` is there because the connector reads through the BigQuery
+Storage Read API, and `bigquery.readsessions.create` is project-scoped —
+there is no dataset-level equivalent. It does not widen the read surface:
+opening a read session still requires `bigquery.tables.getData` on the
+table, which this account has on `owc_marts` alone.
+
+**Not rotated on a schedule.** This said "rotate annually" and that was
+aspirational — nothing in this repo can enforce it, and a control written
+down but never performed is worse than one that was never claimed. The
+accepted position is that the key lives until there is a reason to replace
+it. What makes that defensible is the scope, not the lifetime: it can read
+one dataset of published data and cannot write, cannot reach the raw
+bucket, cannot see `owc_ops` or `owc_staging`, and `make verify-separation`
+asserts each of those on every deploy.
+
+**Replace it when** someone with access to it leaves, it is pasted
+somewhere it should not be, or the organization turns on
+`constraints/iam.serviceAccountKeyExpiryHours` — which would expire it
+whatever this document says. `make powerbi-key` handles the rotation
+sequence: mint, repoint PowerBI, confirm a refresh, delete the old key.
 
 Decided and written down here rather than discovered at go-live.
+
+## ADR-007: One container image for both pipelines
+
+**Status:** accepted.
+
+Separate images per pipeline would be tidier but double the build and deploy
+configuration. Image size is irrelevant at this scale, and one image is far
+easier for a small team to reason about. `owcdata run <pipeline>` selects.
+
+## ADR-008: The enrollment script is a generated derivation, not a hand-edited copy
+
+**Status:** accepted.
+
+The design commits to carrying the enrollment script over with its parsing,
+reshaping, and caching logic unchanged. A commitment like that decays the
+moment someone runs a formatter over the file — which happened once during
+this build and turned a 9-line change set into a 43-line one.
+
+**Decision:** [`scrape.py`](../src/owcdata/pipelines/enrollment/scrape.py) is
+**generated** by
+[`scripts/derive_scrape.py`](../scripts/derive_scrape.py) from the pristine
+original at
+[`tests/fixtures/primary_enrollment_data_script.original.py`](../tests/fixtures/primary_enrollment_data_script.original.py),
+via an explicit ordered list of substitutions that must each match exactly
+once. It is excluded from `ruff format`, and `make check` runs
+`derive_scrape.py --check`.
+
+The result: `make diff-enrollment` shows exactly 10 removed lines, and
+any drift fails `make check` rather than slowly eroding the claim.
 
 ## ADR-009: No reporting layer — the pipeline stops at owc_marts
 
@@ -226,7 +298,7 @@ Note the privilege moved in the right direction: **less** for the unattended
 pipeline, slightly more read scope for a read-only BI identity.
 
 **What would bring the layer back.** Authorized views exist to *withhold*
-columns or rows. If [open item 6](OPEN-ITEMS.md) — whether the Lightcast
+columns or rows. If [the license-audience question](OPEN-ITEMS.md#license-audience) — whether the Lightcast
 license permits these derived tables for the intended PowerBI audience — turns
 out to restrict specific fields, a filtering view is the correct mechanism.
 Re-adding it is additive and needs no change to the `pipeline` module. A
@@ -265,8 +337,17 @@ owcdata rollback dim_area --run-id <run_id>    # a specific run
 ```
 
 That is an ordinary BigQuery load job, so `dataEditor` + `jobUser` is the
-entire permission set either pipeline needs. **There are no custom roles in
-this project.**
+entire permission set either pipeline needs. **This repo defines and grants
+no custom roles** — every role it names is a predefined Google role, which is
+what makes the set reviewable by someone who has never seen the code. An
+organization may attach custom roles of its own to the project; those are
+the organization's and outside this design.
+
+> **If that ever stops being true, amend this ADR in the same commit.** The
+> `roles/run.developer` fallback documented in `modules/pipeline/job.tf`
+> offers a custom role as a last resort. Taking it would make the sentence
+> above false, and a design document that quietly stops matching the project
+> is worse than one that never made the claim.
 
 **Consequences, stated plainly.** A snapshot restore is a metadata operation;
 a Parquet reload is a load job, so rolling back a multi-GB fact table takes
@@ -277,32 +358,3 @@ This change also required the **enrollment** pipeline to write its merged
 output as Parquet to the raw bucket rather than loading a DataFrame directly,
 so both pipelines produce the same artifact and share one publish and one
 rollback path. `land_dataframe` is gone.
-
-## ADR-007: One container image for both pipelines
-
-**Status:** accepted.
-
-Separate images per pipeline would be tidier but double the build and deploy
-configuration. Image size is irrelevant at this scale, and one image is far
-easier for a small team to reason about. `owcdata run <pipeline>` selects.
-
-## ADR-008: The enrollment script is a generated derivation, not a hand-edited copy
-
-**Status:** accepted.
-
-The design commits to carrying the enrollment script over with its parsing,
-reshaping, and caching logic unchanged. A commitment like that decays the
-moment someone runs a formatter over the file — which happened once during
-this build and turned a 9-line change set into a 43-line one.
-
-**Decision:** [`scrape.py`](../src/owcdata/pipelines/enrollment/scrape.py) is
-**generated** by
-[`scripts/derive_scrape.py`](../scripts/derive_scrape.py) from the pristine
-original at
-[`tests/fixtures/primary_enrollment_data_script.original.py`](../tests/fixtures/primary_enrollment_data_script.original.py),
-via an explicit ordered list of substitutions that must each match exactly
-once. It is excluded from `ruff format`, and `make check` runs
-`derive_scrape.py --check`.
-
-The result: `make diff-enrollment` shows exactly 9 removed lines, forever, and
-any drift fails `make check` rather than slowly eroding the claim.

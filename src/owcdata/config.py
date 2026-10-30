@@ -224,6 +224,10 @@ class LightcastConfig(BaseModel):
 class EnrollmentConfig(BaseModel):
     schedule: str
     page_url: str
+    # A page whose workbooks are only read for their newest school year, to
+    # catch a year Oklahoma published somewhere page_url does not link. Unset
+    # disables the check.
+    newer_year_check_url: str | None = None
     table: str = "enrollment_primary"
     freshness_grace_hours: int = 72
     download_delay_seconds: float = 1.0

@@ -1,61 +1,147 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: 
+-- Description:     Builds the employment (EMP) fact table by year, area, industry, and
+--                   occupation, allocating occupation-level employment totals across
+--                   industries using normalized staffing-pattern weights.
 --
--- Author:          Nile Dixon
 -- Date:            2025-11-05
 --
 -- Notes:
--- 
---
+-- occ_totals holds the authoritative occupation employment totals (DAT_OCC, CLASSID 1+2+3,
+-- detailed SOC level 5). staffing_by_occ_ind/staffing_weights derive each occupation's
+-- normalized share of employment across industries from DAT_STAFFING (CLASSID = 1, NAICS
+-- level 6). mapped applies those weights to occ_totals to get OCC_EMPS by industry; unmapped
+-- carries forward occupations with no matching staffing pattern (INDID NULL) so their totals
+-- aren't silently dropped. ind_totals (DAT_IND, CLASSID 1+2+3, NAICS level 6) supplies
+-- NUM_EMPS as the industry total for context.
 --
 ---------------------------------------------------------------------------------------------------
 */
-
-WITH PCTS AS (
-    SELECT
-        DS.YEAR,
-        DS.AREAID,
-        DS.INDID,
-        DS.OCCID,
-        DS.PERCENT
-    FROM LIGHTCAST.TULSA_FOR_YOU.DAT_STAFFING AS DS 
-    WHERE
-        DS.CLASSID = '1'
-        AND DS.AREAID_TYPE = 'COUNTY'
-        AND DS.YEAR <= YEAR(CURRENT_DATE())
+WITH
+params AS (
+    SELECT YEAR(CURRENT_DATE()) AS max_year
 ),
-EMP AS (
+
+/* 1) Truth totals by occupation (Option B: OCC includes CLASSID 1+2+3, excludes 4) */
+occ_totals AS (
     SELECT
-        DAT_IND.YEAR,
-        DAT_IND.AREAID,
-        DAT_IND.INDID,
-        SUM(EMP) AS NUM_EMPS
-    FROM
-        LIGHTCAST.TULSA_FOR_YOU.DAT_IND
-    LEFT JOIN LIGHTCAST.TULSA_FOR_YOU.DIM_INDID
-    ON
-        DAT_IND.INDID = DIM_INDID.INDID
-    WHERE
-        AREAID_TYPE = 'COUNTY'
-        AND YEAR <= YEAR(CURRENT_DATE())
-        AND DAT_IND.CLASSID <> '4'
-    GROUP BY
-        DAT_IND.YEAR,
-        DAT_IND.AREAID,
-        DAT_IND.INDID  
+        o.YEAR,
+        o.AREAID,
+        o.OCCID,
+        SUM(o.EMP) AS occ_total_emp
+    FROM LIGHTCAST_DATA.CORELMI_US_V3.DAT_OCC o
+    JOIN LIGHTCAST_DATA.CORELMI_US_V3.DIM_OCCID docc
+      ON o.OCCID = docc.OCCID
+    CROSS JOIN params p
+    WHERE o.AREAID_TYPE = 'COUNTY'
+      AND LEFT(LPAD(o.AREAID, 5, '0'), 2) = '40'
+      AND o.CLASSID <> '4'
+      AND o.YEAR <= p.max_year
+      AND docc.LEVEL = 5  -- detailed SOC only; avoids aggregates like 00-0000
+    GROUP BY 1,2,3
+),
+
+/* 2) Staffing patterns (distribution source: CLASSID=1 only) */
+staffing_by_occ_ind AS (
+    SELECT
+        s.YEAR,
+        s.AREAID,
+        s.OCCID,
+        s.INDID,
+        SUM(s.EMP) AS staff_emp
+    FROM LIGHTCAST_DATA.CORELMI_US_V3.DAT_STAFFING s
+    JOIN LIGHTCAST_DATA.CORELMI_US_V3.DIM_OCCID docc
+      ON s.OCCID = docc.OCCID
+    JOIN LIGHTCAST_DATA.CORELMI_US_V3.DIM_INDID dind
+      ON s.INDID = dind.INDID
+    CROSS JOIN params p
+    WHERE s.AREAID_TYPE = 'COUNTY'
+      AND LEFT(LPAD(s.AREAID, 5, '0'), 2) = '40'
+      AND s.CLASSID = '1'
+      AND s.YEAR <= p.max_year
+      AND docc.LEVEL = 5  -- aligns to detailed SOC
+      AND dind.LEVEL = 6  -- ensures NAICS level 6 only
+    GROUP BY 1,2,3,4
+),
+
+/* 3) Normalize staffing to a per-occupation industry share (sums to 1 over INDID per OCCID) */
+staffing_weights AS (
+    SELECT
+        YEAR,
+        AREAID,
+        OCCID,
+        INDID,
+        staff_emp,
+        staff_emp / NULLIF(SUM(staff_emp) OVER (PARTITION BY YEAR, AREAID, OCCID), 0) AS pct_occ_to_ind
+    FROM staffing_by_occ_ind
+),
+
+/* 4) Industry totals (Option B: IND includes CLASSID 1+2+3, excludes 4) */
+ind_totals AS (
+    SELECT
+        i.YEAR,
+        i.AREAID,
+        i.INDID,
+        SUM(i.EMP) AS num_emps
+    FROM LIGHTCAST_DATA.CORELMI_US_V3.DAT_IND i
+    JOIN LIGHTCAST_DATA.CORELMI_US_V3.DIM_INDID dind
+      ON i.INDID = dind.INDID
+    CROSS JOIN params p
+    WHERE i.AREAID_TYPE = 'COUNTY'
+      AND LEFT(LPAD(i.AREAID, 5, '0'), 2) = '40'
+      AND i.CLASSID <> '4'
+      AND i.YEAR <= p.max_year
+      AND dind.LEVEL = 6
+    GROUP BY 1,2,3
+),
+
+/* 5) Mapped occupations: allocate DAT_OCC totals across industries using normalized staffing weights */
+mapped AS (
+    SELECT
+        w.YEAR,
+        w.AREAID,
+        w.INDID,
+        w.OCCID,
+        it.num_emps AS NUM_EMPS,
+        (o.occ_total_emp * w.pct_occ_to_ind) AS OCC_EMPS,
+        w.pct_occ_to_ind AS PERCENT
+    FROM staffing_weights w
+    JOIN occ_totals o
+      ON o.YEAR = w.YEAR
+     AND o.AREAID = w.AREAID
+     AND o.OCCID = w.OCCID
+    LEFT JOIN ind_totals it
+      ON it.YEAR = w.YEAR
+     AND it.AREAID = w.AREAID
+     AND it.INDID = w.INDID
+),
+
+/* 6) Unmapped occupations: keep totals visible (so you don't silently lose 50 OCCIDs) */
+unmapped AS (
+    SELECT
+        o.YEAR,
+        o.AREAID,
+        NULL AS INDID,
+        o.OCCID,
+        CAST(NULL AS FLOAT) AS NUM_EMPS,
+        o.occ_total_emp AS OCC_EMPS,
+        1.0 AS PERCENT
+    FROM occ_totals o
+    LEFT JOIN (
+        SELECT DISTINCT YEAR, AREAID, OCCID
+        FROM staffing_weights
+    ) w
+      ON w.YEAR = o.YEAR
+     AND w.AREAID = o.AREAID
+     AND w.OCCID = o.OCCID
+    WHERE w.OCCID IS NULL
+),
+final_cte AS (
+    SELECT YEAR, AREAID, INDID, OCCID, NUM_EMPS, OCC_EMPS, PERCENT FROM mapped
+    UNION ALL
+    SELECT YEAR, AREAID, INDID, OCCID, NUM_EMPS, OCC_EMPS, PERCENT FROM unmapped     
 )
-SELECT 
-    PCTS.YEAR,
-    PCTS.AREAID,
-    PCTS.INDID,
-    PCTS.OCCID,
-    PCTS.PERCENT,
-    EMP.NUM_EMPS AS NUM_EMPS,
-    EMP.NUM_EMPS * PCTS.PERCENT AS OCC_EMPS
-FROM PCTS
-LEFT JOIN EMP ON
-    PCTS.YEAR = EMP.YEAR
-    AND PCTS.AREAID = EMP.AREAID
-    AND PCTS.INDID = EMP.INDID
+SELECT *
+FROM final_cte
+ORDER BY YEAR, OCCID

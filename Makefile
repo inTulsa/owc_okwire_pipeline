@@ -50,6 +50,7 @@ BUILD_SA    = sa-$(NAME_PREFIX)-build-1@$(PROJECT).iam.gserviceaccount.com
 # A mirror of this repo inside the project, for anyone who cannot clone from
 # GitHub. Created by infra/gcloud/01-admin-identities.sh, not by Terraform.
 SOURCE_BUCKET = gcs-$(NAME_PREFIX)-source-1
+RAW_BUCKET    = gcs-$(NAME_PREFIX)-raw-1
 # Created by infra/gcloud/01-admin-identities.sh, which derives it from the
 # project id the same way. Passed to terraform at init rather than written
 # into backend.tf, so aiming an apply at another project is one variable.
@@ -62,10 +63,37 @@ STATE_BUCKET ?= gcs-$(PROJECT)-tfstate-1
 # apply to another.
 TF_BACKEND = -backend-config="bucket=$(STATE_BUCKET)" -backend-config="prefix=env/$(ENV)"
 TF_VARS    = -var=project_id=$(PROJECT) -var=name_prefix=$(NAME_PREFIX)
-# Who runs terraform. Defaults to the active gcloud account, which is right
-# for a hand deploy; override when OMES attaches their own pipeline identity:
-#   make iam-check ENV=dev TF_PRINCIPAL=serviceAccount:tf@omes-proj.iam.gserviceaccount.com
-TF_PRINCIPAL ?= user:$(shell gcloud config get-value account 2>/dev/null)
+# The identity that runs the deploy. NOT a person.
+#
+# It holds every resource-admin role; a named human is granted
+# roles/iam.serviceAccountTokenCreator on this one account and impersonates
+# it. No human holds an admin-level role, every action is attributable to
+# whoever minted the token, and revoking is one binding.
+# Created by `make gcloud-admin`. See docs/deploy.md#deploy-identity.
+DEPLOY_SA    = sa-$(NAME_PREFIX)-deploy-1@$(PROJECT).iam.gserviceaccount.com
+TF_PRINCIPAL ?= serviceAccount:$(DEPLOY_SA)
+
+# The PERSON who will deploy. Used ONLY by the one-time privileged step, to
+# grant them roles/iam.serviceAccountTokenCreator on DEPLOY_SA. They never
+# receive a resource-admin role.
+#
+# Deliberately not defaulted to the active gcloud account: an admin running
+# the setup from their own shell would name themselves, which is the exact
+# mistake this model exists to remove. The script refuses without it.
+# Space-separated for more than one — each becomes its own binding:
+#   make gcloud-admin ENV=dev OPERATOR=user:someone@agency.ok.gov
+#   make gcloud-admin ENV=dev OPERATOR="user:a@agency.ok.gov user:b@workforce.ok.gov"
+OPERATOR ?=
+
+# The google provider reads this and impersonates on every API call, so
+# terraform never runs as the person even if they forget to set anything.
+# `make env-exports` sets the gcloud equivalent for the same shell.
+#
+# Deploying as yourself — a rehearsal on a project you own, where you are
+# already roles/owner and no deploy account exists — is one override:
+#   make up ENV=dev PROJECT=my-test-project GOOGLE_IMPERSONATE_SERVICE_ACCOUNT=
+GOOGLE_IMPERSONATE_SERVICE_ACCOUNT ?= $(DEPLOY_SA)
+export GOOGLE_IMPERSONATE_SERVICE_ACCOUNT
 ORIGINAL   := tests/fixtures/primary_enrollment_data_script.original.py
 SCRAPE     := src/owcdata/pipelines/enrollment/scrape.py
 
@@ -83,7 +111,7 @@ endif
 
 .PHONY: help setup run validate test test-all lint fmt typecheck check auth-check doctor \
         diff-enrollment derive-scrape derive-check lock lock-check docs-check shell-check base-digest build deploy set-image which-image image-digest tf-init tf-bootstrap preflight scheduler-debug verify-separation env-exports tf-output tf-plan tf-apply tf-fmt tf-validate clean \
-        access-check prep omes-request omes-script gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push \
+        access-check prep omes-request omes-script gcloud-admin gcloud-admin-dry-run iam-check names-check smoke up source-push deploy-identity scheduler-grant load-reference powerbi-key logs runs \
         tf-check install-terraform
 
 help: ## Show this help
@@ -254,26 +282,48 @@ which-image: auth-check ## Show the digest each job is currently running vs the 
 # then broke `set-image`, `deploy`, and `which-image` with an unhelpful
 # "<none>". The warning goes to stderr so stdout stays clean for
 # `IMAGE=$(make -s image-digest ...)`.
-auth-check: ## Verify the gcloud CLI has usable credentials
-	@scripts/require-gcloud-auth.sh
+auth-check: ## Verify the gcloud CLI has usable credentials and the deploy identity
+	@scripts/require-gcloud-auth.sh $(DEPLOY_SA)
 
 image-digest: auth-check ## Print just the digest-pinned image reference (scriptable)
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
-	@digest=$$(gcloud artifacts docker images describe "$(IMAGE_REPO):$(IMAGE_TAG)" \
-	    --project $(PROJECT) --format='value(image_summary.digest)' 2>/dev/null); \
+	@# stderr is CAPTURED, not discarded. A permission error, a disabled API
+	@# and a genuinely absent image all yield an empty digest, and throwing
+	@# the message away reports all three as "no image found, build one
+	@# first" — which sends you to rebuild an image that already exists.
+	@# `images list`, NOT `images describe`. describe fetches vulnerability
+	@# metadata from Container Analysis and therefore needs
+	@# containeranalysis.occurrences.list, which roles/artifactregistry.admin
+	@# does not grant and this repo has no reason to hold. It fails with
+	@# "does not have permission to access projects instance" on a digest
+	@# lookup that never needed that API. list reads Artifact Registry only.
+	@err=$$(mktemp); \
+	  digest=$$(gcloud artifacts docker images list "$(IMAGE_REPO)" \
+	    --project $(PROJECT) --include-tags --filter="tags:$(IMAGE_TAG)" \
+	    --format='value(version)' --limit=1 2>"$$err"); \
 	  if [ -z "$$digest" ]; then \
-	    digest=$$(gcloud artifacts docker images describe "$(IMAGE_REPO):latest" \
-	      --project $(PROJECT) --format='value(image_summary.digest)' 2>/dev/null); \
+	    digest=$$(gcloud artifacts docker images list "$(IMAGE_REPO)" \
+	      --project $(PROJECT) --include-tags --filter="tags:latest" \
+	      --format='value(version)' --limit=1 2>>"$$err"); \
 	    if [ -n "$$digest" ]; then \
 	      echo "warning: no image tagged $(IMAGE_TAG) (the current git SHA); using :latest." >&2; \
 	      echo "         Run 'make deploy ENV=$(ENV)' to build and deploy at this commit." >&2; \
 	    fi; \
 	  fi; \
 	  if [ -z "$$digest" ]; then \
-	    echo "no image found at $(IMAGE_REPO):$(IMAGE_TAG) or :latest." >&2; \
-	    echo "Build one first:  make build ENV=$(ENV)" >&2; \
+	    echo "no digest for $(IMAGE_REPO):$(IMAGE_TAG) or :latest." >&2; \
+	    if [ -s "$$err" ]; then \
+	      echo "" >&2; \
+	      echo "what gcloud said:" >&2; \
+	      grep -v "service account impersonation" "$$err" | sed "s/^/  /" >&2; \
+	      echo "" >&2; \
+	    fi; \
+	    echo "If the build reported SUCCESS, the image exists and this is not a" >&2; \
+	    echo "missing image — read the error above. Otherwise:  make build ENV=$(ENV)" >&2; \
+	    rm -f "$$err"; \
 	    exit 1; \
 	  fi; \
+	  rm -f "$$err"; \
 	  echo "$(IMAGE_REPO)@$$digest"
 
 # -- terraform ---------------------------------------------------------------
@@ -422,9 +472,48 @@ verify-separation: auth-check ## Check each identity can reach only what it shou
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@scripts/verify-separation.sh $(PROJECT) $(NAME_PREFIX) $(REGION)
 
-preflight: auth-check ## Check the Snowflake secret has a version before applying
+preflight: auth-check ## Check the Snowflake secret has a version. CHECK_OTHER_ENV=<env> also refuses if that env's schedulers are live
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@if [ -n "$(SKIP_PREFLIGHT)" ]; then echo ">> preflight skipped"; exit 0; fi
+	@# A notice about THIS environment, read from THIS environment's own
+	@# tfvars. The two environments are separate projects and a deploy to one
+	@# must not read the other's configuration — an earlier version of this
+	@# refused a prod apply based on the dev tfvars, which coupled them in
+	@# the deploy path and would misfire on a branch pointed at a test
+	@# project.
+	@if grep -qE '^[[:space:]]*schedulers_paused[[:space:]]*=[[:space:]]*false' $(TFVARS) 2>/dev/null; then \
+	  echo ">> note: the $(ENV) schedulers are UNPAUSED (schedulers_paused = false)."; \
+	  echo "   Deliberate, and worth restating on every apply while it lasts: any other"; \
+	  echo "   environment reading the same pipelines.yml fires the same schedule at the"; \
+	  echo "   same minute, and the Lightcast warehouse is billed twice."; \
+	fi
+	@# OPT-IN cross-environment check. OFF by default, because one project
+	@# should not gate another. Name the other environment when you want it,
+	@# which is the dev-to-prod migration and nothing else:
+	@#   make tf-apply ENV=prod CHECK_OTHER_ENV=dev
+	@if [ -n "$(CHECK_OTHER_ENV)" ]; then \
+	  other="infra/terraform/envs/$(CHECK_OTHER_ENV)/terraform.tfvars"; \
+	  if [ ! -f "$$other" ]; then \
+	    echo "CHECK_OTHER_ENV=$(CHECK_OTHER_ENV): no such file $$other" >&2; exit 1; \
+	  fi; \
+	  if grep -qE '^[[:space:]]*schedulers_paused[[:space:]]*=[[:space:]]*false' "$$other" 2>/dev/null; then \
+	    echo ""; \
+	    echo "REFUSING: you asked to check $(CHECK_OTHER_ENV), and its schedulers are live."; \
+	    echo ""; \
+	    echo "  $$other has schedulers_paused = false"; \
+	    echo ""; \
+	    echo "  Both environments would fire the same pipelines.yml schedule at the same"; \
+	    echo "  minute — 35 Snowflake queries twice, on a warehouse whose bill is not"; \
+	    echo "  ours to see, contending for TULSA_FOR_YOU_WH."; \
+	    echo ""; \
+	    echo "  Pause it, then re-run:"; \
+	    echo "      set schedulers_paused = true in $$other"; \
+	    echo "      make tf-apply ENV=$(CHECK_OTHER_ENV)"; \
+	    echo ""; \
+	    exit 1; \
+	  fi; \
+	  echo ">> $(CHECK_OTHER_ENV) schedulers are paused — no schedule collision"; \
+	fi
 	@if ! gcloud secrets describe $(SECRET_NAME) --project $(PROJECT) >/dev/null 2>&1; then \
 	  echo ""; \
 	  echo "The secret container $(SECRET_NAME) does not exist yet."; \
@@ -472,12 +561,70 @@ env-exports: ## Print the shell exports the docs' raw gcloud/bq commands use
 	@echo "export PROJECT=$(PROJECT)"
 	@echo "export PREFIX=$(NAME_PREFIX)"
 	@echo "export REGION=$(REGION)"
+	@echo "export CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT=$(DEPLOY_SA)"
+	@echo "export GOOGLE_IMPERSONATE_SERVICE_ACCOUNT=$(DEPLOY_SA)"
 	@echo ': "$${PROJECT:?env-exports produced nothing — are you in the repo root?}"'
+	@# The two impersonation variables are the whole deploy-identity model in
+	@# a shell: gcloud reads the first, the terraform google provider reads
+	@# the second, so every command in this session runs as the deploy
+	@# account rather than as the person. An admin running the one privileged
+	@# step never evals this, so their own step is unaffected.
+	@#
+	@# To deploy as yourself instead (a project you own), or to run the
+	@# `gcloud auth application-default` commands, which must be done as the
+	@# person and fail with "not user credentials" through an impersonation:
+	@#   unset CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT GOOGLE_IMPERSONATE_SERVICE_ACCOUNT
 	@# Emitted so the eval'd block checks itself. If this target is run from
 	@# the wrong directory make fails, $$(...) is empty, and `eval ""`
 	@# succeeds — so the caller proceeds with blank names and builds things
 	@# like cr--lightcast-1. That cannot be caught after the fact, only
 	@# before, and only by something the successful path emits.
+
+scheduler-grant: ## Print the admin commands that let Cloud Scheduler start the jobs
+	@test -n "$(PROJECT)"     || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@test -n "$(NAME_PREFIX)" || { echo "could not read name_prefix from $(TFVARS)" >&2; exit 1; }
+	@echo ""
+	@echo "Only needed when the deploy identity holds roles/run.developer rather"
+	@echo "than roles/run.admin, and $(ENV)'s terraform.tfvars therefore has"
+	@echo "  scheduler_job_iam_in_terraform = false"
+	@echo ""
+	@echo "Run these AFTER the first successful deploy — the jobs have to exist."
+	@echo "They need run.jobs.setIamPolicy, so an ADMIN runs them, not you."
+	@echo ""
+	@for job in cr-$(NAME_PREFIX)-lightcast-1 cr-$(NAME_PREFIX)-enrollment-1; do \
+	  echo "gcloud run jobs add-iam-policy-binding $$job --region $(REGION) --project $(PROJECT) --member serviceAccount:sa-$(NAME_PREFIX)-scheduler-1@$(PROJECT).iam.gserviceaccount.com --role roles/run.developer"; \
+	  echo ""; \
+	done
+	@echo "Then confirm from your side — check 1 answers it:"
+	@echo ""
+	@echo "  make scheduler-debug ENV=$(ENV)"
+	@echo ""
+
+deploy-identity: auth-check ## Check the deploy service account exists and that you can impersonate it
+	@test -n "$(PROJECT)"     || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@test -n "$(NAME_PREFIX)" || { echo "could not read name_prefix from $(TFVARS)" >&2; exit 1; }
+	@echo ">> $(ENV) deploy identity: $(DEPLOY_SA)"
+	@# Unset the impersonation for the existence check itself, or a missing
+	@# account reports as "cannot impersonate" and hides the real answer.
+	@if CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT= \
+	    gcloud iam service-accounts describe $(DEPLOY_SA) --project $(PROJECT) >/dev/null 2>&1; then \
+	  echo "   ok    it exists"; \
+	else \
+	  echo "   NO    it does not exist"; \
+	  echo "         An admin creates it: make gcloud-admin ENV=$(ENV)"; \
+	  echo "         or the standalone script: make omes-script ENV=$(ENV)"; \
+	  exit 1; \
+	fi
+	@if CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT= \
+	    gcloud auth print-access-token --impersonate-service-account=$(DEPLOY_SA) >/dev/null 2>&1; then \
+	  echo "   ok    you can impersonate it"; \
+	  echo ">> Ready. eval \"\$$(make -s env-exports ENV=$(ENV))\" points gcloud and terraform at it."; \
+	else \
+	  echo "   NO    you cannot impersonate it"; \
+	  echo "         Ask an admin for roles/iam.serviceAccountTokenCreator on"; \
+	  echo "         $(DEPLOY_SA) — that one binding, and nothing else."; \
+	  exit 1; \
+	fi
 
 tf-output: ## Show terraform outputs for $(ENV). Add NAME=<output> for one value.
 	@scripts/tf-output.sh $(TF_DIR) $(ENV) $(PROJECT) $(NAME)
@@ -555,7 +702,7 @@ access-check: auth-check ## Where do I stand on $(PROJECT), and what must I ask 
 omes-request: ## What to ask your project admin for, scoped to what is missing
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@infra/gcloud/03-admin-request.sh $(PROJECT) --prefix $(NAME_PREFIX) \
-	  --principal $(TF_PRINCIPAL)
+	  $(foreach o,$(OPERATOR),--principal $(o))
 
 # Everything the deploy account can already do: enabling APIs, provisioning
 # the Data Transfer agent, creating the two buckets. Doing this yourself
@@ -565,7 +712,7 @@ prep: auth-check ## Do the setup that needs no elevated rights (APIs, buckets)
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@tmp=$$(mktemp); \
 	  infra/gcloud/04-standalone.sh $(PROJECT) --prefix $(NAME_PREFIX) \
-	    --principal $(TF_PRINCIPAL) --location $(call tfvar,location) \
+	    $(foreach o,$(OPERATOR),--principal $(o)) --location $(call tfvar,location) --region $(REGION) \
 	    --part operator > "$$tmp"; \
 	  gcloud config set project $(PROJECT) >/dev/null 2>&1; \
 	  bash "$$tmp"; rc=$$?; rm -f "$$tmp"; exit $$rc
@@ -576,17 +723,17 @@ prep: auth-check ## Do the setup that needs no elevated rights (APIs, buckets)
 omes-script: ## Write a standalone setup script for your project admin to run
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	@infra/gcloud/04-standalone.sh $(PROJECT) --prefix $(NAME_PREFIX) \
-	  --principal $(TF_PRINCIPAL) --location $(call tfvar,location) --part admin
+	  $(foreach o,$(OPERATOR),--principal $(o)) --location $(call tfvar,location) --region $(REGION) --part admin
 
 gcloud-admin-dry-run: ## Print every privileged command the one-time setup would run, and change nothing
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	infra/gcloud/01-admin-identities.sh $(PROJECT) --prefix $(NAME_PREFIX) \
-	  --principal $(TF_PRINCIPAL) --dry-run
+	  $(foreach o,$(OPERATOR),--principal $(o)) --dry-run
 
 gcloud-admin: auth-check ## ONE TIME, PRIVILEGED: create the identities, project IAM and APIs
 	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
 	infra/gcloud/01-admin-identities.sh $(PROJECT) --prefix $(NAME_PREFIX) \
-	  --principal $(TF_PRINCIPAL)
+	  $(foreach o,$(OPERATOR),--principal $(o))
 
 # An apply that works as you says nothing about an apply that runs with the
 # reduced role set. This checks both halves, and also asserts the roles that
@@ -674,9 +821,143 @@ up: ## Stand $(ENV) up end to end, after gcloud-admin has run once
 	  $(MAKE) --no-print-directory tf-apply ENV=$(ENV) TF_ARGS="-var=image_digest=$$image"
 	@$(MAKE) --no-print-directory set-image ENV=$(ENV)
 	@echo ""
+	@$(MAKE) --no-print-directory load-reference ENV=$(ENV)
+	@echo ""
 	@$(MAKE) --no-print-directory verify-separation ENV=$(ENV)
 	@echo ""
 	@echo ">> $(ENV) is up. Prove it end to end:  make smoke ENV=$(ENV)"
+
+# --- watching a run ---------------------------------------------------------
+#
+# Two different questions, two different sources, and the distinction
+# matters: owc_ops.pipeline_runs is written by record.finish(), so a row
+# appears only when a dataset is DONE. It cannot tell you what is running.
+# For that you need the structured logs.
+#
+#   make logs ENV=dev                    both pipelines, last hour
+#   make logs ENV=dev PIPELINE=lightcast only that job
+#   make logs ENV=dev SINCE=6h           a wider window
+#   make logs ENV=dev FAILED=1           errors only
+LOG_SINCE ?= $(if $(SINCE),$(SINCE),1h)
+logs: auth-check ## Per-dataset events from a running or recent job. PIPELINE= SINCE= FAILED=1
+	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@filter='resource.type="cloud_run_job"'; \
+	  if [ -n "$(PIPELINE)" ]; then \
+	    filter="$$filter resource.labels.job_name=\"cr-$(NAME_PREFIX)-$(PIPELINE)-1\""; \
+	  fi; \
+	  if [ -n "$(FAILED)" ]; then \
+	    filter="$$filter severity>=ERROR"; \
+	  else \
+	    filter="$$filter jsonPayload.event=(\"extract_started\" OR \"snowflake_query_submitted\" OR \"bq_load_started\" OR \"bq_published\" OR \"dataset_failed\" OR \"pipeline_failed\" OR \"lightcast_run_finished\")"; \
+	  fi; \
+	  echo ">> last $(LOG_SINCE), oldest first"; \
+	  gcloud logging read "$$filter" --project $(PROJECT) \
+	    --freshness=$(LOG_SINCE) --limit=300 --order=asc \
+	    --format='table[no-heading](timestamp.date("%H:%M:%S"),jsonPayload.event:label=EVENT,jsonPayload.dataset:label=DATASET,jsonPayload.error)' \
+	  || { echo "No matching entries, or no logging.viewer on this project." >&2; exit 1; }
+
+runs: auth-check ## The run manifest: which datasets FINISHED, and how. Completed only.
+	@test -n "$(PROJECT)" || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@echo ">> owc_ops.pipeline_runs — finished datasets only; use 'make logs' for in-flight"
+	@bq query --project_id=$(PROJECT) --use_legacy_sql=false --format=pretty \
+	  'SELECT started_at, pipeline, dataset, status, row_count, ROUND(duration_seconds,1) AS secs, LEFT(error, 60) AS error FROM `owc_ops.pipeline_runs` WHERE started_at > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY) ORDER BY started_at DESC LIMIT 50'
+
+# --- the PowerBI key, which is the one key in this project ------------------
+#
+# ADR-006: the PowerBI BigQuery connector authenticates as a Google
+# organizational account or via a service-account JSON key, and there is no
+# third option. Per-user OAuth works in PowerBI Desktop and breaks in the
+# workspace, because a scheduled refresh has nobody to answer the prompt.
+#
+# So: one key, for sa-<prefix>-powerbi-1, which holds bigquery.jobUser plus
+# dataViewer on owc_marts and nothing else. Not rotated on a schedule —
+# see ADR-006 for when to replace it.
+#
+# Minting needs iam.serviceAccountKeys.create on that account, which is NOT
+# in the deploy roles by default — see docs/deploy.md#powerbi.
+POWERBI_SA  = sa-$(NAME_PREFIX)-powerbi-1@$(PROJECT).iam.gserviceaccount.com
+KEY_OUT    ?= $(HOME)/owc-powerbi-$(NAME_PREFIX)-key.json
+
+powerbi-key: auth-check ## Mint the PowerBI service-account key (ADR-006). KEY_OUT=<path>
+	@test -n "$(PROJECT)"     || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@test -n "$(NAME_PREFIX)" || { echo "could not read name_prefix from $(TFVARS)" >&2; exit 1; }
+	@case "$(abspath $(KEY_OUT))" in \
+	  "$(abspath .)"/*) \
+	    echo "REFUSING: $(KEY_OUT) is inside the repository." >&2; \
+	    echo "A service-account key must not sit where it can be committed." >&2; \
+	    echo "Pass KEY_OUT=\$$HOME/somewhere.json" >&2; exit 1 ;; \
+	esac
+	@if [ -e "$(KEY_OUT)" ]; then \
+	  echo "REFUSING: $(KEY_OUT) already exists. Move or delete it first." >&2; exit 1; \
+	fi
+	@echo ">> existing user-managed keys on $(POWERBI_SA):"
+	@gcloud iam service-accounts keys list --iam-account $(POWERBI_SA) \
+	  --project $(PROJECT) --managed-by user --format='table(name.basename(),validAfterTime)' \
+	  || { echo ""; echo "Could not list keys. You need iam.serviceAccountKeys.list on that"; \
+	       echo "account — see docs/deploy.md#powerbi for what to ask an admin for."; exit 1; }
+	@echo ""
+	@echo "   If any are listed above, this is a ROTATION: mint the new key, put it"
+	@echo "   in PowerBI, confirm a refresh succeeds, THEN delete the old one."
+	@echo ""
+	@gcloud iam service-accounts keys create "$(KEY_OUT)" \
+	  --iam-account $(POWERBI_SA) --project $(PROJECT)
+	@chmod 600 "$(KEY_OUT)"
+	@echo ""
+	@echo ">> key written to $(KEY_OUT)  (mode 600)"
+	@echo ""
+	@echo "   1. In the PowerBI workspace: the semantic model -> Settings ->"
+	@echo "      Data source credentials -> Edit credentials."
+	@echo "      Authentication method: Service Account. Paste the file contents."
+	@echo "   2. Run a refresh and confirm it succeeds."
+	@echo "   3. Delete the local copy. It is a bearer credential for owc_marts:"
+	@echo "         shred -u $(KEY_OUT)   # or: rm -P $(KEY_OUT)"
+	@echo "   4. No scheduled rotation (ADR-006). Replace it if someone with"
+	@echo "      access leaves, if it leaks, or if key expiry is enforced."
+	@echo ""
+	@echo "   To download it off Cloud Shell first:  cloudshell download $(KEY_OUT)"
+	@echo ""
+
+# --- static reference data --------------------------------------------------
+#
+# CSVs no pipeline produces: crosswalks and lookups a report needs and a
+# human maintains. They live in reference/ IN THE REPO, so prod loads the
+# same file dev was tested against rather than depending on someone
+# remembering to upload it. reference/<name>.csv becomes owc_marts.<name>.
+#
+# --replace every run, because the repo is the source of truth: edit the
+# CSV, commit, deploy, and BigQuery matches it. Anything typed directly into
+# the table is overwritten, which is the intended trade.
+#
+# owc_marts and not a new dataset, because PowerBI already reads owc_marts
+# and holds dataViewer there — and an external table over GCS would need the
+# PowerBI identity to read the raw bucket, which the separation forbids.
+load-reference: auth-check ## Upload reference/*.csv to GCS and load them into owc_marts
+	@test -n "$(PROJECT)"     || { echo "could not read project_id from $(TFVARS)" >&2; exit 1; }
+	@test -n "$(NAME_PREFIX)" || { echo "could not read name_prefix from $(TFVARS)" >&2; exit 1; }
+	@found=0; \
+	  for f in reference/*.csv; do \
+	    [ -e "$$f" ] || continue; \
+	    found=1; \
+	    name=$$(basename "$$f" .csv); \
+	    echo ">> $$f -> gs://$(RAW_BUCKET)/reference/$$name.csv"; \
+	    gcloud storage cp "$$f" "gs://$(RAW_BUCKET)/reference/$$name.csv" --project $(PROJECT) >/dev/null || exit 1; \
+	    if [ -f "reference/$$name.schema.json" ]; then \
+	      echo "   schema:  reference/$$name.schema.json"; \
+	      bq load --project_id=$(PROJECT) --replace \
+	        --source_format=CSV --skip_leading_rows=1 \
+	        --schema="reference/$$name.schema.json" \
+	        "owc_marts.$$name" "gs://$(RAW_BUCKET)/reference/$$name.csv" || exit 1; \
+	    else \
+	      echo "   schema:  autodetected (add reference/$$name.schema.json to pin it)"; \
+	      bq load --project_id=$(PROJECT) --replace --autodetect \
+	        --source_format=CSV --skip_leading_rows=1 \
+	        "owc_marts.$$name" "gs://$(RAW_BUCKET)/reference/$$name.csv" || exit 1; \
+	    fi; \
+	    rows=$$(bq query --project_id=$(PROJECT) --use_legacy_sql=false --format=csv \
+	      "SELECT COUNT(*) FROM \`owc_marts.$$name\`" 2>/dev/null | tail -1); \
+	    echo "   owc_marts.$$name: $$rows row(s)"; \
+	  done; \
+	  if [ "$$found" = "0" ]; then echo ">> no reference/*.csv to load"; fi
 
 tf-plan: tf-init ## terraform plan for $(ENV). Add TF_ARGS='-var=image_digest=...'
 	cd $(TF_DIR) && terraform plan $(TF_VARS) $(TF_ARGS)

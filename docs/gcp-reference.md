@@ -14,6 +14,7 @@ why a bucket is configured a particular way.
 - [Region co-location is mandatory](#region-co-location-is-mandatory)
 - [Identity separation](#identity-separation)
 - [Terraform guardrails](#terraform-guardrails)
+- [What an OMES project enforces](#omes-constraints)
 - [What prod does differently](#what-prod-does-differently)
 
 ## What has to exist before anything here runs
@@ -150,7 +151,7 @@ than a failed apply.
 Password auth is correct here and is **not** deprecated: Snowflake's password
 phase-out explicitly exempts reader accounts. See
 [ADR-004](architecture.md#adr-004-snowflake-password-auth-is-kept) and
-[open item 3](OPEN-ITEMS.md).
+[the reader-account confirmation](OPEN-ITEMS.md#reader-account).
 
 ## Why the image is pinned by digest
 
@@ -214,6 +215,43 @@ The state and source buckets are created by `01-admin-identities.sh` rather
 than by Terraform, so a `terraform destroy` on a scratch dev environment cannot
 take either the state or the source code with it.
 
+## What an OMES project enforces {#omes-constraints}
+
+Each of these has been hit on a real OMES project. Assume all of it applies
+to every environment, and design around it rather than discovering it
+mid-deploy.
+
+| Constraint | How it shows up | Handled by |
+|---|---|---|
+| `constraints/gcp.resourceLocations` forbids `global` | Secret Manager refuses `replication { auto {} }` | `user_managed` replication pinned to `var.region` |
+| Default service-agent grants are stripped | The Cloud Scheduler agent has no `tokenCreator`, and the automatic `roles/cloudscheduler.serviceAgent` is absent | `01-admin-identities.sh` forces both agents into existence and grants them explicitly |
+| No `serviceAccountAdmin` / `projectIamAdmin` / `serviceUsageAdmin` for the deploy account | The whole split this repo is built around | Step 5 of [`deploy.md`](deploy.md), run once by an admin |
+| No admin-level roles on a human account **at all** | Stated after dev was stood up | The [deploy identity](deploy.md#deploy-identity): roles live on `sa-<prefix>-deploy-1`, a person holds only `tokenCreator` on it. **Applied on `owc-dpar-d`** — deploys run as the service account. `owc-dpar-p` is to be built that way from its first day — [OPEN-ITEMS: the deploy identity on prod](OPEN-ITEMS.md#deploy-identity) |
+| No project IAM policy reads for the deploy account | `iam-check` runs in REDUCED mode; `scheduler-debug` checks 3 and 4 are inconclusive | Reported as `????`, never as `NO` |
+| No log reads without `roles/logging.viewer` | Every runbook diagnostic silently returns nothing | `logging.viewer` is one of the eleven roles |
+| Cloud Shell ships a terraform **stub** | `make up` reports success having created nothing | `make install-terraform`; `tf-check` guards every `tf-*` target |
+
+`gcloud artifacts docker images describe` is not usable by the deploy
+identity: it reads Container Analysis for vulnerability metadata and needs
+`containeranalysis.occurrences.list`, which `roles/artifactregistry.admin`
+does not grant. Use `images list --include-tags --filter="tags:<tag>"` to
+resolve a digest — it reads Artifact Registry alone. Granting the deploy
+account a Container Analysis role to work around this would be widening it
+for a field nothing uses.
+
+Two permissions are easy to leave out and both stop a deploy partway:
+
+- `run.jobs.setIamPolicy` — every `google_cloud_run_v2_job_iam_member`. Not in
+  `roles/run.developer`, which is why the deploy identity holds
+  `roles/run.admin`.
+- `iam.serviceAccounts.actAs` on each attached account — updating a Cloud
+  Scheduler job re-attaches its service account, so even a body-only change
+  is refused without it.
+
+Both belong to `sa-<prefix>-deploy-1`. A person holding the eleven roles
+directly has neither, which is why a human-principal deploy cannot finish —
+see [OPEN-ITEMS: the deploy identity on prod](OPEN-ITEMS.md#deploy-identity).
+
 ## What prod does differently
 
 Run [`deploy.md`](deploy.md) again with `ENV=prod`. The
@@ -224,7 +262,7 @@ verbatim — `diff` them and you should see exactly four differences:
 |---|---|---|---|
 | `env_name` | `dev` | `prod` | Namespaces the log-based metrics and prints in alert titles. |
 | `raw_bucket_force_destroy` | `true` | `false` | Lets `terraform destroy` clean up a scratch environment. Never true in prod. |
-| `schedulers_paused` | `true` | `false` | **The important one.** Both read the same `pipelines.yml`, so without it dev fires prod's exact schedule — 41 Snowflake queries at 06:00 on the 1st, the same minute as prod, every month. Those credits bill to **Lightcast**, and both environments would contend for `TULSA_FOR_YOU_WH`. |
+| `schedulers_paused` | `true` | `false` | **The important one.** Both read the same `pipelines.yml`, so without it dev fires prod's exact schedule — 35 Snowflake queries at 06:00 on the 1st, the same minute as prod, every month. Those credits bill to **Lightcast**, and both environments would contend for `TULSA_FOR_YOU_WH`. |
 | `freshness_check_enabled` | `false` | `true` | Follows the line above. With schedulers paused, "has this run inside its interval?" is permanently no, so the alert would fire monthly for working-as-intended — on the same channel prod uses. |
 
 Dev's schedulers are **created but paused**, not omitted, so the `oauth_token`

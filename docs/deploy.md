@@ -22,7 +22,7 @@ preference order:
 tag images with the commit they came from:
 
 ```bash
-cd ~ && git clone https://github.com/inTulsa/owc_okwire_pipeline.git owc && cd owc
+cd ~ && git clone https://github.com/Oklahoma-Workforce-Commission-840/OK-wire-data-pipeline.git owc && cd owc
 ```
 
 A private repo will ask for credentials; `gh auth login` or an HTTPS token
@@ -38,7 +38,7 @@ drag-and-drop. Send a **tarball, not the folder** — a folder upload carries
 ```bash
 # on your machine
 tar czf owc.tar.gz --exclude='.venv' --exclude='.terraform' \
-  --exclude='.env' --exclude='exports' owc_okwire_pipeline
+  --exclude='.env' --exclude='exports' owc    # your clone's folder
 ```
 
 ```bash
@@ -46,7 +46,7 @@ tar czf owc.tar.gz --exclude='.venv' --exclude='.terraform' \
 mkdir -p ~/owc && tar xzf ~/owc.tar.gz --strip-components=1 -C ~/owc && cd ~/owc
 ```
 
-**Or from the project's own copy**, once step 4 has run at least once. This is
+**Or from the project's own copy**, once step 6 has run at least once. This is
 the path for anyone with GCP access but no GitHub access:
 
 ```bash
@@ -62,20 +62,256 @@ mkdir -p ~/owc && cd ~/owc \
 Cloud Shell logs `gcloud` in for you. It does **not** log Terraform in, and
 that is the half people skip.
 
+### Check IPv6 first — it costs ten seconds and saves an hour {#ipv6-preflight}
+
+Do this before anything else in the shell:
+
+```bash
+curl -s -m 5 -6 https://storage.googleapis.com >/dev/null && echo "IPv6 ok" || echo "NO IPv6 ROUTE — see below"
+```
+
+If it says `NO IPv6 ROUTE`, **gcloud will work perfectly and every
+`terraform` call will fail**, intermittently and on different resources each
+time, with `cannot assign requested address`. gcloud is Python and falls
+back to IPv4; Terraform is Go and keeps dialling an AAAA record it cannot
+route to.
+
+The quickest fix is to close this Cloud Shell session and open a new one —
+you get a different VM, often with no IPv6 address at all, which makes Go
+skip AAAA by itself. Do that **now**, before authenticating, rather than
+after, because a new session loses the ADC and the impersonation anyway.
+
+`GODEBUG=netdns=cgo` and `/etc/gai.conf` look like the fix and do nothing:
+Terraform's official binary is built `CGO_ENABLED=0`, so it reads neither.
+The full explanation and the `/etc/hosts` workaround for when a new session
+does not help are in [the runbook](runbook.md#ipv6).
+
+### Then authenticate, in this order {#adc-ordering}
+
+**The order is load-bearing.** The first two commands below must run as
+*yourself*, before the third puts the shell on the deploy identity. There is
+no way to recover from getting it wrong except starting over, so follow it
+literally.
+
+Substitute `owc-dpar-p` and `ENV=prod` throughout when you are building
+prod — this is the one place in the procedure where the project name is
+typed rather than read from `terraform.tfvars`, because `env-exports` has
+not run yet.
+
+**First — log in as yourself.**
+
+```bash
+gcloud auth application-default login
+```
+
+**Second — set the quota project, still as yourself.**
+
+```bash
+gcloud config set project owc-dpar-d
+gcloud auth application-default set-quota-project owc-dpar-d
+```
+
+The quota project is not optional. Terraform's GCS backend bills every call
+to whatever `quota_project_id` sits in your ADC; an inactive one makes every
+call return `404`, which Terraform reports as `storage: bucket doesn't exist`.
+
+**Third — and only now — switch onto the deploy identity.**
+
 ```bash
 eval "$(make -s env-exports ENV=dev)"
-gcloud config set project $PROJECT
-gcloud auth application-default login
-gcloud auth application-default set-quota-project $PROJECT
 ```
 
 `env-exports` sets `$PROJECT`, `$PREFIX`, `$REGION` from that environment's
-`terraform.tfvars`, so they cannot drift from what Terraform builds. `make`
+`terraform.tfvars`, so they cannot drift from what Terraform builds. It also
+sets the two variables that put this shell on the deploy identity. `make`
 targets read the project themselves and need none of it.
 
-The quota project is not optional. Terraform's GCS backend bills every call to
-whatever `quota_project_id` sits in your ADC; an inactive one makes every call
-return `404`, which Terraform reports as `storage: bucket doesn't exist`.
+#### If you run them in the wrong order {#adc-wrong-order}
+
+Running `env-exports` before the `application-default` commands gives an
+error that points at the wrong thing:
+
+```text
+ERROR: (gcloud.auth.application-default.set-quota-project) The application
+default credentials are not user credentials, quota project cannot be added.
+```
+
+The credentials are not merely being *read* wrong — **the login wrote the
+impersonation into the ADC file**, which is now
+`type: impersonated_service_account`.
+
+**Unsetting the variables does not fix it.** Terraform would go on to
+impersonate the deploy account *starting from* the deploy account, which
+fails because it holds no `tokenCreator` on itself — with an error that
+mentions nothing about ADC.
+
+The recovery is the whole sequence again:
+
+```bash
+unset CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT GOOGLE_IMPERSONATE_SERVICE_ACCOUNT
+```
+
+then steps 1, 2 and 3 above, in that order. `make doctor` checks the
+credential type and names this specifically.
+
+### You deploy as a service account, not as yourself {#deploy-identity}
+
+Nobody holds the resource-admin roles. They belong to
+
+```
+sa-<prefix>-deploy-1@<project>.iam.gserviceaccount.com
+```
+
+and you are granted exactly one thing — `roles/iam.serviceAccountTokenCreator`
+on that account. You deploy by impersonating it.
+
+Three things follow, and they are the reason it is built this way:
+
+- **No human holds an admin-level role**, which is OMES's rule. Your own
+  account has one binding in the project.
+- **Every action stays attributable.** An impersonated call records both the
+  service account and the person who minted the token, so "who ran this
+  apply" is still answerable.
+- **Revoking is one binding.** Removing someone's `tokenCreator` removes all
+  of it at once, with nothing to unpick across eleven roles and five
+  accounts.
+
+`env-exports` sets both halves — gcloud reads
+`CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT`, and the Terraform google
+provider reads `GOOGLE_IMPERSONATE_SERVICE_ACCOUNT` — so every command in
+that shell runs as the deploy account. Nothing else has to be passed.
+
+Confirm it before going further:
+
+```bash
+make deploy-identity ENV=dev
+```
+
+It answers two questions separately: does the account exist, and can you
+impersonate it. A missing account is an admin step; a missing `tokenCreator`
+is one binding to ask for.
+
+**To deploy as yourself instead** — a rehearsal on a project you own, where
+you are already `roles/owner` and no deploy account exists:
+
+```bash
+unset CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT GOOGLE_IMPERSONATE_SERVICE_ACCOUNT
+```
+
+An admin running the one privileged step never evals `env-exports`, so their
+step is unaffected by any of this.
+
+**Every new Cloud Shell session starts without it.** The variables are
+per-shell, and Cloud Shell keeps gcloud's config in a per-session `/tmp`
+directory, so a session that comes back tomorrow has neither the
+impersonation nor ADC. Without the impersonation, commands run as *you* —
+and your account holds one binding, so the first thing needing `actAs`
+fails with a numeric service account id and no explanation:
+
+```text
+PERMISSION_DENIED: caller does not have permission to act as service
+account projects/owc-dpar-d/serviceAccounts/107658414795578711517
+```
+
+`make auth-check` (which every other target depends on) now detects this
+and names the cause. The fix is always the same eval.
+
+### More than one person deploying {#deployer-group}
+
+**A group is the best answer and it is not a prerequisite.** Start with a
+named person if that is what you can get today; adding the group later costs
+one binding and undoes nothing, because several principals can hold
+`tokenCreator` on the same account at once.
+
+Either works as `OPERATOR`:
+
+```bash
+make gcloud-admin ENV=dev OPERATOR=user:someone@agency.ok.gov
+```
+
+```bash
+make gcloud-admin ENV=dev OPERATOR=group:owc-deployers@agency.ok.gov
+```
+
+**Adding a deployer afterwards is one command, run by an admin,** whichever
+you started with — no re-run of the setup:
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding sa-<prefix>-deploy-1@<project>.iam.gserviceaccount.com --project <project> --member user:SOMEONE@agency.ok.gov --role roles/iam.serviceAccountTokenCreator
+```
+
+That one binding is the whole cost of a new deployer. Under the old model it
+was eleven project roles plus five `actAs` grants per person — and an
+organization that forbids admin roles on human accounts cannot grant it at
+all, so there was no correct number of deployers.
+
+With a group it drops to zero: adding or removing someone is a membership
+change, no IAM edit, no admin round-trip, and the project policy never
+mentions a person — which is also what makes offboarding one line instead of
+an audit.
+
+**The repo cannot create the group, and deliberately does not try.** A Google
+Group lives in the organization's directory, not in the GCP project: it needs
+Workspace or Cloud Identity admin rights, which are usually a different team
+from whoever holds `projectIamAdmin` here. Scripting it would cross the line
+this whole setup is built around — the repo touches one project and nothing
+above it.
+
+So ask for the group in the same conversation as the deploy account, and
+note two things that will not announce themselves:
+
+- **Create the group first.** IAM accepts a binding for a principal that does
+  not exist, records it, and does nothing — the same trap that made a
+  `tokenCreator` grant on the Cloud Scheduler agent look successful when it
+  was not. Group, then binding.
+- **Check the domain is allowed.** If the organization enforces
+  `constraints/iam.allowedPolicyMemberDomains`, a group outside the permitted
+  domains is refused. An `agency.ok.gov` group is the safe assumption.
+
+`make deploy-identity ENV=dev` is the test that settles both: it tries to
+mint a token as the deploy account, which only works if the group exists,
+the binding landed, and you are in it.
+
+### The one decision an admin has to make {#run-admin-decision}
+
+The deploy account needs eleven roles. Ten are uncontroversial —
+administer one resource type, no access to the project IAM policy, no
+ability to touch a service account. The eleventh is a choice:
+
+| | **`roles/run.admin`** (default) | **`roles/run.developer`** (fallback) |
+|---|---|---|
+| Why | Terraform writes the binding that lets Cloud Scheduler start the jobs, which needs `run.jobs.setIamPolicy` | Narrower — but cannot write that binding |
+| Who holds it | The deploy service account. No human logs in as it. | Same |
+| Deploys | Self-service, including adding a pipeline later | Self-service **except** that one binding |
+| Extra work | None | The admin returns once per environment, after the first deploy, to run two commands |
+| If you get it wrong | — | Every scheduled run 403s, silently: the jobs work by hand and fail on the cron |
+
+**The setup script tries `roles/run.admin` and falls back on its own** if the
+grant is refused, so nobody has to decide in advance. It prints which way it
+went and exactly what is left to do. An admin who already knows their
+organization will refuse can pass `--no-run-admin` and skip the attempt.
+
+If it fell back, two things change:
+
+1. Set `scheduler_job_iam_in_terraform = false` in that environment's
+   `terraform.tfvars`, or `make up` fails on that one resource.
+2. After your first successful deploy, an admin runs the output of
+
+```bash
+make scheduler-grant ENV=dev
+```
+
+`make scheduler-debug ENV=dev` check 1 confirms it landed, and
+`make verify-separation ENV=dev` fails until it has — the gap is never
+silent from this repo's side, only from Google's.
+
+> **This fallback has never been executed.** `owc-dpar-d` was granted
+> `roles/run.admin`, so `scheduler_job_iam_in_terraform = false` — the
+> `count = 0` branch and the `make scheduler-grant` hand-off — is code that
+> has been written and reviewed but not run. Treat the paragraphs above as
+> the design, not as a tested procedure, and budget time accordingly the
+> first time an environment needs it. Tracked as
+> [OPEN-ITEMS: the scheduler-IAM fallback](OPEN-ITEMS.md#scheduler-fallback).
 
 ## 3. Check the environment
 
@@ -133,17 +369,42 @@ the bottom tells you which of the two paths below you are on.
 The normal case, and the only step anyone else touches. Pick whichever the
 admin will actually agree to — all three produce the same result.
 
-First, do your own half. It needs no elevated rights and it keeps their
-file down to identity work alone:
+### First, find out whether you can do your own half {#prep}
 
 ```bash
 make prep ENV=dev
 ```
 
-Three steps: the 16 API enables, the BigQuery Data Transfer agent, and the
-two GCS buckets. All things your account can already do, so there is no
-reason for them to be in a request to somebody else — and a bucket creation
-sitting in the middle of an IAM request is a question, which costs days.
+Three steps: the 16 API enables, the BigQuery Data Transfer and Cloud
+Scheduler service agents, and the two GCS buckets. Running it keeps the
+admin's file down to identity work alone — and a bucket creation sitting in
+the middle of an IAM request is a question, which costs days.
+
+> **This needs elevated rights, despite being the "operator half".**
+> Enabling an API needs `serviceusage.services.enable`, which comes from
+> `roles/serviceusage.serviceUsageAdmin`; creating the buckets needs
+> `roles/storage.admin`. An operator set up the way this repo intends holds
+> neither — they hold one `tokenCreator` binding. So `make prep` is an
+> optimization available to whoever happens to have those rights, **not a
+> step every operator can run.** `make access-check` tells you which you are.
+
+**If you cannot run it, the admin's file has to cover those three steps too**,
+or the APIs and buckets are never created and the first `make up` fails a long
+way from the cause. Two ways:
+
+- **They run `make gcloud-admin`** from a clone — it does the APIs, the
+  agents and the buckets as well as the identities. Nothing is missed.
+- **Or generate the full standalone file rather than the identity-only one.**
+  `make omes-script` emits `--part admin`, which deliberately omits the three
+  operator steps. For an operator with no elevated rights, ask for all seven:
+
+  ```bash
+  infra/gcloud/04-standalone.sh owc-dpar-p --prefix owc-dpar-p --principal user:THE-PERSON@agency.ok.gov --location US --region us-central1 --part all > owc-setup.sh
+  ```
+
+**This is the likeliest silent failure in the whole procedure**, because both
+halves report success: the admin's identity-only file does exactly what it
+says, and the operator never learns there were three more steps.
 
 ### They run one file (no repo, no roles granted to you)
 
@@ -188,12 +449,16 @@ You cannot run it yourself — it fails at the fourth step with a 403 on
 split exists to avoid needing. It stops there rather than half-finishing,
 and the steps before it are idempotent, so a mistaken run costs nothing.
 
-Three steps, and nothing but identities: create the six service accounts,
-grant them their project roles, and grant **you** `actAs` on the five the
-deploy attaches. It refuses to run against the wrong project, skips anything
-that already exists, and is safe to re-run.
+Four steps, and nothing but identities: create the seven service accounts
+(six runtime, one deploy), grant the runtime ones their project roles, give
+the **deploy account** the resource-admin roles and `actAs` on the five it
+attaches, and grant **you** `tokenCreator` on the deploy account. It refuses
+to run against the wrong project, skips anything that already exists, and is
+safe to re-run.
 
-Nothing in it grants you anything that can administer IAM.
+The only thing it grants a human is the right to impersonate one service
+account. Nothing in it gives you a role that can administer IAM, or any
+resource-admin role at all — see [the deploy identity](#deploy-identity).
 
 ### They grant you the two roles for the call
 
@@ -205,7 +470,7 @@ either role is still attached, so it is the receipt.
 ### They clone this repo and run it
 
 ```bash
-git clone https://github.com/inTulsa/owc_okwire_pipeline.git owc && cd owc
+git clone https://github.com/Oklahoma-Workforce-Commission-840/OK-wire-data-pipeline.git owc && cd owc
 ./infra/gcloud/01-admin-identities.sh <project> --principal <you> --dry-run
 ```
 
@@ -261,7 +526,7 @@ Two levels, and only the first is hard to get.
 | Access | Scope | Needed for |
 |---|---|---|
 | **GCP, privileged** | `roles/iam.serviceAccountAdmin` + `roles/resourcemanager.projectIamAdmin` + `roles/serviceusage.serviceUsageAdmin` | `make gcloud-admin`, **once per project**, and `make iam-check STRICT=1` afterwards. In an OMES project this is theirs to run, from `make gcloud-admin-dry-run` output. |
-| **GCP, day to day** | the eleven resource-admin roles `make gcloud-admin` grants, plus `serviceAccountUser` on five accounts | Everything else: `make up`, `make build`, `make tf-apply`, `make smoke`. Deliberately cannot read or write the project IAM policy. |
+| **GCP, day to day** | `roles/iam.serviceAccountTokenCreator` on `sa-<prefix>-deploy-1` — **one binding, and the only one you hold** | Everything else: `make up`, `make build`, `make tf-apply`, `make smoke`, by impersonating that account. The eleven resource-admin roles live on it, not on you, and none of them can read or write the project IAM policy. See [the deploy identity](#deploy-identity). |
 | **Snowflake** | the reader account login + password | The lightcast pipeline. Password goes to Secret Manager, never into Terraform. |
 | **Alert distribution list** | an address you can add members to | `alert_emails`. Use a list, not a person, so the rotation changes without a Terraform change. |
 | **Billing account** | `roles/billing.costsManager` | **Only** if you enable the budget alert. It is off by default. |
@@ -296,7 +561,7 @@ On every later run it goes straight through. What it does, in order:
 |---|---|
 | `iam-check` | the identities and buckets are there |
 | `tf-init` | adopt the state bucket for this `PROJECT`, and print it |
-| `tf-bootstrap` | Artifact Registry + the secret container |
+| `tf-bootstrap` | Artifact Registry + the secret container. On a project whose state predates `scheduler_job_iam_in_terraform`, this fails once with *"Moved resource instances excluded by targeting"* and needs [a one-time `terraform state mv`](runbook.md#state-mv). A brand-new project like `owc-dpar-p` will not hit it. |
 | `build` | Cloud Build → an image pinned by digest |
 | `tf-apply` | everything else, including the Cloud Run jobs |
 | `set-image` | point both jobs at that digest — `terraform apply` never will |
@@ -317,10 +582,10 @@ actually publishes — then the run manifest. Look for `status = success`.
 
 ## Running this in an OMES project {#omes}
 
-The six steps are the same. What differs is **who runs step 4**, and that
+The eight steps are the same. What differs is **who runs step 5**, and that
 changes what the other steps look like.
 
-### Step 4 is theirs, not yours
+### Step 5 is theirs, not yours
 
 You will not hold `serviceAccountAdmin` or `projectIamAdmin` on `owc-dpar-d`
 or `owc-dpar-p`. So:
@@ -330,16 +595,25 @@ make gcloud-admin-dry-run ENV=dev
 ```
 
 Send that output to OMES. It is every command, shell-quoted, with nothing
-inferred — they can read it, run it, or run the script themselves. Ask them
-to name you as the Terraform principal:
+inferred — they can read it, run it, or run the script themselves.
+
+**`--principal` is required and is never defaulted.** It names the *person*
+who will deploy, and the only thing they get is `tokenCreator` on the deploy
+service account. The script used to fall back to whichever gcloud account was
+active, which meant an admin running it from their own shell silently granted
+themselves — so it now refuses rather than guess:
 
 ```bash
-./infra/gcloud/01-admin-identities.sh owc-dpar-d   --principal user:gabriel.torianyk@tulsaforyou.com
+./infra/gcloud/01-admin-identities.sh owc-dpar-d --principal user:THE-PERSON@agency.ok.gov
 ```
+
+If the deploying person is not decided yet, pass `--no-principal`. The deploy
+account and all its roles are still created; only the grant that lets a human
+use it is deferred.
 
 If OMES is hosting Terraform state — *"we can hook up your instance with the
 state"* — they add `--no-state-bucket`, tell you the bucket, and you set it in
-**both** `terraform.tfvars` and `backend.tf` before step 5.
+**both** `terraform.tfvars` and `backend.tf` before step 7.
 
 ### `iam-check` will run in REDUCED mode there, and that is correct
 
@@ -363,8 +637,9 @@ with their own account:
 make iam-check ENV=dev STRICT=1
 ```
 
-That is the report to ask them for, and the one that answers Stephen's
-objection on their own terms rather than yours.
+That is the report to ask them for. It answers the no-admin-roles
+requirement in the platform team's own terms — their account, their view of
+the policy — rather than asserting it from this side.
 
 ### What a rehearsal on your own project cannot prove
 
@@ -385,19 +660,269 @@ graph, the ordering, the two-pass `make up`, the smoke test. The one
 unproven claim — "eleven roles are enough" — is proven the first time it runs
 in an OMES project, where you genuinely do not have more.
 
-To close that gap before handing over, have OMES run step 4 on a project
-where you are not owner, or drop owner on the test project *after* step 4 —
+To close that gap before handing over, have OMES run step 5 on a project
+where you are not owner, or drop owner on the test project *after* step 5 —
 carefully, and only if someone else can still administer it.
 
-## Then prod
+## PowerBI credentials {#powerbi}
 
-The same six steps with `ENV=prod`. The two environments differ in exactly
-four settings, listed in
-[`gcp-reference.md`](gcp-reference.md#what-prod-does-differently).
+**PowerBI Desktop and the PowerBI workspace do not authenticate the same
+way.** Desktop can use your interactive Google sign-in; the workspace
+cannot, because a scheduled refresh has nobody to answer an OAuth prompt.
+A model that works in Desktop and fails on publish has hit this, not a
+misconfiguration in GCP.
+
+[ADR-006](architecture.md#adr-006-one-tightly-scoped-json-key-for-powerbi)
+settles it: one JSON key for `sa-<prefix>-powerbi-1`, which holds
+`bigquery.jobUser` plus `dataViewer` on `owc_marts` and nothing else — not
+`owc_staging`, not `owc_ops`.
+
+```bash
+make powerbi-key ENV=dev
+```
+
+It lists any existing keys first, so a rotation is deliberate; refuses to
+write inside the repository; and prints what to do with the file and how to
+destroy the local copy. Then in the workspace: **semantic model → Settings →
+Data source credentials → Edit credentials**, authentication method
+**Service Account**, paste the file contents.
+
+### If a refresh fails on `bigquery.readsessions.create`
+
+```text
+ADBC: Status(StatusCode="PermissionDenied", Detail="request failed: the user
+does not have 'bigquery.readsessions.create' permission for 'projects/<p>'")
+```
+
+The credential is fine — it authenticated. The connector reads through the
+BigQuery Storage Read API, and that permission is **project-scoped**, so it
+cannot be granted on `owc_marts`. It is in the setup script's grants now, so
+a project set up after this is unaffected; one set up before needs an admin
+to run:
+
+```bash
+gcloud projects add-iam-policy-binding <project> --member serviceAccount:sa-<prefix>-powerbi-1@<project>.iam.gserviceaccount.com --role roles/bigquery.readSessionUser --condition=None
+```
+
+It does not let PowerBI read anything new — a read session still needs
+`bigquery.tables.getData` on the table, which this account holds on
+`owc_marts` only.
+
+### It needs a permission the deploy account does not have
+
+`iam.serviceAccountKeys.create` is not in the eleven roles, and the deploy
+account has no `actAs` on `powerbi` either — that account is deliberately
+outside `ATTACHED_SAS` because nothing attaches it. So either an admin mints
+the key, or they grant the deploy account key-admin on **that one account**,
+which makes the annual rotation self-service:
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding sa-<prefix>-powerbi-1@<project>.iam.gserviceaccount.com --project <project> --member serviceAccount:sa-<prefix>-deploy-1@<project>.iam.gserviceaccount.com --role roles/iam.serviceAccountKeyAdmin
+```
+
+Resource-scoped to one service account, and held by an identity no human
+logs in as.
+
+### Check the org policy first
+
+```bash
+gcloud resource-manager org-policies describe constraints/iam.disableServiceAccountKeyCreation --project $PROJECT --effective
+```
+
+`booleanPolicy: {}` means key creation is allowed. `booleanPolicy: {enforced: true}`
+means ADR-006's "there is no third option" does not hold in that
+organization, and the remaining choices are an org-policy exception for that
+one account, a Google organizational account signed in to the data source
+(which reintroduces the person-leaves failure ADR-006 rejected), or the
+newer *Google BigQuery (Azure AD identity)* connector federating Entra ID
+through Workload Identity Federation — untested here, and it needs a
+workload identity pool this repo does not build.
+
+## Static reference data {#reference-data}
+
+Some tables come from a CSV somebody maintains by hand — a SOC-to-CIP
+crosswalk, a lookup a report joins against — rather than from a pipeline.
+Put the file in `reference/` **in this repo** and commit it:
+
+```
+reference/dim_soc2cip.csv   ->   owc_marts.dim_soc2cip
+```
+
+```bash
+make load-reference ENV=dev
+```
+
+It uploads each CSV to `gs://gcs-<prefix>-raw-1/reference/` and loads it
+into `owc_marts` with an autodetected schema. `make up` runs it as well, so
+prod loads the file dev was tested against instead of relying on someone
+remembering to upload it.
+
+**The repo is the source of truth.** The load is `--replace`: a deploy makes
+BigQuery match what is committed, and anything typed straight into the table
+is overwritten. Edit the CSV, commit, deploy.
+
+The header row becomes the column names, so they have to be valid BigQuery
+identifiers.
+
+**Pin the schema for anything code-like** by adding `<name>.schema.json`
+beside the CSV — it replaces autodetection. Autodetect types a column by
+what its values look like, and identifiers often look numeric: every
+`PROGRAMID` in `dim_soc2cip.csv` parses as a number, so autodetect makes it
+FLOAT64, `44` becomes `44.0`, and joining it against a string CIP column
+fails. Zip codes, FIPS codes and SOC codes have the same trap.
+
+If you let it autodetect, check what landed:
+
+```bash
+bq show --project_id=$PROJECT owc_marts.dim_soc2cip
+```
+
+It lands in `owc_marts` rather than a dataset of its own because PowerBI
+already reads `owc_marts` and holds `dataViewer` there. A BigQuery external
+table over the CSV in GCS would have been less machinery, but it would
+require the PowerBI identity to read the raw bucket — which
+[the separation](#where-the-line-is-drawn) exists to prevent.
+
+## Then prod {#prod}
+
+Prod runs the same steps with `ENV=prod`, but it is not a replay of dev. Four
+things have to be settled first, and two of prod's differences change what a
+mistake costs.
+
+### Settle these before step 5
+
+| | |
+|---|---|
+| **Which roles prod will actually grant** | The eleven roles have only ever been granted on dev. See [below](#prod-role-set) — this is the one that can stop the deploy dead. |
+| **`snowflake_user` is a placeholder** | `envs/prod/terraform.tfvars` ships `REPLACE_ME@…` and the plan rejects it on purpose. Put the real reader account in first. |
+| **Who deploys prod** | The privileged step runs **once** per project. Decide who gets `tokenCreator` on `sa-owc-dpar-p-deploy-1` before it runs — see [the deploy identity](#deploy-identity). Adding someone later is one binding; taking resource-admin roles back off a person is not. |
+| **Terraform state hosting** | [OPEN-ITEMS: state hosting](OPEN-ITEMS.md#state-hosting). Cheaper to answer now than to migrate state later. |
+
+`owc-dpar-p` has none of its seven service accounts yet, so the privileged
+step there creates everything from nothing.
+
+### Dev proves the roles are enough. It does not prove you can get them. {#prod-role-set}
+
+**This is the likeliest way a prod deploy stalls, and it is worth an email
+before it is worth a terminal.**
+
+`owc-dpar-d` deploys end to end on exactly eleven roles and nothing more, so
+the set is known-sufficient. What dev cannot tell you is whether the same
+reviewer, or a different one, will grant all eleven on a production project.
+Production reviews are stricter, and prod is where that gets tested.
+
+Only one of the eleven has a fallback. `roles/run.admin` is the broad one:
+the setup script attempts it, falls back to `roles/run.developer` if
+refused, prints which way it went, and
+[the trade-off is documented](#run-admin-decision). **The other ten have no
+fallback.** If a review refuses `roles/bigquery.admin` or
+`roles/secretmanager.admin`, there is no documented narrower path — the
+deploy stops and the design has to be reopened.
+
+So put the whole list in front of whoever approves it, in one pass, before
+the privileged step runs:
+
+```bash
+make gcloud-admin-dry-run ENV=prod
+```
+
+That is every command, shell-quoted, with nothing inferred. Send the output,
+not a summary of it. [`security-model.md`](security-model.md) is written for
+that reader: what each role is for, what the deploy identity provably cannot
+do, and the two places where the current set is wider than the design
+claims.
+
+**If a role is refused, stop and say so** rather than working around it. A
+narrower role that silently lacks one permission produces a deploy that
+half-works and a failure weeks later on the cron.
+
+### Confirm dev's schedulers are paused — before prod's first apply {#pause-dev-first}
+
+`envs/dev/terraform.tfvars` sets `schedulers_paused = true`. Both
+environments read the same `pipelines.yml`, so if dev's schedulers are live
+when prod is, they fire the same 35 Snowflake queries at the same minute —
+twice, on Lightcast's warehouse, where the cost is not ours to see, and
+contending for `TULSA_FOR_YOU_WH`. If anyone unpaused dev to exercise the
+scheduled path, set it back to `true` and run `make tf-apply ENV=dev`.
+
+Check what is actually deployed, not what the file says:
+
+```bash
+gcloud scheduler jobs list --location $REGION --project $PROJECT --format="table(name,state,schedule)"
+```
+
+Both dev schedulers must report `PAUSED`. Only then build prod.
+
+**The two environments are deliberately not coupled.** A prod deploy does not
+read dev's configuration and must not start doing so — they are separate
+projects, and a checkout pointed at a test project would make any such check
+meaningless. What exists instead:
+
+- **A notice on every apply**, from that environment's own tfvars.
+  `make tf-apply ENV=dev` states that the dev schedulers are unpaused for as
+  long as they are. No other environment is consulted.
+- **An opt-in cross-check**, off by default, for exactly this moment:
+
+  ```bash
+  make tf-apply ENV=prod CHECK_OTHER_ENV=dev
+  ```
+
+  Naming the other environment is the whole interface — it refuses if that
+  environment's schedulers are live, and otherwise says so and continues.
+  Nothing consults another environment unless asked.
+
+Leaving dev unpaused breaks nothing visibly. It doubles a bill somebody else
+receives, which is the kind of mistake that survives for months.
+
+### Two differences that change the procedure
+
+The [full four](gcp-reference.md#what-prod-does-differently) are in the
+reference. These two matter while you are deploying:
+
+- **`schedulers_paused = false` — the schedulers come up live.** `tf-apply`
+  creates schedulers that fire on `pipelines.yml`'s real cron. A permissions
+  mistake does not surface at your terminal; it surfaces as a 403 on the 1st
+  of the month. This is why the proof below is not optional in prod.
+- **`freshness_check_enabled = true`** — the freshness alert is armed from the
+  first apply, so a pipeline that never runs starts alerting inside its grace
+  window instead of sitting quietly.
+
+### Prove the scheduler, not just the pipelines {#prove-the-scheduler}
+
+`make smoke` runs each pipeline **as you**. Cloud Scheduler runs them as
+`sa-<prefix>-scheduler-1`, which is a different identity needing a different
+permission. A green smoke test and a scheduler that cannot start anything look
+identical from outside, and nothing else in a deploy distinguishes them.
+
+```bash
+gcloud scheduler jobs run cs-$PREFIX-enrollment-monthly-1 --location $REGION --project $PROJECT
+```
+
+```bash
+gcloud run jobs executions list --job cr-$PREFIX-enrollment-1 --region $REGION --project $PROJECT --limit 3
+```
+
+Read the **`RUN BY`** column, not the timestamp:
+
+```text
+RUN BY: sa-owc-dpar-p-scheduler-1@owc-dpar-p.iam.gserviceaccount.com   <- the scheduler started it
+RUN BY: someone@agency.ok.gov                                          <- you started it
+```
+
+Only the first proves anything. Use **enrollment**: it short-circuits on its
+cache, while lightcast fans out to 35 tasks and bills Lightcast's warehouse.
+
+Prod's schedulers are already enabled, so `jobs run` works directly. In dev
+they are paused and `jobs run` refuses with
+`FAILED_PRECONDITION: Job.state must be ENABLED` — resume first, then pause
+back afterwards.
+
+If it returns 403, go to [ALERT 3](runbook.md#scheduler-403) and start with
+the job's own IAM policy.
 
 ## Rehearsing against your own project
 
-The same six steps with one extra variable. Nothing is edited, nothing is
+The same eight steps with one extra variable. Nothing is edited, nothing is
 committed, nothing has to be changed back:
 
 ```bash
@@ -432,10 +957,10 @@ Every `google_project_iam_member` read-modify-writes the project IAM policy,
 so all 24 needed `getIamPolicy` **to refresh** — on runs that changed nothing.
 Those, plus the seven service accounts and the API enables, moved to
 [`infra/gcloud/01-admin-identities.sh`](../infra/gcloud/01-admin-identities.sh)
-— step 4, once.
+— step 5, once.
 
 > **"we can not hook up your personal Github, but we can hook up your instance
-> with the state once you work with Jason Thornhill."**
+> with the state once you work with [their platform engineer]."**
 
 There is no CI in this repo. The Workload Identity Federation pool, the OIDC
 provider, the deployer service account and the GitHub Actions workflows are
@@ -456,14 +981,22 @@ reads or writes the project IAM policy.**
 
 | | Created by | Needs |
 |---|---|---|
-| APIs, service accounts, project IAM, `actAs`, state + source buckets | step 4, in gcloud | `serviceAccountAdmin`, `projectIamAdmin`, `serviceUsageAdmin` |
+| APIs, service accounts, project IAM, `actAs`, state + source buckets | step 5, in gcloud | `serviceAccountAdmin`, `projectIamAdmin`, `serviceUsageAdmin` |
 | Buckets, datasets, tables, registry, secret, jobs, schedulers, alerts | Terraform | resource admin only |
-| **Resource-scoped** IAM — bucket prefix, dataset `dataEditor`, secret accessor, registry reader, job `run.invoker` | Terraform | nothing extra |
+| **Resource-scoped** IAM — bucket prefix, dataset `dataEditor`, secret accessor, registry reader, job `run.developer` | Terraform | resource admin only |
 
 That last row is the only IAM Terraform still writes. It lives in the policy
-of a resource Terraform just created, and `storage.admin` on a bucket already
-contains `setIamPolicy` on that bucket — you cannot create the bucket without
-it. It also cannot move to step 4 without breaking ordering: the build
+of a resource Terraform just created, and for most of those the resource-admin
+role already carries it: `storage.admin` on a bucket contains `setIamPolicy`
+on that bucket — you cannot create the bucket without it.
+
+**Cloud Run jobs are the exception, and it decided one of the eleven roles.**
+`roles/run.developer` does *not* contain `run.jobs.setIamPolicy`, so it cannot
+write the scheduler binding in `modules/pipeline/job.tf` — an apply dies on
+that one resource and the schedulers 403 forever. The deploy identity holds
+`roles/run.admin` instead, which does. That is the one role in the list
+broader than "administer the resource", and it is acceptable only because
+[a service account holds it](#deploy-identity) rather than a person. It also cannot move to step 5 without breaking ordering: the build
 identity needs `artifactregistry.writer` on a registry that does not exist
 yet, and the lightcast job will not *create* unless its runtime identity can
 already read the secret.
@@ -474,16 +1007,20 @@ negotiable.
 
 ### The roles, before and after
 
-**Terraform needs** — all resource administration, nothing about IAM policy:
+**The deploy service account holds** — all resource administration, nothing
+that reads or writes the *project* IAM policy:
 
 ```
 roles/serviceusage.serviceUsageConsumer   roles/cloudscheduler.admin
 roles/storage.admin                       roles/secretmanager.admin
 roles/bigquery.admin                      roles/artifactregistry.admin
-roles/run.developer                       roles/monitoring.editor
+roles/run.admin                           roles/monitoring.editor
 roles/cloudbuild.builds.editor            roles/logging.configWriter
 roles/logging.viewer
 ```
+
+**A person holds** one binding: `roles/iam.serviceAccountTokenCreator` on
+that account.
 
 `logging.viewer` is there because the alerting in this system is log-based
 and the runbook's diagnostics are `gcloud logging read`. `configWriter`

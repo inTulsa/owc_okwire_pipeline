@@ -88,25 +88,47 @@ resource "google_cloud_run_v2_job" "this" {
   }
 }
 
-# run.invoker on THIS job only, not project-wide.
+# run.developer on THIS job only, not project-wide.
 #
-# >> SUSPECTED INSUFFICIENT. See docs/HANDOFF.md, open issue 1. <<
+# NOT run.invoker, which is the intuitive choice and is wrong here.
+# scheduler.tf posts an `overrides` body, and running a job WITH OVERRIDES
+# requires run.jobs.runWithOverrides. roles/run.invoker grants exactly
+# run.instances.invoke, run.jobs.run and run.routes.invoke — so every
+# scheduled fire returns 403 while the binding reads as perfectly correct,
+# because it IS correct for a plain run.
+# `gcloud iam roles describe roles/run.invoker` is the one-command check.
 #
-# roles/run.invoker contains run.jobs.run, which is what this comment used to
-# say made it sufficient. But scheduler.tf posts an `overrides` body, and
-# running a job WITH OVERRIDES requires run.jobs.runWithOverrides — a
-# separate permission that run.invoker does not grant.
+# A manual `gcloud run jobs execute` does not catch this. It runs as the
+# operator, who holds run.developer project-wide, so the job works by hand
+# and fails on every schedule. Prove the scheduler separately — see
+# docs/deploy.md#prove-the-scheduler.
 #
-# Cloud Scheduler on owc-dpar-d returns 403 on every fire while this binding
-# is present and exact, which is the shape that predicts. roles/run.developer
-# includes both permissions and is still resource-scoped here.
+# The tighter alternative is a custom role holding only run.jobs.run and
+# run.jobs.runWithOverrides. This repo has a no-custom-roles principle
+# (modules/platform/iam.tf), so that is a deliberate reversal to reach for
+# only if an org objects to run.developer scoped to a single job.
 #
-# Not changed yet: the hypothesis needs confirming against the live API
-# first, and HANDOFF.md has the one-command test.
+# Skipped entirely when the deploy identity cannot write a job's IAM policy
+# (run.developer rather than run.admin). An admin then grants the same thing
+# by hand — `make scheduler-grant` prints the commands.
+# Giving this resource a count changed its address from
+# ...scheduler_invoker to ...scheduler_invoker[0]. Terraform treats that as a
+# move, and refuses to plan a -target'ed run (which `make tf-bootstrap` is)
+# until the move is included. A project whose state predates this needs the
+# entries moved once, from infra/terraform/envs/<env>:
+#
+#   terraform state mv 'module.lightcast.google_cloud_run_v2_job_iam_member.scheduler_invoker' \
+#                      'module.lightcast.google_cloud_run_v2_job_iam_member.scheduler_invoker[0]'
+#   terraform state mv 'module.enrollment.google_cloud_run_v2_job_iam_member.scheduler_invoker' \
+#                      'module.enrollment.google_cloud_run_v2_job_iam_member.scheduler_invoker[0]'
+#
+# A project with no state yet is unaffected.
 resource "google_cloud_run_v2_job_iam_member" "scheduler_invoker" {
+  count = var.scheduler_job_iam_in_terraform ? 1 : 0
+
   name     = google_cloud_run_v2_job.this.name
   project  = var.project_id
   location = var.region
-  role     = "roles/run.invoker"
+  role     = "roles/run.developer"
   member   = "serviceAccount:${var.scheduler_service_account_email}"
 }

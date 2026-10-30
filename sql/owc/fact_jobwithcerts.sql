@@ -1,14 +1,17 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: 
+-- Description:     Builds a fact table comparing total job postings against the subset of
+--                   those postings that list a certification requirement, by year, area,
+--                   industry, occupation, company, minimum education, and internship flag.
 --
--- Author:          Nile Dixon
 -- Date:            2025-11-14
 --
 -- Notes:
--- 
---
+-- Source: LIGHTCAST_DATA.US.POSTINGS, grouped to NUM_JOBS. NUM_JOBS_WITH_CERT is a
+-- correlated subquery counting distinct postings that have a matching row in
+-- POSTINGS_SKILLS with SKILL_TYPE = 'Certification' (excluding "Valid Driver's License",
+-- which Lightcast tags as a certification but isn't one) across the same grouping dimensions.
 --
 ---------------------------------------------------------------------------------------------------
 */
@@ -24,12 +27,12 @@ SELECT
     (
         SELECT 
             COUNT(DISTINCT PS2.ID)
-        FROM LIGHTCAST.TULSA_FOR_YOU.POSTINGS_SKILLS AS PS2
-        LEFT JOIN LIGHTCAST.TULSA_FOR_YOU.POSTINGS AS P2
+        FROM LIGHTCAST_DATA.US.POSTINGS_SKILLS AS PS2
+        LEFT JOIN LIGHTCAST_DATA.US.POSTINGS AS P2
         ON PS2.ID = P2.ID
         WHERE
             PS2.SKILL_TYPE = 'Certification'
-            AND PS2.SKILL_NAME <> 'Valid Driver\'s License'
+            AND PS2.SKILL_NAME <> 'Valid Driver''s License'
             AND YEAR(P2.POSTED) = YEAR(P.POSTED)
             AND P2.COUNTY = P.COUNTY -- AREAID
             AND P2.NAICS6 = P.NAICS6 -- INDID
@@ -39,7 +42,8 @@ SELECT
             AND P2.IS_INTERNSHIP = P.IS_INTERNSHIP -- INTERNSHIP
     ) AS NUM_JOBS_WITH_CERT
 FROM
-LIGHTCAST.TULSA_FOR_YOU.POSTINGS AS P
+LIGHTCAST_DATA.US.POSTINGS AS P
+WHERE LEFT(LPAD(P.COUNTY, 5, '0'), 2) = '40'
 GROUP BY
     YEAR_POSTED,
     AREAID,

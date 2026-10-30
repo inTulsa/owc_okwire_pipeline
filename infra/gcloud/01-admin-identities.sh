@@ -12,15 +12,19 @@
 #
 # So every identity, every project-level IAM binding, every API enable, and
 # the state and source buckets are created here, in gcloud, once. Terraform
-# is then left with resources only, and runs with the ten resource-admin
-# roles in TF_PRINCIPAL_ROLES (see names.sh) — no projectIamAdmin, no
-# serviceAccountAdmin, no serviceUsageAdmin.
+# is then left with resources only, and runs as a DEPLOY SERVICE ACCOUNT
+# holding the resource-admin roles in TF_PRINCIPAL_ROLES (see names.sh) —
+# no projectIamAdmin, no serviceAccountAdmin, no serviceUsageAdmin.
+#
+# --principal names the PERSON who will deploy. They get exactly one binding:
+# tokenCreator on that deploy account, which they impersonate. No human ever
+# holds a resource-admin role.
 #
 # Idempotent: safe to re-run, and re-running is how you repair a partial run.
 #
 #   ./infra/gcloud/01-admin-identities.sh owc-dpar-d --dry-run
 #   ./infra/gcloud/01-admin-identities.sh owc-dpar-d \
-#       --principal user:gabriel.torianyk@tulsaforyou.com
+#       --principal user:someone@agency.ok.gov
 #
 # --dry-run prints every gcloud command and changes nothing. Send that output
 # to OMES if they would rather run the commands themselves than a script.
@@ -29,10 +33,15 @@ set -euo pipefail
 
 PROJECT=""
 PREFIX=""
-PRINCIPAL=""
+# Repeatable: --principal may be given more than once. Several people (or a
+# group and a person) can hold tokenCreator on the deploy account at the same
+# time, and each is one binding.
+PRINCIPALS=()
 LOCATION="US"
 DRY_RUN=0
 SKIP_PRINCIPAL=0
+# Skip roles/run.admin and use roles/run.developer. See the grant below.
+NO_RUN_ADMIN=0
 SKIP_STATE_BUCKET=0
 
 usage() {
@@ -40,14 +49,26 @@ usage() {
 usage: $0 <project-id> [options]
 
   --prefix P          OMES name prefix (default: the project id)
-  --principal P       Who will run Terraform, as a full IAM member string:
-                        user:someone@example.com
-                        serviceAccount:tf@proj.iam.gserviceaccount.com
-                        group:owc-platform@example.com
-                      Default: the active gcloud account, as user:<email>.
-  --no-principal      Create identities and their grants, but grant the
-                      Terraform principal nothing. Use when OMES will attach
-                      their own pipeline identity later.
+  --principal P       WHO MAY DEPLOY, as a full IAM member string. REPEATABLE
+                      — pass it once per person or group. Their only
+                      binding is tokenCreator on the deploy service account,
+                      which they impersonate — never a resource-admin role.
+                        user:someone@agency.ok.gov
+                        group:owc-deployers@agency.ok.gov
+                      REQUIRED, and never defaulted: it used to fall back to
+                      the active gcloud account, so an admin running this
+                      named themselves and the operator got nothing.
+                      A group is the better answer for more than one person.
+  --no-principal      Create the deploy account and all its roles, but grant
+                      no human the right to impersonate it. Use when the
+                      deploying person is not decided yet; re-run with
+                      --principal later to add them.
+  --no-run-admin      Grant the deploy account roles/run.developer instead of
+                      roles/run.admin. Only if your organization will not
+                      allow run.admin — it means an admin must return once,
+                      after the first deploy, to grant the scheduler its
+                      binding on each job. The script tries run.admin and
+                      falls back on its own, so this is rarely needed.
   --no-state-bucket   Skip the Terraform state bucket (OMES is hosting state).
   --location L        State bucket location (default US)
   --dry-run           Print every command; change nothing.
@@ -58,8 +79,9 @@ USAGE
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --prefix)          PREFIX="${2:?}"; shift 2 ;;
-    --principal)       PRINCIPAL="${2:?}"; shift 2 ;;
+    --principal)       PRINCIPALS+=("${2:?}"); shift 2 ;;
     --no-principal)    SKIP_PRINCIPAL=1; shift ;;
+    --no-run-admin)    NO_RUN_ADMIN=1; shift ;;
     --no-state-bucket) SKIP_STATE_BUCKET=1; shift ;;
     --location)        LOCATION="${2:?}"; shift 2 ;;
     --dry-run)         DRY_RUN=1; shift ;;
@@ -147,15 +169,29 @@ if (( ! DRY_RUN )); then
   }
 fi
 
-if (( ! SKIP_PRINCIPAL )) && [[ -z "$PRINCIPAL" ]]; then
-  active=$(gcloud config get-value account 2>/dev/null || true)
-  [[ -n "$active" && "$active" != "(unset)" ]] || {
-    echo "No --principal given and no active gcloud account to fall back on." >&2
-    echo "Run 'gcloud auth login', or pass --principal / --no-principal." >&2
-    exit 1
-  }
-  PRINCIPAL="user:$active"
-  note "Terraform principal defaulted to the active account: $PRINCIPAL"
+# --principal is the PERSON who will deploy. It is never defaulted.
+#
+# It used to fall back to the active gcloud account, which meant an admin
+# running this from their own shell silently granted themselves and the
+# operator got nothing. A default that is wrong most of the time is worse
+# than a prompt.
+if (( ! SKIP_PRINCIPAL )) && (( ${#PRINCIPALS[@]} == 0 )); then
+  cat >&2 <<'NOPRINCIPAL'
+
+--principal is required, and is NOT defaulted to the account running this.
+
+It names the person who will deploy. They are granted exactly one thing:
+tokenCreator on the deploy service account, which they impersonate. They do
+NOT receive the resource-admin roles — those go to the service account.
+
+  --principal user:someone@agency.ok.gov
+
+If the deploying person is not decided yet, run with --no-principal. The
+deploy account and all its roles are still created; only the grant that lets
+a human use it is deferred.
+
+NOPRINCIPAL
+  exit 64
 fi
 
 # ---------------------------------------------------------------------------
@@ -295,10 +331,17 @@ create_sa() {
 
 create_sa lightcast  "OWC lightcast pipeline"      "Runs the lightcast Cloud Run job. Holds the Snowflake secret."
 create_sa enrollment "OWC enrollment pipeline"     "Runs the enrollment Cloud Run job. No secret access: the source is a public webpage."
-create_sa scheduler  "OWC Cloud Scheduler invoker" "Invokes the Cloud Run jobs. run.invoker on the specific jobs only."
+create_sa scheduler  "OWC Cloud Scheduler invoker" "Invokes the Cloud Run jobs. run.developer on the specific jobs only."
 create_sa build      "OWC Cloud Build"             "Runs container builds. Reads build source, writes the image and logs. Nothing else."
 create_sa powerbi    "OWC PowerBI reader"          "Read-only on owc_marts. See docs/architecture.md ADR-006 for the JSON-key exception."
 create_sa freshness  "OWC freshness check"         "Runs the owc_ops.pipeline_runs freshness scheduled query. Read-only."
+
+# The seventh, and different in kind: it runs the deploy rather than being
+# created by it. Terraform never sees it and nothing attaches it to a
+# resource — which is why it is not in ALL_SAS and `make names-check` does
+# not expect it in naming.tf.
+say "Creating the deploy identity"
+create_sa deploy "OWC deploy" "Runs Terraform and the gcloud deploy steps. Impersonated by a named person; no human holds its roles."
 
 # ---------------------------------------------------------------------------
 # 5. Project-level IAM for the runtime identities.
@@ -347,38 +390,158 @@ run gcloud iam service-accounts add-iam-policy-binding "$SA_FRESHNESS" \
 #
 # roles/cloudscheduler.serviceAgent normally covers this and is granted
 # automatically at the project level. An organization that strips default
-# grants leaves it absent, and then every scheduled fire is a 403 that
-# run.invoker cannot explain — observed on owc-dpar-d. Granting it
-# explicitly costs one call and does not depend on that default surviving.
+# grants leaves it absent, and then every scheduled fire is a 403 that the
+# job's own binding cannot explain. Granting it explicitly costs one call
+# and does not depend on that default surviving.
 say "Granting the Cloud Scheduler agent tokenCreator on the scheduler identity"
 run gcloud iam service-accounts add-iam-policy-binding "$SA_SCHEDULER" \
   --project "$PROJECT" \
   --member "serviceAccount:$SCHEDULER_AGENT" \
   --role roles/iam.serviceAccountTokenCreator --quiet
 
-if (( SKIP_PRINCIPAL )); then
-  say "Skipping all Terraform-principal grants (--no-principal)"
-  note "Re-run with --principal <member> once OMES names the identity that"
-  note "will run Terraform. Nothing else in this script depends on it."
-else
-  say "Granting $PRINCIPAL actAs on the ${#ATTACHED_SAS[@]} identities Terraform attaches"
-  for target in "${ATTACHED_SAS[@]}"; do
-    run gcloud iam service-accounts add-iam-policy-binding "$target" \
-      --project "$PROJECT" --member "$PRINCIPAL" \
-      --role roles/iam.serviceAccountUser --quiet
-  done
+# ---------------------------------------------------------------------------
+# 7. The deploy identity's roles, and the one grant a human gets.
+#
+# The resource-admin roles go to a SERVICE ACCOUNT, never to a person. A
+# named human is granted tokenCreator on that account and impersonates it.
+# Three properties follow:
+#
+#   auditable   every action is attributable to the person who minted the
+#               token, in the same audit log entry
+#   revocable   one binding removes all of it
+#   compliant   no human holds an admin-level role, which is what OMES asked
+#
+# These grants do not depend on knowing who deploys, so they run either way.
+# ---------------------------------------------------------------------------
+say "Granting the deploy identity actAs on the ${#ATTACHED_SAS[@]} identities it attaches"
+for target in "${ATTACHED_SAS[@]}"; do
+  run gcloud iam service-accounts add-iam-policy-binding "$target" \
+    --project "$PROJECT" --member "serviceAccount:$SA_DEPLOY" \
+    --role roles/iam.serviceAccountUser --quiet
+done
 
-  # -------------------------------------------------------------------------
-  # 7. The Terraform principal's own roles. This is the list OMES asked for.
-  # -------------------------------------------------------------------------
-  say "Granting $PRINCIPAL the ${#TF_PRINCIPAL_ROLES[@]} resource-admin roles Terraform needs"
-  for role in "${TF_PRINCIPAL_ROLES[@]}"; do
-    run gcloud projects add-iam-policy-binding "$PROJECT" \
-      --member "$PRINCIPAL" --role "$role" --condition=None --quiet
+# roles/run.admin is the one an organization may refuse, and there is a
+# working answer either way — so try it, fall back rather than stop, and say
+# plainly what the fallback costs. Deciding this on a call should not need a
+# second meeting.
+say "Granting the deploy identity its ${#TF_PRINCIPAL_ROLES[@]} resource-admin roles"
+RUN_ROLE="roles/run.admin"
+for role in "${TF_PRINCIPAL_ROLES[@]}"; do
+  if [[ "$role" == "roles/run.admin" ]] && (( NO_RUN_ADMIN )); then
+    note "--no-run-admin: using roles/run.developer instead of roles/run.admin"
+    role="roles/run.developer"
+    RUN_ROLE="$role"
+  fi
+  if run gcloud projects add-iam-policy-binding "$PROJECT" \
+       --member "serviceAccount:$SA_DEPLOY" --role "$role" --condition=None --quiet; then
+    continue
+  fi
+  if [[ "$role" == "roles/run.admin" ]]; then
+    note ""
+    note "roles/run.admin was refused. Falling back to roles/run.developer."
+    if run gcloud projects add-iam-policy-binding "$PROJECT" \
+         --member "serviceAccount:$SA_DEPLOY" --role roles/run.developer \
+         --condition=None --quiet; then
+      RUN_ROLE="roles/run.developer"
+    else
+      echo "Neither roles/run.admin nor roles/run.developer could be granted." >&2
+      echo "Nothing else in this script depends on it, but no deploy will work." >&2
+      exit 1
+    fi
+  else
+    echo "Could not grant $role to $SA_DEPLOY." >&2
+    exit 1
+  fi
+done
+note ""
+note "This script grants none of these, to anyone:"
+for role in "${TF_PRINCIPAL_FORBIDDEN_ROLES[@]}"; do note "  $role"; done
+note ""
+note "That is a statement about this script, NOT about the project. A"
+note "project set up before the deploy identity existed can still carry"
+note "these on human accounts, and this run does not remove them. The"
+note "check that reads the live policy and fails on them is:"
+note "  make iam-check ENV=<env> STRICT=1"
+
+if (( SKIP_PRINCIPAL )); then
+  note ""
+  say "No operator named (--no-principal) — nobody can impersonate it yet"
+  note "Re-run with --principal user:<address> once the deploying person is"
+  note "decided. Everything above is already in place."
+else
+    # A group is the right answer for more than one deployer, and it has one
+  # trap: IAM accepts a binding for a principal that does not exist, records
+  # it, and does nothing — the same failure this project already hit with the
+  # Cloud Scheduler service agent. Nothing here can tell the difference,
+  # because reading a group needs Cloud Identity, not project IAM.
+  if [[ "${PRINCIPALS[*]}" == *group:* ]]; then
+    note ""
+    note "A group was named. Two things to confirm, because neither"
+    note "this script nor IAM will tell you:"
+    note ""
+    note "  1. The group EXISTS before this binding is made. IAM accepts a"
+    note "     binding for a principal that does not exist yet — it records"
+    note "     it, reports success, and does nothing."
+    note "  2. Its domain is allowed by constraints/iam.allowedPolicyMemberDomains,"
+    note "     if your organization enforces domain-restricted sharing. A"
+    note "     group outside the allowed domains is refused outright."
+    note ""
+    note "The definitive test is the operator running, from the repo:"
+    note "  make deploy-identity ENV=<env>"
+    note ""
+  fi
+  say "Granting ${#PRINCIPALS[@]} principal(s) tokenCreator on the deploy identity, and nothing else"
+  for who in "${PRINCIPALS[@]}"; do
+    run gcloud iam service-accounts add-iam-policy-binding "$SA_DEPLOY" \
+      --project "$PROJECT" --member "$who" \
+      --role roles/iam.serviceAccountTokenCreator --quiet
   done
   note ""
-  note "NOT granted, and not needed any more:"
-  for role in "${TF_PRINCIPAL_FORBIDDEN_ROLES[@]}"; do note "  $role"; done
+  note "Each of these now holds exactly one binding in this project:"
+  for who in "${PRINCIPALS[@]}"; do note "  $who"; done
+  note ""
+  note "which is:"
+  note "  tokenCreator on $SA_DEPLOY"
+  note "They deploy by impersonating it. See docs/deploy.md#deploy-identity."
+fi
+
+# The one thing that changes what the operator has to do next, so it is
+# printed before the generic steps rather than buried in them.
+if [[ "$RUN_ROLE" == "roles/run.developer" ]]; then
+  say "IMPORTANT — the deploy identity has run.developer, not run.admin"
+  cat <<RUNDEV
+
+  That is a supported configuration, but it is not finished. run.developer
+  cannot write a Cloud Run job's IAM policy, so Terraform cannot grant Cloud
+  Scheduler permission to start the jobs. Two things follow.
+
+  1. THE OPERATOR sets this in infra/terraform/envs/<env>/terraform.tfvars
+     before deploying, or the apply fails on that one resource:
+
+       scheduler_job_iam_in_terraform = false
+
+  2. YOU run two more commands AFTER their first successful deploy — the
+     Cloud Run jobs have to exist before anything can be granted on them:
+
+       make scheduler-grant ENV=<env>
+
+     prints both with the names filled in, or they are:
+
+       gcloud run jobs add-iam-policy-binding $JOB_LIGHTCAST \\
+         --region <region> --project $PROJECT \\
+         --member serviceAccount:$SA_SCHEDULER \\
+         --role roles/run.developer
+
+       ...and the same for $JOB_ENROLLMENT.
+
+  Until step 2 is done every scheduled run returns 403. It is silent: the
+  jobs work when started by hand and fail on the monthly cron. Both
+  'make verify-separation' and 'make scheduler-debug' report the gap.
+
+  To avoid all of this, grant the deploy account roles/run.admin instead —
+  it is the same account, which no human logs in as.
+
+RUNDEV
 fi
 
 # ---------------------------------------------------------------------------

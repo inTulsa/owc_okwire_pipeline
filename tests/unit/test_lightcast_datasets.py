@@ -15,18 +15,6 @@ from owcdata.pipelines.lightcast.datasets import (
     strip_trailing_semicolon,
 )
 
-# The seven files that end in a semicolon. A semicolon inside a subquery is a
-# syntax error, so --limit must strip it.
-SEMICOLON_FILES = [
-    "dim_area",
-    "dim_company",
-    "dim_edulevels",
-    "dim_schools",
-    "dim_skills",
-    "fact_completions",
-    "fact_completions_lagged",
-]
-
 
 @pytest.fixture(scope="module")
 def lc():
@@ -38,22 +26,21 @@ def test_every_sql_file_is_single_statement_so_limit_is_safe(lc):
         assert is_single_statement(ds.read_sql()), f"{ds.name}.sql is not a single statement"
 
 
-def test_the_seven_semicolon_files_are_still_the_seven(lc):
-    """If this list changes, --limit just started or stopped mattering for a file."""
+def test_no_sql_file_ends_in_a_semicolon(lc):
+    """Upstream dropped them all in c1b4988. If one comes back, --limit strips it."""
     found = sorted(ds.name for ds in resolve(lc) if ds.read_sql().rstrip().endswith(";"))
-    assert found == sorted(SEMICOLON_FILES)
+    assert found == []
 
 
-@pytest.mark.parametrize("name", SEMICOLON_FILES)
-def test_limit_wrapping_strips_the_trailing_semicolon(lc, name):
-    wrapped = resolve(lc, dataset=name)[0].query(limit=100)
+def test_limit_wrapping_strips_the_trailing_semicolon():
+    wrapped = prepare_query("SELECT 1 AS x FROM t;\n", limit=100)
     assert not statement_semicolons(wrapped)
     assert wrapped.endswith("LIMIT 100")
     assert "_owc_limited" in wrapped
 
 
 def test_semicolons_inside_comments_are_not_statement_terminators():
-    """Four of the 41 files carry one. A naive scan would flag them wrongly."""
+    """Five of the 35 files carry one. A naive scan would flag them wrongly."""
     sql = "SELECT 1 AS x -- detailed SOC only; avoids aggregates\nFROM t"
     assert statement_semicolons(sql) == []
     assert is_single_statement(sql)
@@ -78,7 +65,7 @@ def test_real_multi_statement_is_detected_and_refused():
 
 
 def test_no_limit_returns_the_file_text_unchanged(lc):
-    ds = resolve(lc, dataset="fact_jobs")[0]
+    ds = resolve(lc, dataset="fact_emp")[0]
     assert ds.query() == ds.read_sql().rstrip()
 
 
@@ -126,7 +113,7 @@ def test_one_dataset_per_task_when_task_count_matches(lc):
 def test_sharding_is_a_partition_at_any_task_count(lc):
     """Every dataset exactly once — a lost dataset silently stops publishing."""
     datasets = resolve(lc)
-    for task_count in (1, 2, 4, 7, 40, 41):
+    for task_count in (1, 2, 4, 7, 34, 35):
         seen = [d.name for i in range(task_count) for d in shard(datasets, i, task_count)]
         assert seen == [d.name for d in datasets], f"broken at task_count={task_count}"
 

@@ -13,7 +13,7 @@ operating need none of it; see
 ```bash
 make setup                    # venv + deps + writes .env from the example
 $EDITOR .env                  # SNOWFLAKE_USER / SNOWFLAKE_PASSWORD
-make validate                 # config + all 41 SQL files, no network
+make validate                 # config + all 35 SQL files, no network
 ```
 
 `make help` lists every target.
@@ -127,16 +127,14 @@ LIMIT N
 ```
 
 - **Files on disk are never modified.** The wrapping happens in memory.
-- Seven of the 41 files end in a semicolon (`dim_area`, `dim_company`,
-  `dim_edulevels`, `dim_schools`, `dim_skills`, `fact_completions`,
-  `fact_completions_lagged`). A semicolon inside a subquery is a syntax error,
-  so it is stripped first.
-- Four files carry a semicolon **inside a `--` comment**
-  (`fact_emp_2`, `fact_emp_lagged_2`, `fact_jobs_qoq`,
-  `fact_jobs_lagged_qoq`). The safety scan is comment- and
-  string-literal-aware so those are not mistaken for a second statement — a
-  naive scan flags them and fails `make check` for nothing.
-- All 41 files are verified single-statement by
+- No file ends in a semicolon today, but a trailing one is stripped first if
+  it comes back: a semicolon inside a subquery is a syntax error.
+- Most files carry a semicolon **inside a `--` comment** (`fact_emp_lagged`,
+  `fact_jobs`, `fact_jobs_lagged`, and prose in the header notes). The safety
+  scan is comment- and string-literal-aware so those are not mistaken for a
+  second statement — a naive scan flags them and fails `make check` for
+  nothing.
+- All 35 files are verified single-statement by
   `test_every_sql_file_is_single_statement_so_limit_is_safe`, and
   `prepare_query` refuses to wrap anything that is not.
 
@@ -145,7 +143,7 @@ LIMIT N
 **Dev and prod share one Snowflake reader account.** A local run bills
 Lightcast's warehouse, against the same `TULSA_FOR_YOU_WH`. Always use
 `--limit` unless you specifically need a full extract, and prefer off-peak.
-See open item 4.
+See [the parallelism open item](OPEN-ITEMS.md#parallelism).
 
 **The enrollment cache directory is deliberately not `data/`.** It defaults to
 `.owcdata-local/enrollment/data`, separate from the GCS-backed production
@@ -174,7 +172,7 @@ not, which is exactly why the second is the one that gets forgotten.
 ## Testing
 
 ```bash
-make test          # unit only, no network — 128 tests, ~3s
+make test          # unit only, no network — 148 tests, ~4s
 make test-all      # adds integration: Snowflake, a live scrape, GCS, BigQuery
 make check         # lint + types + derive-check + validate + unit. The full gate.
 ```
@@ -192,8 +190,11 @@ current parsing behavior is pinned without a live scrape:
   above the header, a `Grade Code`/`Grade` collision, a blank-County backfill,
   and an unrecognizable sheet
 
-When Oklahoma next changes the page, **save the new HTML over `page.html`** —
-the failing tests then tell you exactly what broke.
+When Oklahoma next changes the page's markup, **edit `page.html` by hand** to
+match it. Don't save the live HTML over it: the live page's links point at
+oklahoma.gov, which the fixture server 404s, so every test would fail for a
+reason unrelated to the change. The full procedure is
+[alert 6 in the runbook](runbook.md#alert-6-no-files).
 
 ## The enrollment script is generated
 
@@ -202,7 +203,7 @@ the failing tests then tell you exactly what broke.
 original. Do not edit it directly.
 
 ```bash
-make diff-enrollment   # the complete change set: 9 removed lines
+make diff-enrollment   # the complete change set: 10 removed lines
 make derive-scrape     # regenerate after editing the derivation
 make derive-check      # part of `make check`
 ```

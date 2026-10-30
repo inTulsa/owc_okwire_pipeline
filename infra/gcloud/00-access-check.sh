@@ -28,7 +28,11 @@ head2() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 DEPLOY_PERMS=(
   "storage.buckets.create|roles/storage.admin"
   "bigquery.datasets.create|roles/bigquery.admin"
-  "run.jobs.create|roles/run.developer"
+  "run.jobs.create|roles/run.admin"
+  # Writing a Cloud Run job's IAM policy — modules/pipeline/job.tf grants the
+  # scheduler run.developer on each job. roles/run.developer cannot do this;
+  # roles/run.admin can, which is why the deploy identity holds the latter.
+  "run.jobs.setIamPolicy|roles/run.admin"
   "cloudscheduler.jobs.create|roles/cloudscheduler.admin"
   "secretmanager.secrets.create|roles/secretmanager.admin"
   "artifactregistry.repositories.create|roles/artifactregistry.admin"
@@ -40,14 +44,26 @@ DEPLOY_PERMS=(
 ADMIN_PERMS=(
   "iam.serviceAccounts.create|roles/iam.serviceAccountAdmin"
   "resourcemanager.projects.setIamPolicy|roles/resourcemanager.projectIamAdmin"
-  "serviceusage.services.enable|roles/serviceusage.serviceUsageAdmin"
+  # NOTE: roles/monitoring.editor also carries this one, so a YES here does
+  # NOT prove the caller holds serviceUsageAdmin. See OPEN-ITEMS item 10.
+  "serviceusage.services.enable|serviceUsageAdmin — or monitoring.editor"
 )
-
 all=()
 for e in "${DEPLOY_PERMS[@]}" "${ADMIN_PERMS[@]}"; do all+=("${e%%|*}"); done
 
 printf '\n\033[1mAccess check — %s\033[0m\n' "$PROJECT"
 printf '  account: %s\n' "$(gcloud config get-value account 2>/dev/null)"
+# This answers for whoever the call is MADE AS, which under the deploy-identity
+# model is the impersonated service account, not the person at the keyboard.
+# Saying which makes a screenful of NO self-explanatory instead of alarming.
+if [[ -n "${CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT:-}" ]]; then
+  printf '  acting as: %s\n' "$CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT"
+  printf '  \033[2m%s\033[0m\n' "(impersonated — this is what the deploy will actually be)"
+else
+  printf '  acting as: itself — NOT impersonating the deploy account\n'
+  printf '  \033[2m%s\033[0m\n' "Deploy permissions below will read NO, which is correct for a"
+  printf '  \033[2m%s\033[0m\n' "person. Run: eval \"\$(make -s env-exports ENV=<env>)\""
+fi
 
 # projects.testIamPermissions, called directly.
 #
@@ -126,6 +142,7 @@ for e in "${ADMIN_PERMS[@]}"; do
   p="${e%%|*}"; r="${e##*|}"
   if has "$p"; then yes "$p" "$r"; admin_have=$((admin_have+1)); else no "$p" "$r"; fi
 done
+
 fi
 
 # An organization may restrict where resources can live. Finding that out
@@ -135,7 +152,7 @@ fi
 head2 "Location policy"
 if pol=$(gcloud resource-manager org-policies describe \
       constraints/gcp.resourceLocations --project "$PROJECT" --effective \
-      --format='value(listPolicy.allowedValues)' 2>&1); then
+      --format='value(listPolicy.allowedValues)' 2>/dev/null); then
   if [[ -z "$pol" || "$pol" == *"allValues"* ]]; then
     printf '  \033[32mok\033[0m   %s\n' "no location restriction in effect"
   else
@@ -150,12 +167,30 @@ else
 fi
 
 head2 "What already exists"
-sa_found=0
+# Reading a service account needs iam.serviceAccounts.get, which the deploy
+# identity has only via serviceAccountUser on the five it attaches. powerbi
+# is deliberately not one of them, so an impersonated run cannot see it and
+# must not report that as absent — the verdict below keys off this.
+sa_found=0; sa_missing=0; sa_unknown=0
 for email in "${ALL_SAS[@]}"; do
-  gcloud iam service-accounts describe "$email" --project "$PROJECT" >/dev/null 2>&1 \
-    && sa_found=$((sa_found+1))
+  if out=$(gcloud iam service-accounts describe "$email" --project "$PROJECT" 2>&1); then
+    sa_found=$((sa_found+1))
+  else
+    case "$out" in
+      *NOT_FOUND*|*"not found"*|*"Unknown service account"*) sa_missing=$((sa_missing+1)) ;;
+      *) sa_unknown=$((sa_unknown+1)) ;;
+    esac
+  fi
 done
-printf '  service accounts : %d of %d\n' "$sa_found" "${#ALL_SAS[@]}"
+printf '  service accounts : %d of %d visible' "$sa_found" "${#ALL_SAS[@]}"
+(( sa_missing )) && printf ', \033[31m%d MISSING\033[0m' "$sa_missing"
+(( sa_unknown )) && printf ', %d not readable as this identity' "$sa_unknown"
+printf '\n'
+if (( sa_unknown )); then
+  printf '  \033[2m%s\033[0m\n' "Not readable is expected while impersonating the deploy account: it"
+  printf '  \033[2m%s\033[0m\n' "holds actAs on the five it attaches, and powerbi is deliberately not"
+  printf '  \033[2m%s\033[0m\n' "one of them. Not evidence of absence."
+fi
 
 api_on=0
 if enabled=$(gcloud services list --enabled --project "$PROJECT" --format='value(config.name)' 2>/dev/null); then
@@ -187,7 +222,7 @@ elif (( admin_have == 3 )); then
   echo "  You can run everything yourself, including step 4:"
   echo ""
   echo "    make gcloud-admin ENV=<env>"
-elif (( sa_found == ${#ALL_SAS[@]} && deploy_missing == 0 )); then
+elif (( sa_missing == 0 && deploy_missing == 0 )); then
   echo "  Step 4 has been done and you have what the deploy needs. Continue:"
   echo ""
   echo "    make up ENV=<env>"

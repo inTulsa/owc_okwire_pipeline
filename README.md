@@ -5,34 +5,51 @@ Two production data pipelines, one schedule, one warehouse, one runbook.
 | | **lightcast** | **enrollment** |
 |---|---|---|
 | Source | Snowflake data share (Lightcast reader account) | `oklahoma.gov` public webpage (scraped) |
-| Extract | 41 independent SQL files | HTML parse → Excel download → reshape |
+| Extract | 35 independent SQL files | HTML parse → Excel download → reshape |
 | State | Stateless; re-queries every run | Stateful; caches downloads, short-circuits when nothing is new |
 | Cadence | Monthly / quarterly / yearly by dataset | Checked monthly; data lands ~annually by fiscal year |
 
 Both land in BigQuery (`owc_marts`), which PowerBI reads directly. Schedules
 live in [`pipelines.yml`](pipelines.yml).
 
-> **Two things are open and one of them blocks production.** Cloud Scheduler
-> cannot start the jobs, and the deploy principal is a person's account when
-> it should be a service account. Both are written up in
-> [`docs/HANDOFF.md`](docs/HANDOFF.md) with the next step for each.
+> **`owc-dpar-d` is live. `owc-dpar-p` has not been built.** Dev runs both
+> pipelines end to end on the deploy-identity model — deploys run as
+> `sa-<prefix>-deploy-1`, impersonated, and no human needs an admin role to
+> deploy. What is not settled is prod: the privileged setup has never run
+> there, and the eleven roles the deploy account needs have only ever been
+> granted on dev. **Agree that role set before prod's first apply** —
+> [`OPEN-ITEMS.md`: agree the prod role set](docs/OPEN-ITEMS.md#prod-role-set).
+>
+> **These documents are a verified draft, not a signed-off deliverable.**
+> Every command and link resolves and the IAM claims are measured rather than
+> asserted — but the claim that someone who was not here can build prod from
+> [`deploy.md`](docs/deploy.md) alone is untested until someone does it.
+> [What has to close first](docs/OPEN-ITEMS.md#delivery-status).
 
 ## Start here
 
 **Standing an environment up, or deploying a change?**
-→ **[`docs/deploy.md`](docs/deploy.md)**. That is the whole procedure, six
+→ **[`docs/deploy.md`](docs/deploy.md)**. That is the whole procedure, eight
 steps, and it is the only one. Everything else below is reference.
 
 From Google Cloud Shell:
 
 ```bash
 # 1. get the code
-cd ~ && git clone https://github.com/inTulsa/owc_okwire_pipeline.git owc && cd owc
+cd ~ && git clone https://github.com/Oklahoma-Workforce-Commission-840/OK-wire-data-pipeline.git owc && cd owc
 
-# 2. Cloud Shell logs gcloud in for you, but NOT Terraform
-eval "$(make -s env-exports ENV=dev)"
+# 2. Cloud Shell logs gcloud in for you, but NOT Terraform.
+#    First: no IPv6 route means gcloud works and every terraform call
+#    fails. Ten seconds now saves an hour. See deploy.md#ipv6-preflight.
+curl -s -m 5 -6 https://storage.googleapis.com >/dev/null || echo "NO IPv6 — open a new Cloud Shell session before continuing"
+
+#    Then ORDER MATTERS: authenticate as yourself BEFORE taking on the
+#    deploy identity. Reversed, the login writes the impersonation into
+#    the ADC file and the only fix is starting over. deploy.md#adc-ordering
 gcloud auth application-default login
-gcloud auth application-default set-quota-project $PROJECT
+gcloud config set project owc-dpar-d
+gcloud auth application-default set-quota-project owc-dpar-d
+eval "$(make -s env-exports ENV=dev)"
 
 # 3. Cloud Shell ships a terraform stub, not terraform
 make install-terraform
@@ -78,7 +95,7 @@ Named for the question they answer, not numbered — read the one you need.
 | I want to run a pipeline or change the code | [`local-development.md`](docs/local-development.md) |
 | I want to add a dataset or a new pipeline | [`adding-a-pipeline.md`](docs/adding-a-pipeline.md) |
 | What are the alerts and why does each exist? | [`monitoring.md`](docs/monitoring.md) |
-| **Picking this up mid-flight? Open issues and OMES constraints** | [`HANDOFF.md`](docs/HANDOFF.md) |
+| Who can do what, and how is that proven? *(for a security review)* | [`security-model.md`](docs/security-model.md) |
 | What still needs a human decision? **Read before go-live** | [`OPEN-ITEMS.md`](docs/OPEN-ITEMS.md) |
 
 The enrollment pipeline's original business-process documentation is preserved
@@ -94,7 +111,7 @@ src/owcdata/
   pipelines/
     lightcast/    Snowflake → Arrow → Parquet, one dataset per Cloud Run task
     enrollment/   the original scraper, parsing logic unchanged
-sql/owc/          41 .sql files, verbatim from owcpipelines
+sql/owc/          35 .sql files, verbatim from owcpipelines
 infra/terraform/  platform + a reusable `pipeline` module, instantiated twice.
                   Creates resources only: no service accounts, no project IAM.
 infra/gcloud/     the one-time privileged setup, in plain gcloud — identities,

@@ -1,14 +1,14 @@
 /*
 ---------------------------------------------------------------------------------------------------
 --
--- Description: 
+-- Description:     Lagged (prior-year) counterpart to fact_has, used for year-over-year
+--                   comparisons.
 --
--- Author:          Nile Dixon
 -- Date:            2025-11-05
 --
 -- Notes:
--- 
---
+-- Identical to fact_has, except YEAR is shifted forward by 1 (YEAR + 1) in both source CTEs
+-- so each row lines up with the following year's fact_has row when joined on YEAR/AREAID/etc.
 --
 ---------------------------------------------------------------------------------------------------
 */
@@ -19,10 +19,11 @@ WITH PCTS AS (
         DS.INDID,
         DS.OCCID,
         DS.PERCENT
-    FROM LIGHTCAST.TULSA_FOR_YOU.DAT_STAFFING AS DS 
+    FROM LIGHTCAST_DATA.CORELMI_US_V3.DAT_STAFFING AS DS 
     WHERE
         DS.CLASSID = '1'
         AND DS.AREAID_TYPE = 'COUNTY'
+        AND LEFT(LPAD(DS.AREAID, 5, '0'), 2) = '40'
         AND DS.YEAR <= YEAR(CURRENT_DATE())
 ),
 HAS AS (
@@ -32,9 +33,10 @@ HAS AS (
         INDID, 
         SUM(HIRA) AS HIRES, 
         SUM(SEP) AS SEPS 
-    FROM LIGHTCAST.TULSA_FOR_YOU.DAT_IND_RACE_ETHN_HIRESSEPS 
+    FROM LIGHTCAST_DATA.CORELMI_US_V3.DAT_IND_RACE_ETHN_HIRESSEPS 
     WHERE 
         AREAID_TYPE = 'COUNTY' 
+        AND LEFT(LPAD(AREAID, 5, '0'), 2) = '40'
         AND YEAR <= YEAR(CURRENT_DATE()) 
     GROUP BY 
         YEAR, 

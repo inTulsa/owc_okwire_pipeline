@@ -27,6 +27,8 @@ quietly.
 | 5 | Row count / max(YEAR) drift | Same metric, narrowed to `jsonPayload.check` | lightcast | per-pipeline `event_alerts` |
 | 6 | **Scrape found nothing** | Log metric on `jsonPayload.event="no_source_files_found"` | enrollment | per-pipeline `event_alerts` |
 | 6b | **Page structure drifted** | Log metric on `jsonPayload.event="grid_wrapper_not_found"` — fires while the run still *succeeds* | enrollment | per-pipeline `event_alerts` |
+| 6c | **A school year we don't collect** | Log metric on `jsonPayload.event="newer_school_year_unscraped"` | enrollment | per-pipeline `event_alerts` |
+| 6d | Newer-year check could not run | Log metric on `jsonPayload.event="newer_year_check_unavailable"` — fires while the run still *succeeds* | enrollment | per-pipeline `event_alerts` |
 | 7 | Workbook reshape skipped | Log metric on `jsonPayload.event="workbook_reshape_skipped"` | enrollment | per-pipeline `event_alerts` |
 | 8 | Memory pressure | `run.googleapis.com/container/memory/utilizations` > 85% | both | `modules/pipeline/alerts.tf` |
 | 9 | Cost | BigQuery scanned bytes + optional billing budget | platform | `modules/platform/monitoring.tf` |
@@ -137,11 +139,29 @@ failing to find what it expects:
 | A workbook's sheet layout no longer matches | alert 7b, run fails |
 | A link 404s, or a value column disappears | run fails → alert 1 |
 | Structure changed, whole-page fallback coped | **alert 6b, run succeeds** |
+| A new school year appears only on `newer_year_check_url` | alert 6c, run fails |
+| `newer_year_check_url` changed so the check cannot read it | **alert 6d, run succeeds** |
 
-**Alert 6b is the only one that fires on a successful run.** That is the
-point: it is advance notice that the selectors in `scrape.py` are drifting
-out of date while everything still works, so the fix happens on your schedule
-rather than on Oklahoma's. Treat it as a ticket, not a page.
+**Alerts 6b and 6d are the only ones that fire on a successful run.** That is
+the point: each is advance notice that something Oklahoma controls has
+drifted while everything still works. 6b means the selectors in `scrape.py`
+are going out of date. 6d means the check that catches a new school year has
+stopped working. Either way the fix happens on your schedule rather than on
+Oklahoma's. Treat them as tickets, not pages.
+
+### Why alert 6c exists
+
+In October 2026 Oklahoma moved the per-year links to a separate "Achieved
+Years" page, which is now `page_url`, and left one combined multi-year export
+on the original page. Nobody knows yet which page a new school year will
+appear on first. If it appears only in the export, the scrape finds nothing
+new, short-circuits, and reports success. Every check above stays green while
+the newest year goes unpublished.
+
+So each run also reads the newest School Year out of the workbook on
+`newer_year_check_url`. The export is never ingested; only that one column
+is read. If the export is ahead of the scrape, the run fails with exit code 9
+and alert 6c fires.
 
 ## Metric type strings
 
@@ -224,7 +244,7 @@ after the first prod apply:
 
 ```bash
 gcloud monitoring policies list --project=$PROJECT --format='value(displayName)' | wc -l
-# expect 9-ish; 0 means alert_emails was empty
+# expect 11-ish; 0 means alert_emails was empty
 ```
 
 ## Verifying the alerts actually fire
@@ -239,6 +259,8 @@ in dev.
 | 3 | Temporarily change the scheduler's `oauth_token` to an `oidc_token` by hand. Expect a 401. Revert with `terraform apply`. |
 | 4 / 5 | Set `known_row_counts: {dim_area: 1}` in `pipelines.yml` and run `dim_area`. Confirm publish is blocked and `owc_marts.dim_area` is unchanged. |
 | 6 | Point `page_url` at `tests/fixtures/enrollment/page_redesigned.html` served locally, or any page with no matching links. Confirm exit code 4. |
+| 6c | No safe live trigger: Oklahoma's pages decide it. `make test` covers the exit code (`test_newer_year_fails_a_run_that_would_have_short_circuited`), and the policy is the same `event_alerts` mechanism as 6 and 6b. |
+| 6d | Set `newer_year_check_url` in `pipelines.yml` to a page that links no workbook (`https://oklahoma.gov/education.html`), `make deploy ENV=dev`, and run the enrollment job. Confirm it **succeeds** and 6d fires. Revert and redeploy. |
 | 7 | Put a corrupt `.xlsx` in the state bucket's `data_sources/` under a name the page links |
 | 8 | Lower `memory_utilization_threshold` to 0.01 and run anything |
 | 9 | Lower `bigquery_scanned_bytes_threshold_gib` to 0 |
