@@ -40,7 +40,7 @@ PRINCIPAL_FLAGS=$(printf -- '--principal %s ' "${PRINCIPALS[@]}")
 # shellcheck source=names.sh
 source "$(dirname "${BASH_SOURCE[0]}")/names.sh"
 
-REPO_URL="${REPO_URL:-https://github.com/inTulsa/owc_okwire_pipeline.git}"
+REPO_URL="${REPO_URL:-https://github.com/Oklahoma-Workforce-Commission-840/OK-wire-data-pipeline.git}"
 
 missing_sa=0
 for email in "${ALL_SAS[@]}"; do

@@ -1569,7 +1569,7 @@ cd infra/terraform/envs/$ENV && terraform force-unlock <ID>
 — a realistic interval for a pipeline that runs monthly. Clone it again:
 
 ```bash
-cd ~ && git clone https://github.com/inTulsa/owc_okwire_pipeline.git owc
+cd ~ && git clone https://github.com/Oklahoma-Workforce-Commission-840/OK-wire-data-pipeline.git owc
 ```
 
 Without GitHub access, use the project's own mirror:

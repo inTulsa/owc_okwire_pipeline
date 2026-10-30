@@ -14,6 +14,13 @@ resource "google_monitoring_notification_channel" "email" {
     email_address = each.value
   }
 
+  # Changing alert_emails replaces a channel the alert policies still point
+  # at, and GCP refuses to delete a referenced channel. Without this,
+  # Terraform deletes before it repoints the policies and the apply fails
+  # halfway; with it, the old channel goes last.
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 locals {

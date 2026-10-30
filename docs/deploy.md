@@ -22,7 +22,7 @@ preference order:
 tag images with the commit they came from:
 
 ```bash
-cd ~ && git clone https://github.com/inTulsa/owc_okwire_pipeline.git owc && cd owc
+cd ~ && git clone https://github.com/Oklahoma-Workforce-Commission-840/OK-wire-data-pipeline.git owc && cd owc
 ```
 
 A private repo will ask for credentials; `gh auth login` or an HTTPS token
@@ -38,7 +38,7 @@ drag-and-drop. Send a **tarball, not the folder** — a folder upload carries
 ```bash
 # on your machine
 tar czf owc.tar.gz --exclude='.venv' --exclude='.terraform' \
-  --exclude='.env' --exclude='exports' owc_okwire_pipeline
+  --exclude='.env' --exclude='exports' owc    # your clone's folder
 ```
 
 ```bash
@@ -470,7 +470,7 @@ either role is still attached, so it is the receipt.
 ### They clone this repo and run it
 
 ```bash
-git clone https://github.com/inTulsa/owc_okwire_pipeline.git owc && cd owc
+git clone https://github.com/Oklahoma-Workforce-Commission-840/OK-wire-data-pipeline.git owc && cd owc
 ./infra/gcloud/01-admin-identities.sh <project> --principal <you> --dry-run
 ```
 

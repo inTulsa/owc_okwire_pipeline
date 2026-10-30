@@ -36,7 +36,7 @@ From Google Cloud Shell:
 
 ```bash
 # 1. get the code
-cd ~ && git clone https://github.com/inTulsa/owc_okwire_pipeline.git owc && cd owc
+cd ~ && git clone https://github.com/Oklahoma-Workforce-Commission-840/OK-wire-data-pipeline.git owc && cd owc
 
 # 2. Cloud Shell logs gcloud in for you, but NOT Terraform.
 #    First: no IPv6 route means gcloud works and every terraform call
