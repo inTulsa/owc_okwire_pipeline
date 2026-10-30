@@ -11,7 +11,7 @@ location   = "US"
 # A distribution list, so people join and leave without a Terraform change.
 alert_emails = ["gurtaj.singh@workforce.ok.gov"]
 
-snowflake_user = "REPLACE_ME@tulsaforyou.com"
+snowflake_user = "analytics@tulsaforyou.com"
 
 # Required. `make up ENV=prod` builds the image and passes the digest it
 # prints; it has no default on purpose.
