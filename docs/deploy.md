@@ -836,20 +836,16 @@ claims.
 narrower role that silently lacks one permission produces a deploy that
 half-works and a failure weeks later on the cron.
 
-### Pause dev's schedulers first — before prod's first apply {#pause-dev-first}
+### Confirm dev's schedulers are paused — before prod's first apply {#pause-dev-first}
 
-`envs/dev/terraform.tfvars` has `schedulers_paused = false`, set deliberately
-so the scheduled path could be exercised on dev. **That window closes the
-moment prod is live.** Both environments read the same `pipelines.yml`, so
-two live environments fire the same 35 Snowflake queries at the same minute
-— twice, on Lightcast's warehouse, where the cost is not ours to see, and
-contending for `TULSA_FOR_YOU_WH`.
+`envs/dev/terraform.tfvars` sets `schedulers_paused = true`. Both
+environments read the same `pipelines.yml`, so if dev's schedulers are live
+when prod is, they fire the same 35 Snowflake queries at the same minute —
+twice, on Lightcast's warehouse, where the cost is not ours to see, and
+contending for `TULSA_FOR_YOU_WH`. If anyone unpaused dev to exercise the
+scheduled path, set it back to `true` and run `make tf-apply ENV=dev`.
 
-Set `schedulers_paused = true` in `envs/dev/terraform.tfvars`, then:
-
-```bash
-make tf-apply ENV=dev
-```
+Check what is actually deployed, not what the file says:
 
 ```bash
 gcloud scheduler jobs list --location $REGION --project $PROJECT --format="table(name,state,schedule)"

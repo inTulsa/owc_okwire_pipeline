@@ -34,7 +34,6 @@ by being reviewed. Prod is the first and only real test of it.
 | [`serviceUsageAdmin` removed](#remove-serviceusageadmin) | The no-admin-roles claim is true of the deploy identity, not of the project |
 | [The `omes-script` gap](#omes-script-gap) | The documented admin path is incomplete for the operator it targets |
 | [`snowflake_user` set](#snowflake-user) | Prod cannot deploy without it |
-| [Dev schedulers paused](#pause-dev) | Both environments would bill Lightcast twice |
 | [State hosting answered](#state-hosting) | Cheaper before prod's first apply than after |
 
 Then **build prod from `deploy.md`, keeping notes**, and fold every
@@ -63,18 +62,17 @@ does not block delivery.
   - [3. Remove `serviceUsageAdmin` from the developer account](#remove-serviceusageadmin)
   - [4. `make omes-script` omits the APIs and the buckets](#omes-script-gap)
   - [5. `snowflake_user` in prod is a placeholder](#snowflake-user)
-  - [6. Pause dev's schedulers before prod goes live](#pause-dev)
-  - [7. Terraform state hosting](#state-hosting)
+  - [6. Terraform state hosting](#state-hosting)
 - [Known gaps in what is deployed](#known-gaps)
-  - [8. `monitoring.editor` lets the deploy identity enable APIs](#monitoring-editor)
-  - [9. The scheduler-IAM fallback has never been executed](#scheduler-fallback)
-  - [10. `make lock-check` is red](#lock-check)
+  - [7. `monitoring.editor` lets the deploy identity enable APIs](#monitoring-editor)
+  - [8. The scheduler-IAM fallback has never been executed](#scheduler-fallback)
+  - [9. `make lock-check` is red](#lock-check)
 - [Decisions that need someone outside this repo](#external-decisions)
-  - [11. Fill in the quarterly and yearly dataset lists](#dataset-groups)
-  - [12. Tell Lightcast before raising `parallelism` above 4](#parallelism)
-  - [13. Confirm the Snowflake account is a true reader account](#reader-account)
-  - [14. Confirm the Lightcast license permits this audience](#license-audience)
-  - [15. Move the enrollment repo in, preserving history](#enrollment-history)
+  - [10. Fill in the quarterly and yearly dataset lists](#dataset-groups)
+  - [11. Tell Lightcast before raising `parallelism` above 4](#parallelism)
+  - [12. Confirm the Snowflake account is a true reader account](#reader-account)
+  - [13. Confirm the Lightcast license permits this audience](#license-audience)
+  - [14. Move the enrollment repo in, preserving history](#enrollment-history)
 - [Also worth knowing](#also-worth-knowing)
 
 ---
@@ -315,61 +313,7 @@ it is not a surprise.
 
 ---
 
-## 6. Pause dev's schedulers before prod goes live {#pause-dev}
-
-**Owner:** whoever runs the prod release.
-
-`infra/terraform/envs/dev/terraform.tfvars` has `schedulers_paused = false`.
-That was set deliberately so the scheduled path could be exercised on dev,
-and it is commented as temporary. **That window closes the moment prod is
-live.**
-
-Both environments read the same [`pipelines.yml`](../pipelines.yml), so they
-fire the same 35 Snowflake queries at the same minute — twice, against
-Lightcast's warehouse, contending for `TULSA_FOR_YOU_WH`.
-
-Do it **before** prod's first apply. Set `schedulers_paused = true` in dev's
-tfvars, then:
-
-```bash
-make tf-apply ENV=dev
-```
-
-Then confirm, from a shell that knows which project it is pointed at:
-
-```bash
-cd ~/owc && eval "$(make -s env-exports ENV=dev)"
-```
-
-```bash
-gcloud scheduler jobs list --location $REGION --project $PROJECT --format="table(name,state,schedule)"
-```
-
-Both dev schedulers should report `PAUSED`.
-
-**The environments are deliberately not coupled.** A prod deploy does not
-read dev's configuration and must not start doing so — they are separate
-projects, and a checkout pointed at a test project would make any such check
-meaningless. What exists instead:
-
-- **A notice on every apply**, from that environment's own tfvars.
-  `make tf-apply ENV=dev` states that the dev schedulers are unpaused for as
-  long as they are. No other environment is consulted.
-- **An opt-in cross-check**, off by default, for exactly this moment:
-
-  ```bash
-  make tf-apply ENV=prod CHECK_OTHER_ENV=dev
-  ```
-
-  Naming the other environment is the whole interface. It refuses if that
-  environment's schedulers are live, and otherwise says so and continues.
-
-**Consequence:** nothing breaks visibly. It doubles a bill somebody else
-receives, which is the kind of mistake that survives for months.
-
----
-
-## 7. Terraform state hosting {#state-hosting}
+## 6. Terraform state hosting {#state-hosting}
 
 **Owner:** the OMES platform team.
 
@@ -390,7 +334,7 @@ prod's first apply than to migrate state afterwards.
 
 ## Known gaps in what is deployed {#known-gaps}
 
-## 8. `monitoring.editor` lets the deploy identity enable APIs {#monitoring-editor}
+## 7. `monitoring.editor` lets the deploy identity enable APIs {#monitoring-editor}
 
 **Owner:** an admin, plus a verification pass. Not urgent.
 
@@ -431,7 +375,7 @@ it twice.
 
 ---
 
-## 9. The scheduler-IAM fallback has never been executed {#scheduler-fallback}
+## 8. The scheduler-IAM fallback has never been executed {#scheduler-fallback}
 
 **Owner:** whoever is willing to spend a throwaway project on it.
 
@@ -453,19 +397,13 @@ it deliberately instead.
 
 ---
 
-## 10. `make lock-check` is red {#lock-check}
+## 9. `make lock-check` is red {#lock-check}
 
 **Owner:** whoever does the next dependency pass. **Not during a release.**
 
-Five packages have drifted from `requirements.txt`:
-
-```
-boto3               1.43.99  →  1.43.103
-botocore            1.43.99  →  1.43.103
-google-api-core      2.38.0  →  2.39.0
-google-auth          2.58.0  →  2.58.1
-google-cloud-storage 3.14.1  →  3.15.0
-```
+Transitive dependencies (boto3, botocore, certifi, cryptography and others)
+keep moving ahead of `requirements.txt`, so the exact list goes stale within
+weeks. `make lock-check` prints the current one.
 
 `make lock` fixes it, and it changes what the next image installs — so it
 needs its own build and its own smoke test.
@@ -478,7 +416,7 @@ else.
 
 ## Decisions that need someone outside this repo {#external-decisions}
 
-## 11. Fill in the quarterly and yearly dataset lists {#dataset-groups}
+## 10. Fill in the quarterly and yearly dataset lists {#dataset-groups}
 
 **Owner:** someone who knows Lightcast's actual refresh cycles per dataset.
 
@@ -504,7 +442,7 @@ benefit.
 
 ---
 
-## 12. Tell Lightcast before raising `parallelism` above 4 {#parallelism}
+## 11. Tell Lightcast before raising `parallelism` above 4 {#parallelism}
 
 **Owner:** a conversation with Lightcast, before the change.
 
@@ -530,7 +468,7 @@ is the only evidence there is.
 
 ---
 
-## 13. Confirm the Snowflake account is a true reader account {#reader-account}
+## 12. Confirm the Snowflake account is a true reader account {#reader-account}
 
 **Owner:** Lightcast, or one query.
 
@@ -555,7 +493,7 @@ isolated behind `connect()`. The risk is the deadline, not the work.
 
 ---
 
-## 14. Confirm the Lightcast license permits this audience {#license-audience}
+## 13. Confirm the Lightcast license permits this audience {#license-audience}
 
 **Owner:** whoever holds the Lightcast license agreement.
 
@@ -575,7 +513,7 @@ cannot enforce.
 
 ---
 
-## 15. Move the enrollment repo in, preserving history {#enrollment-history}
+## 14. Move the enrollment repo in, preserving history {#enrollment-history}
 
 **Owner:** needs an ownership conversation with the script's author.
 

@@ -5,7 +5,7 @@
 # split was supposed to remove.
 #
 #   ./infra/gcloud/02-verify-admin.sh owc-dpar-d \
-#       --principal user:gabriel.torianyk@tulsaforyou.com
+#       --principal user:THE-OPERATOR@agency.ok.gov
 #
 # Every assertion separates "the command worked" from "the answer was no",
 # because `cmd | grep -q X && echo OK` prints OK when the command FAILS —
@@ -96,7 +96,7 @@ fi
 #
 # Exact, not a grep. `grep projectIamAdmin` would also match the role name
 # inside a condition expression or a longer role, and a substring match on the
-# member would let "user:gabe@x.com" be satisfied by "user:gabe@x.com.evil".
+# member would let "user:a@x.com" be satisfied by "user:a@x.com.evil".
 # Both make a "does not have" assertion pass when it should fail, which is the
 # one direction that must never be wrong here.
 POLICY_MATCHER='
