@@ -356,10 +356,11 @@ demonstrably run the platform."
 Five of the six forbidden roles appear against no principal in that
 project's policy, including `projectIamAdmin` and `serviceAccountAdmin` —
 with the inheritance caveat [above](#verification). The
-exception is `roles/serviceusage.serviceUsageAdmin`, still held by two human
-accounts that predate the split —
-[OPEN-ITEMS: what dev's policy shows](OPEN-ITEMS.md#dev-baseline) has the detail and the
-reasoning. **Prod should never create that situation**, which costs nothing
+exception is `roles/serviceusage.serviceUsageAdmin`, held by human accounts
+that predate the split: the OWC administrator's, by decision, and the
+developer's until [it is removed at handoff](OPEN-ITEMS.md#offboard-developer).
+[OPEN-ITEMS: what dev's policy shows](OPEN-ITEMS.md#dev-baseline) has the
+detail. **Prod should never create that situation**, which costs nothing
 to get right on a project being built from nothing.
 
 What dev does not prove is that the set is *obtainable* on a production

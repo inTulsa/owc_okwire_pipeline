@@ -226,7 +226,7 @@ mid-deploy.
 | `constraints/gcp.resourceLocations` forbids `global` | Secret Manager refuses `replication { auto {} }` | `user_managed` replication pinned to `var.region` |
 | Default service-agent grants are stripped | The Cloud Scheduler agent has no `tokenCreator`, and the automatic `roles/cloudscheduler.serviceAgent` is absent | `01-admin-identities.sh` forces both agents into existence and grants them explicitly |
 | No `serviceAccountAdmin` / `projectIamAdmin` / `serviceUsageAdmin` for the deploy account | The whole split this repo is built around | Step 5 of [`deploy.md`](deploy.md), run once by an admin |
-| No admin-level roles on a human account **at all** | Stated after dev was stood up | The [deploy identity](deploy.md#deploy-identity): roles live on `sa-<prefix>-deploy-1`, a person holds only `tokenCreator` on it. **Applied on `owc-dpar-d`** — deploys run as the service account. `owc-dpar-p` is to be built that way from its first day — [OPEN-ITEMS: the deploy identity on prod](OPEN-ITEMS.md#deploy-identity) |
+| No admin-level roles on a human account **at all** | Stated after dev was stood up | The [deploy identity](deploy.md#deploy-identity): roles live on `sa-<prefix>-deploy-1`, a person holds only `tokenCreator` on it. **Applied on `owc-dpar-d`** — deploys run as the service account. `owc-dpar-p` is to be built that way from its first day — [OPEN-ITEMS: the deploy identity on prod](OPEN-ITEMS.md#prod-role-set) |
 | No project IAM policy reads for the deploy account | `iam-check` runs in REDUCED mode; `scheduler-debug` checks 3 and 4 are inconclusive | Reported as `????`, never as `NO` |
 | No log reads without `roles/logging.viewer` | Every runbook diagnostic silently returns nothing | `logging.viewer` is one of the eleven roles |
 | Cloud Shell ships a terraform **stub** | `make up` reports success having created nothing | `make install-terraform`; `tf-check` guards every `tf-*` target |
@@ -250,7 +250,7 @@ Two permissions are easy to leave out and both stop a deploy partway:
 
 Both belong to `sa-<prefix>-deploy-1`. A person holding the eleven roles
 directly has neither, which is why a human-principal deploy cannot finish —
-see [OPEN-ITEMS: the deploy identity on prod](OPEN-ITEMS.md#deploy-identity).
+see [OPEN-ITEMS: the deploy identity on prod](OPEN-ITEMS.md#prod-role-set).
 
 ## What prod does differently
 
